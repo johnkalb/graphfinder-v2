@@ -61,8 +61,15 @@ def load_data():
 
 @app.on_event("startup")
 async def startup():
-    """Data loads lazily on first request. Health endpoint returns immediately."""
-    pass
+    """Load search index immediately; build graph in background thread."""
+    import threading
+    _load_search()
+    def _bg():
+        try:
+            _load_graph()
+        except Exception:
+            pass
+    threading.Thread(target=_bg, daemon=True).start()
 
 @app.get("/health")
 async def health():
