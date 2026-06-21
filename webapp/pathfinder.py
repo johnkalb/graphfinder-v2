@@ -33,29 +33,39 @@ def _load_search():
             _labels = json.load(f)
 
 def _load_graph():
-    """Load a lightweight adjacency structure — memory-efficient, no NetworkX."""
+    """Load a CSR-style adjacency — ultra memory-efficient, no NetworkX."""
     global _graph
     if _graph is not None:
         return
     epath = DATA_DIR / "graph_edges.json.gz"
-    if epath.exists():
-        import gzip
-        with gzip.open(epath, "rt", encoding="utf-8") as f:
-            ed = json.load(f)
-        nodes = ed["nodes"]
-        # Adjacency: int_id -> set(int_id). Relations stored separately, sparse.
-        adj = [set() for _ in range(len(nodes))]
-        rels = {}
-        for u, v, r in ed["edges"]:
-            adj[u].add(v)
-            adj[v].add(u)
-            if r:
-                rels[(u, v)] = r
-                rels[(v, u)] = r
-        name_to_id = {n: i for i, n in enumerate(nodes)}
-        _graph = {"nodes": nodes, "adj": adj, "rels": rels, "name_to_id": name_to_id}
-    else:
-        _graph = {"nodes": [], "adj": [], "rels": {}, "name_to_id": {}}
+    if not epath.exists():
+        _graph = {"nodes": [], "offsets": None, "neighbors": None, "name_to_id": {}}
+        return
+    import gzip, array
+    with gzip.open(epath, "rt", encoding="utf-8") as f:
+        ed = json.load(f)
+    nodes = ed["nodes"]
+    n = len(nodes)
+    # Count degrees
+    deg = array.array("i", [0] * n)
+    for u, v, r in ed["edges"]:
+        deg[u] += 1
+        deg[v] += 1
+    # Build offset array (CSR row pointers)
+    offsets = array.array("i", [0] * (n + 1))
+    for i in range(n):
+        offsets[i + 1] = offsets[i] + deg[i]
+    total = offsets[n]
+    # Fill neighbors using a cursor per node
+    neighbors = array.array("i", [0] * total)
+    cursor = array.array("i", offsets[:n])
+    for u, v, r in ed["edges"]:
+        neighbors[cursor[u]] = v
+        cursor[u] += 1
+        neighbors[cursor[v]] = u
+        cursor[v] += 1
+    name_to_id = {nm: i for i, nm in enumerate(nodes)}
+    _graph = {"nodes": nodes, "offsets": offsets, "neighbors": neighbors, "name_to_id": name_to_id}
 
 def load_data():
     _load_search()
@@ -63,15 +73,8 @@ def load_data():
 
 @app.on_event("startup")
 async def startup():
-    """Load search index immediately; build graph in background thread."""
-    import threading
+    """Load only the search index at startup; graph loads lazily on first path request."""
     _load_search()
-    def _bg():
-        try:
-            _load_graph()
-        except Exception:
-            pass
-    threading.Thread(target=_bg, daemon=True).start()
 
 @app.get("/health")
 async def health():
@@ -93,7 +96,7 @@ async def debug():
             fp = DATA_DIR / f
             info["files"][f] = os.path.getsize(fp) if fp.is_file() else "dir"
     info["search_index_loaded"] = len(_search_index) if _search_index else 0
-    info["graph_loaded"] = len(_graph["nodes"]) if (_graph and isinstance(_graph, dict)) else 0
+    info["graph_loaded"] = len(_graph["nodes"]) if (_graph and isinstance(_graph, dict) and _graph.get("nodes")) else 0
     return info
 
 RELATION_INFO = {
@@ -168,8 +171,8 @@ def _find_path(src_name, tgt_name, max_depth=6):
     if not _graph or not _graph.get("nodes"):
         return {"error": "Graph not loaded"}
     name_to_id = _graph["name_to_id"]
-    adj = _graph["adj"]
-    rels = _graph["rels"]
+    offsets = _graph["offsets"]
+    neighbors = _graph["neighbors"]
     nodes = _graph["nodes"]
 
     src_node = _resolve_name(src_name)
@@ -182,20 +185,19 @@ def _find_path(src_name, tgt_name, max_depth=6):
     src_id = name_to_id[src_node]
     tgt_id = name_to_id[tgt_node]
 
-    # BFS for shortest path
     from collections import deque
     if src_id == tgt_id:
         return {"paths": [{"length": 0, "path": [{"node": src_node, "label": _get_label(src_node), "relation": None}]}], "src_found": True, "tgt_found": True}
 
-    visited = {src_id: None}
+    # BFS over CSR adjacency
+    visited = {src_id: -1}
     queue = deque([src_id])
-    found = False
     while queue:
         cur = queue.popleft()
         if cur == tgt_id:
-            found = True
             break
-        for nb in adj[cur]:
+        for k in range(offsets[cur], offsets[cur + 1]):
+            nb = neighbors[k]
             if nb not in visited:
                 visited[nb] = cur
                 queue.append(nb)
@@ -206,7 +208,7 @@ def _find_path(src_name, tgt_name, max_depth=6):
     # Reconstruct path
     path_ids = []
     cur = tgt_id
-    while cur is not None:
+    while cur != -1:
         path_ids.append(cur)
         cur = visited[cur]
     path_ids.reverse()
@@ -215,12 +217,6 @@ def _find_path(src_name, tgt_name, max_depth=6):
     for pid in path_ids:
         nm = nodes[pid]
         step_objects.append({"node": nm, "label": _get_label(nm), "relation": None})
-    for j in range(len(path_ids) - 1):
-        u, v = path_ids[j], path_ids[j + 1]
-        rel = rels.get((u, v))
-        if not rel or rel == "None":
-            rel = None
-        step_objects[j]["relation"] = rel
 
     return {"paths": [{"length": len(path_ids) - 1, "path": step_objects}], "src_found": True, "tgt_found": True}
 
