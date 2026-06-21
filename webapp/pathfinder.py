@@ -78,6 +78,7 @@ def _get_label(node):
     return _labels.get(node, _canonical_map.get(node, {}).get("canonical", node))
 
 def _find_entry(query):
+    load_data()
     q = query.lower().strip()
     results = []
     seen = set()
@@ -729,5 +730,3 @@ async function doPSI(input) {
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
- 
- 
