@@ -19,7 +19,19 @@ _labels: dict = {}
 def load_data():
     global _graph, _search_index, _canonical_map, _labels
     gpath = DATA_DIR / "graph.pkl"
-    if gpath.exists():
+    epath = DATA_DIR / "graph_edges.json.gz"
+    if _graph is not None:
+        pass  # already loaded
+    elif epath.exists():
+        import gzip
+        with gzip.open(epath, "rt", encoding="utf-8") as f:
+            ed = json.load(f)
+        _graph = nx.Graph()
+        nodes = ed["nodes"]
+        _graph.add_nodes_from(nodes)
+        for u, v, r in ed["edges"]:
+            _graph.add_edge(nodes[u], nodes[v], relation=r)
+    elif gpath.exists():
         with open(gpath, "rb") as f:
             _graph = pickle.load(f)
     else:
@@ -28,15 +40,15 @@ def load_data():
     if _graph.is_directed():
         _graph = nx.Graph(_graph)
     spath = DATA_DIR / "search_index.json"
-    if spath.exists():
+    if _search_index is None and spath.exists():
         with open(spath, "r", encoding="utf-8") as f:
             _search_index = json.load(f)
     cpath = DATA_DIR / "canonical_map.json"
-    if cpath.exists():
+    if _canonical_map is None and cpath.exists():
         with open(cpath, "r", encoding="utf-8") as f:
             _canonical_map = json.load(f)
     lpath = DATA_DIR / "labels.json"
-    if lpath.exists():
+    if _labels is None and lpath.exists():
         with open(lpath, "r", encoding="utf-8") as f:
             _labels = json.load(f)
     print(f"Loaded: {len(_graph)} nodes, {len(_search_index or [])} canonical entries, "
