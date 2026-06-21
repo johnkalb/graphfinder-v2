@@ -70,9 +70,15 @@ async def health():
 
 @app.get("/debug")
 async def debug():
-    import os
-    _load_search()
+    import os, traceback
+    err = None
+    try:
+        _load_search()
+    except Exception as e:
+        err = traceback.format_exc()
     info = {"data_dir": str(DATA_DIR), "exists": DATA_DIR.exists(), "files": {}}
+    if err:
+        info["load_error"] = err
     if DATA_DIR.exists():
         for f in os.listdir(DATA_DIR):
             fp = DATA_DIR / f
