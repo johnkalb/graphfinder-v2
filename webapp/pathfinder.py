@@ -16,29 +16,9 @@ _search_index: list = []
 _canonical_map: dict = {}
 _labels: dict = {}
 
-def load_data():
-    global _graph, _search_index, _canonical_map, _labels
-    gpath = DATA_DIR / "graph.pkl"
-    epath = DATA_DIR / "graph_edges.json.gz"
-    if _graph is not None:
-        pass  # already loaded
-    elif epath.exists():
-        import gzip
-        with gzip.open(epath, "rt", encoding="utf-8") as f:
-            ed = json.load(f)
-        _graph = nx.Graph()
-        nodes = ed["nodes"]
-        _graph.add_nodes_from(nodes)
-        for u, v, r in ed["edges"]:
-            _graph.add_edge(nodes[u], nodes[v], relation=r)
-    elif gpath.exists():
-        with open(gpath, "rb") as f:
-            _graph = pickle.load(f)
-    else:
-        _graph = nx.Graph()
-    # Convert to undirected so paths work in both directions
-    if _graph.is_directed():
-        _graph = nx.Graph(_graph)
+def _load_search():
+    """Load just the search index — fast, independent of graph."""
+    global _search_index, _canonical_map, _labels
     spath = DATA_DIR / "search_index.json"
     if _search_index is None and spath.exists():
         with open(spath, "r", encoding="utf-8") as f:
@@ -51,8 +31,33 @@ def load_data():
     if _labels is None and lpath.exists():
         with open(lpath, "r", encoding="utf-8") as f:
             _labels = json.load(f)
-    print(f"Loaded: {len(_graph)} nodes, {len(_search_index or [])} canonical entries, "
-          f"{sum(1 for v in (_canonical_map or {}).values() if v.get('is_alias', False))} aliases")
+
+def _load_graph():
+    """Load the full graph — slower, only needed for pathfinding."""
+    global _graph
+    if _graph is not None:
+        return
+    gpath = DATA_DIR / "graph.pkl"
+    epath = DATA_DIR / "graph_edges.json.gz"
+    if epath.exists():
+        import gzip
+        with gzip.open(epath, "rt", encoding="utf-8") as f:
+            ed = json.load(f)
+        g = nx.Graph()
+        nodes = ed["nodes"]
+        g.add_nodes_from(nodes)
+        for u, v, r in ed["edges"]:
+            g.add_edge(nodes[u], nodes[v], relation=r)
+        _graph = g
+    elif gpath.exists():
+        with open(gpath, "rb") as f:
+            _graph = pickle.load(f)
+    else:
+        _graph = nx.Graph()
+
+def load_data():
+    _load_search()
+    _load_graph()
 
 @app.on_event("startup")
 async def startup():
@@ -66,12 +71,14 @@ async def health():
 @app.get("/debug")
 async def debug():
     import os
+    _load_search()
     info = {"data_dir": str(DATA_DIR), "exists": DATA_DIR.exists(), "files": {}}
     if DATA_DIR.exists():
         for f in os.listdir(DATA_DIR):
             fp = DATA_DIR / f
             info["files"][f] = os.path.getsize(fp) if fp.is_file() else "dir"
     info["search_index_loaded"] = len(_search_index) if _search_index else 0
+    info["graph_loaded"] = len(_graph.nodes()) if _graph else 0
     return info
 
 RELATION_INFO = {
@@ -101,7 +108,7 @@ def _get_label(node):
     return _labels.get(node, _canonical_map.get(node, {}).get("canonical", node))
 
 def _find_entry(query):
-    load_data()
+    _load_search()
     q = query.lower().strip()
     results = []
     seen = set()
@@ -142,6 +149,7 @@ def _find_entry(query):
     return [r[1] for r in results[:50]]
 
 def _find_path(src_name, tgt_name, max_depth=6):
+    _load_graph()
     if _graph is None:
         return {"error": "Graph not loaded"}
     src_node = _resolve_name(src_name)
