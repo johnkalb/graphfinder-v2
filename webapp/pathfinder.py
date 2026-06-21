@@ -12,9 +12,9 @@ app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_
 DATA_DIR = Path(__file__).parent / "data"
 
 _graph: Optional[nx.Graph] = None
-_search_index: list = []
-_canonical_map: dict = {}
-_labels: dict = {}
+_search_index = None
+_canonical_map = None
+_labels = None
 
 def _load_search():
     """Load just the search index — fast, independent of graph."""
