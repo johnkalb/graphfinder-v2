@@ -82,7 +82,7 @@ def _find_entry(query):
     q = query.lower().strip()
     results = []
     seen = set()
-    if not _graph or not _search_index:
+    if not _search_index:
         return []
     for entry in _search_index:
         canon = entry["canonical"]
