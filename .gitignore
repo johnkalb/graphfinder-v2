@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Raw data — too large for git (1.1GB+)
+data/*.db
+data/caches/
+data/level_a_progress.json
+data/irs_progress.json
+data/ford_macarthur_progress.json
+
+# Compiled graph data — committed to repo (small)
+# webapp/data/graph.pkl, search_index.json, canonical_map.json, labels.json ARE committed
+
+# Environment
+.env
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.zip
+*.tar.gz
+*.log
+*.tmp
+compact_names.json
+webapp/data/graph.pkl
+webapp/data/canonical_map.json
+webapp/data/labels.json

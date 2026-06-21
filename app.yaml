@@ -1,0 +1,24 @@
+name: graphfinder
+region: nyc
+services:
+- name: web
+  github:
+    branch: main
+    repo: YOUR_GITHUB_USERNAME/graphfinder
+  http_port: 8000
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  run_command: uvicorn webapp.pathfinder:app --host 0.0.0.0 --port 8000 --workers 2
+  envs:
+  - key: APP_ENV
+    value: production
+  - key: SECRET_KEY
+    type: SECRET
+    value: change-this-to-a-random-string
+  - key: SENDGRID_API_KEY
+    type: SECRET
+    value: change-this
+  - key: AUTH_DOMAIN
+    value: sixdegrees.net
+  - key: PYTHONPATH
+    value: /app

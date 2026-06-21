@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Network Pathfinder</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0d1117; color: #e6edf3; min-height: 100vh; display: flex;
+         flex-direction: column; align-items: center; padding: 2rem 1rem; }
+  .container { max-width: 700px; width: 100%; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; color: #58a6ff; }
+  p.sub { color: #8b949e; margin-bottom: 2rem; }
+  .instructions { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:1rem; margin-bottom:1.5rem; font-size:0.9rem; color:#8b949e; line-height:1.6; }
+  .instructions strong { color:#58a6ff; }
+  .search-pair { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                  padding: 1.5rem; margin-bottom: 1.5rem; position: relative; }
+  .search-pair h2 { font-size: 1rem; color: #c9d1d9; margin-bottom: 0.5rem; }
+  .autocomplete-wrap { position: relative; }
+  .autocomplete-wrap input {
+    width: 100%; background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 6px; padding: 0.7rem 1rem; font-size: 1rem;
+    outline: none; transition: border-color 0.2s; }
+  .autocomplete-wrap input:focus { border-color: #58a6ff; }
+  .autocomplete-wrap input::placeholder { color: #484f58; }
+  .dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0;
+               background: #1c2128; border: 1px solid #30363d; border-top: none;
+               border-radius: 0 0 6px 6px; max-height: 280px; overflow-y: auto; z-index: 100; }
+  .dropdown.show { display: block; }
+  .dropdown-item { padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; }
+  .dropdown-item:hover, .dropdown-item.highlighted { background: #30363d; }
+  .dropdown-item .name { color: #e6edf3; }
+  .dropdown-item .sub { color: #484f58; font-size: 0.8rem; margin-left: 0.5rem; }
+  .dropdown-item .alias { display: block; color: #484f58; font-size: 0.75rem; margin-top: 0.2rem; }
+  #selected { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
+  .tag { background: #1f6feb33; color: #58a6ff; border: 1px solid #1f6feb66; border-radius: 4px;
+         padding: 0.25rem 0.5rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.3rem; }
+  .tag .close { cursor: pointer; color: #484f58; margin-left: 0.25rem; }
+  .tag .close:hover { color: #f85149; }
+  #find-btn { background: #238636; color: #fff; border: none; border-radius: 6px;
+              padding: 0.75rem 2rem; font-size: 1rem; cursor: pointer; margin-top: 0.5rem;
+              transition: background 0.2s; }
+  #find-btn:hover:not(:disabled) { background: #2ea043; }
+  #find-btn:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+  .results { margin-top: 1.5rem; }
+  .loading { color: #8b949e; text-align: center; padding: 2rem; }
+  .not-found { color: #f0883e; text-align: center; padding: 1rem; background: #161b22;
+               border-radius: 8px; margin-bottom: 1rem; }
+  .path-length { color: #8b949e; font-size: 0.9rem; margin-bottom: 1rem; }
+  .path-step { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+               padding: 1rem; margin-bottom: 0.5rem; display: flex; align-items: center;
+               flex-wrap: wrap; gap: 0.5rem; }
+  .step-node { color: #e6edf3; font-weight: 600; }
+  .step-arrow { color: #484f58; font-size: 1.2rem; }
+  .step-rel { color: #58a6ff; font-size: 0.85rem; cursor: pointer; text-decoration: underline dotted; }
+  .source-badge { display: inline-block; background: #21262d; color: #8b949e;
+                  border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 0.75rem; cursor: pointer;
+                  margin-right: 0.3rem; margin-top: 0.3rem; }
+  .source-badge:hover { background: #30363d; color: #e6edf3; }
+  .tooltip { display: none; position: fixed; background: #1c2128; border: 1px solid #30363d;
+             border-radius: 8px; padding: 1rem; width: 350px; z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .tooltip.show { display: block; }
+  .tooltip .close { float: right; cursor: pointer; color: #484f58; font-size: 1.2rem; }
+  .tooltip h3 { color: #e6edf3; margin-bottom: 0.5rem; }
+  .tooltip p { color: #8b949e; font-size: 0.85rem; line-height: 1.5; }
+  .tooltip a { color: #58a6ff; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔗 Network Pathfinder</h1>
+  <p class="sub">Explore 62,000+ relationships across SEC filings, Epstein documents, GDELT news, foundations, and more. Find paths between any two people or organizations.</p>
+
+  <div class="instructions">
+    <strong>How to use:</strong><br>
+    1. Click <strong>Person A</strong> and start typing — suggestions appear below<br>
+    2. Click a name to select it<br>
+    3. Do the same for <strong>Person B</strong><br>
+    4. Click <strong>Find Path</strong> to see the connection
+  </div>
+
+  <div class="search-pair">
+    <h2>Person A</h2>
+    <div class="autocomplete-wrap">
+      <input id="src-input" type="text" placeholder="Type any name…"
+             autocomplete="off" spellcheck="false">
+      <div id="src-dropdown" class="dropdown"></div>
+    </div>
+    <div id="src-selected"></div>
+  </div>
+
+  <div class="search-pair">
+    <h2>Person B</h2>
+    <div class="autocomplete-wrap">
+      <input id="tgt-input" type="text" placeholder="Type any name…"
+             autocomplete="off" spellcheck="false">
+      <div id="tgt-dropdown" class="dropdown"></div>
+    </div>
+    <div id="tgt-selected"></div>
+  </div>
+
+  <button id="find-btn" onclick="findPath()" disabled>🔍 Find Path</button>
+
+  <div id="results" class="results"></div>
+  <div id="tooltip" class="tooltip" onclick="hideTooltip()">
+    <span class="close" onclick="hideTooltip()">✕</span>
+    <div id="tooltip-content"></div>
+  </div>
+</div>
+
+<script>
+const state = { src: { selected: null, results: [] }, tgt: { selected: null, results: [] } };
+let searchTimeout = null;
+const currentResultsMap = {};
+const setCurrentResults = (p, r) => { currentResultsMap[p] = r; };
+const getCurrentResults = (p) => currentResultsMap[p] || [];
+
+['src', 'tgt'].forEach(prefix => {
+  const input = document.getElementById(prefix + '-input');
+  const dropdown = document.getElementById(prefix + '-dropdown');
+  let highlightedIdx = -1;
+  let currentResults = [];
+
+  input.addEventListener('input', function() {
+    const val = this.value.trim();
+    state[prefix].selected = null;
+    updateSelected(prefix);
+    updateButton();
+    clearTimeout(searchTimeout);
+    if (val.length < 2) { dropdown.classList.remove('show'); currentResults = []; setCurrentResults(prefix, []); return; }
+    searchTimeout = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/search?q=' + encodeURIComponent(val), {
+          headers: { 'Accept': 'application/json' }
+        });
+        const data = await res.json();
+        currentResults = data;
+        setCurrentResults(prefix, data);
+        highlightedIdx = -1;
+        renderDropdown(prefix, data);
+      } catch(e) {
+        console.error('Search failed', e);
+      }
+    }, 150);
+  });
+
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault();
+      highlightedIdx = Math.min(highlightedIdx + 1, currentResults.length - 1);
+      highlightItem(prefix, highlightedIdx); }
+    else if (e.key === 'ArrowUp') { e.preventDefault();
+      highlightedIdx = Math.max(highlightedIdx - 1, -1);
+      highlightItem(prefix, highlightedIdx); }
+    else if (e.key === 'Enter') { e.preventDefault();
+      const items = getCurrentResults(prefix);
+      if (highlightedIdx >= 0 && highlightedIdx < items.length)
+        selectItem(prefix, items[highlightedIdx]);
+      else if (items.length === 1)
+        selectItem(prefix, items[0]); }
+    else if (e.key === 'Escape') dropdown.classList.remove('show');
+  });
+
+  input.addEventListener('blur', function() {
+    setTimeout(() => {
+      dropdown.classList.remove('show');
+      // Auto-select if exact match or single result
+      const val = this.value.trim().toLowerCase();
+      if (!state[prefix].selected && val.length >= 2) {
+        const exact = currentResults.find(r => r.name.toLowerCase() === val);
+        if (exact) selectItem(prefix, currentResults.indexOf(exact));
+        else if (currentResults.length === 1) selectItem(prefix, 0);
+      }
+    }, 200);
+  });
+
+  input.addEventListener('focus', function() {
+    if (currentResults.length > 0) dropdown.classList.add('show');
+  });
+});
+
+// Global selectItem - defined ONCE outside forEach
+window['selectItem'] = function(prefix, idx) {
+  try {
+    let item;
+    if (typeof idx === 'object') {
+      item = idx;
+    } else {
+      const results = getCurrentResults(prefix);
+      item = results && results[idx];
+    }
+    if (!item) { console.error('selectItem: no item for', prefix, idx); return; }
+    state[prefix].selected = item.name;
+    const display = document.getElementById(prefix + '-selected');
+    if (display) display.innerHTML = `<span class="tag">${escHtml(item.name)}<span class="close" onclick="deselect('${prefix}')">✕</span></span>`;
+    const input = document.getElementById(prefix + '-input');
+    if (input) input.value = '';
+    const dd = document.getElementById(prefix + '-dropdown');
+    if (dd) dd.classList.remove('show');
+    updateButton();
+  } catch(e) { console.error('selectItem error:', e); }
+};
+
+  function renderDropdown(prefix, items) {
+    const dd = document.getElementById(prefix + '-dropdown');
+    if (!items || items.length === 0) { dd.classList.remove('show'); return; }
+    dd.innerHTML = items.map((item, i) => {
+      let aliasHtml = '';
+      if (item.aliases && item.aliases.length > 0)
+        aliasHtml = `<span class="alias">also: ${escHtml(item.aliases.join(', '))}</span>`;
+      return `<div class="dropdown-item" data-index="${i}"
+        onmousedown="selectItem('${prefix}', ${i})" ontouchstart="selectItem('${prefix}', ${i})"
+        onmouseover="highlightIdx('${prefix}', ${i})">
+        <span class="name">${escHtml(item.name)}</span>
+        <span class="sub">${item.count > 1 ? '×' + item.count : ''}</span>
+        ${aliasHtml}
+      </div>`;
+    }).join('');
+    dd.classList.add('show');
+  }
+
+  window['highlightIdx'] = function(prefix, idx) {
+    const dd = document.getElementById(prefix + '-dropdown');
+    const items = dd.querySelectorAll('.dropdown-item');
+    items.forEach((el, i) => el.classList.toggle('highlighted', i === idx));
+  };
+
+  window['highlightItem'] = function(prefix, idx) {
+    const dd = document.getElementById(prefix + '-dropdown');
+    const items = dd.querySelectorAll('.dropdown-item');
+    items.forEach((el, i) => el.classList.toggle('highlighted', i === idx));
+  };
+});
+
+function deselect(prefix) {
+  state[prefix].selected = null;
+  document.getElementById(prefix + '-selected').innerHTML = '';
+  document.getElementById(prefix + '-input').value = '';
+  updateButton();
+}
+
+function updateSelected(prefix) {
+  if (!state[prefix].selected)
+    document.getElementById(prefix + '-selected').innerHTML = '';
+}
+
+function updateButton() {
+  document.getElementById('find-btn').disabled = !(state.src.selected && state.tgt.selected);
+}
+
+function findPath() {
+  const results = document.getElementById('results');
+  if (!state.src.selected || !state.tgt.selected) return;
+  results.innerHTML = '<div class="loading">⏳ Searching for path…</div>';
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', '/api/path?src_name=' + encodeURIComponent(state.src.selected) +
+             '&tgt_name=' + encodeURIComponent(state.tgt.selected));
+  xhr.onload = function() {
+    if (xhr.status !== 200) { results.innerHTML = '<div class="not-found">Error: ' + xhr.status + '</div>'; return; }
+    try {
+      const data = JSON.parse(xhr.responseText);
+      let html = '';
+      if (!data.src_found) html += '<div class="not-found">"' + escHtml(data.src_name) + '" not found in network.</div>';
+      if (!data.tgt_found) html += '<div class="not-found">"' + escHtml(data.tgt_name) + '" not found in network.</div>';
+      if (data.paths && data.paths.length > 0) {
+        const p = data.paths[0];
+        html += '<div class="path-length">' + p.length + ' edge' + (p.length !== 1 ? 's' : '') + '</div>';
+        for (let s = 0; s < p.path.length; s++) {
+          const step = p.path[s];
+          html += '<div class="path-step"><span class="step-node">' + escHtml(step.label) + '</span>';
+          if (step.relation) html += '<span class="step-arrow">→</span><span class="step-rel">' + escHtml(step.relation) + '</span>';
+          html += '</div>';
+        }
+      } else if (data.src_found && data.tgt_found) {
+        html += '<div class="not-found">No path found between these two.</div>';
+      }
+      results.innerHTML = html;
+    } catch(e) { results.innerHTML = '<div class="not-found">Error parsing response</div>'; }
+  };
+  xhr.send();
+}
+
+function hideTooltip() { document.getElementById('tooltip').classList.remove('show'); }
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+
+</body>
+</html> 
