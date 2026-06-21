@@ -33,27 +33,29 @@ def _load_search():
             _labels = json.load(f)
 
 def _load_graph():
-    """Load the full graph — slower, only needed for pathfinding."""
+    """Load a lightweight adjacency structure — memory-efficient, no NetworkX."""
     global _graph
     if _graph is not None:
         return
-    gpath = DATA_DIR / "graph.pkl"
     epath = DATA_DIR / "graph_edges.json.gz"
     if epath.exists():
         import gzip
         with gzip.open(epath, "rt", encoding="utf-8") as f:
             ed = json.load(f)
-        g = nx.Graph()
         nodes = ed["nodes"]
-        g.add_nodes_from(nodes)
+        # Adjacency: int_id -> set(int_id). Relations stored separately, sparse.
+        adj = [set() for _ in range(len(nodes))]
+        rels = {}
         for u, v, r in ed["edges"]:
-            g.add_edge(nodes[u], nodes[v], relation=r)
-        _graph = g
-    elif gpath.exists():
-        with open(gpath, "rb") as f:
-            _graph = pickle.load(f)
+            adj[u].add(v)
+            adj[v].add(u)
+            if r:
+                rels[(u, v)] = r
+                rels[(v, u)] = r
+        name_to_id = {n: i for i, n in enumerate(nodes)}
+        _graph = {"nodes": nodes, "adj": adj, "rels": rels, "name_to_id": name_to_id}
     else:
-        _graph = nx.Graph()
+        _graph = {"nodes": [], "adj": [], "rels": {}, "name_to_id": {}}
 
 def load_data():
     _load_search()
@@ -91,7 +93,7 @@ async def debug():
             fp = DATA_DIR / f
             info["files"][f] = os.path.getsize(fp) if fp.is_file() else "dir"
     info["search_index_loaded"] = len(_search_index) if _search_index else 0
-    info["graph_loaded"] = len(_graph.nodes()) if _graph else 0
+    info["graph_loaded"] = len(_graph["nodes"]) if (_graph and isinstance(_graph, dict)) else 0
     return info
 
 RELATION_INFO = {
@@ -163,41 +165,64 @@ def _find_entry(query):
 
 def _find_path(src_name, tgt_name, max_depth=6):
     _load_graph()
-    if _graph is None:
+    if not _graph or not _graph.get("nodes"):
         return {"error": "Graph not loaded"}
+    name_to_id = _graph["name_to_id"]
+    adj = _graph["adj"]
+    rels = _graph["rels"]
+    nodes = _graph["nodes"]
+
     src_node = _resolve_name(src_name)
     tgt_node = _resolve_name(tgt_name)
-    if not src_node:
+    if not src_node or src_node not in name_to_id:
         return {"error": f"Source '{src_name}' not found"}
-    if not tgt_node:
+    if not tgt_node or tgt_node not in name_to_id:
         return {"error": f"Target '{tgt_name}' not found"}
-    try:
-        # Use undirected graph for pathfinding (edges are directional but relationships
-        # connect both parties bidirectionally)
-        import networkx as nx
-        ug = nx.Graph(_graph)
-        paths_gen = nx.shortest_simple_paths(ug, src_node, tgt_node)
-        paths = []
-        for i, path in enumerate(paths_gen):
-            if i >= 5:
-                break
-            step_objects = []
-            for j in range(len(path)):
-                label = _get_label(path[j])
-                step_objects.append({"node": path[j], "label": label, "relation": None})
-            for j in range(len(path) - 1):
-                u, v = path[j], path[j + 1]
-                ed = _graph.get_edge_data(u, v)
-                rel = None
-                if ed:
-                    rel = ed.get("relation") or ed.get("type") or ed.get("label", "")
-                    if not rel or rel == "None":
-                        rel = None
-                step_objects[j]["relation"] = rel
-            paths.append({"length": len(path) - 1, "path": step_objects})
-        return {"paths": paths, "src_found": True, "tgt_found": True}
-    except (nx.NetworkXNoPath, nx.NodeNotFound):
-        return {"paths": [], "src_found": src_node is not None, "tgt_found": tgt_node is not None}
+
+    src_id = name_to_id[src_node]
+    tgt_id = name_to_id[tgt_node]
+
+    # BFS for shortest path
+    from collections import deque
+    if src_id == tgt_id:
+        return {"paths": [{"length": 0, "path": [{"node": src_node, "label": _get_label(src_node), "relation": None}]}], "src_found": True, "tgt_found": True}
+
+    visited = {src_id: None}
+    queue = deque([src_id])
+    found = False
+    while queue:
+        cur = queue.popleft()
+        if cur == tgt_id:
+            found = True
+            break
+        for nb in adj[cur]:
+            if nb not in visited:
+                visited[nb] = cur
+                queue.append(nb)
+
+    if tgt_id not in visited:
+        return {"paths": [], "src_found": True, "tgt_found": True}
+
+    # Reconstruct path
+    path_ids = []
+    cur = tgt_id
+    while cur is not None:
+        path_ids.append(cur)
+        cur = visited[cur]
+    path_ids.reverse()
+
+    step_objects = []
+    for pid in path_ids:
+        nm = nodes[pid]
+        step_objects.append({"node": nm, "label": _get_label(nm), "relation": None})
+    for j in range(len(path_ids) - 1):
+        u, v = path_ids[j], path_ids[j + 1]
+        rel = rels.get((u, v))
+        if not rel or rel == "None":
+            rel = None
+        step_objects[j]["relation"] = rel
+
+    return {"paths": [{"length": len(path_ids) - 1, "path": step_objects}], "src_found": True, "tgt_found": True}
 
 def _resolve_name(name):
     name_lower = name.strip().lower()
@@ -212,11 +237,12 @@ def _resolve_name(name):
                         return nid2
             else:
                 return info.get("canonical")
-    if name_lower in _graph:
+    if _graph and isinstance(_graph, dict) and name_lower in _graph.get("name_to_id", {}):
         return name_lower
-    for n in _graph.nodes():
-        if n.lower() == name_lower:
-            return n
+    if _graph and isinstance(_graph, dict):
+        for n in _graph.get("nodes", []):
+            if n.lower() == name_lower:
+                return n
     return None
 
 @app.get("/api/evidence")
