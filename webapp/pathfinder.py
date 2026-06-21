@@ -51,6 +51,17 @@ async def startup():
 async def health():
     return {"ok": True}
 
+@app.get("/debug")
+async def debug():
+    import os
+    info = {"data_dir": str(DATA_DIR), "exists": DATA_DIR.exists(), "files": {}}
+    if DATA_DIR.exists():
+        for f in os.listdir(DATA_DIR):
+            fp = DATA_DIR / f
+            info["files"][f] = os.path.getsize(fp) if fp.is_file() else "dir"
+    info["search_index_loaded"] = len(_search_index) if _search_index else 0
+    return info
+
 RELATION_INFO = {
   'COMMUNICATED_WITH': {'title': 'Communication', 'desc': 'Communication between parties — calls, messages, or correspondence identified in documents or records.'},
   'TRANSACTED_WITH': {'title': 'Financial Transaction', 'desc': 'Financial transactions or business dealings between the parties as recorded in filings, financial records, or news reports.'},
