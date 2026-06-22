@@ -48,11 +48,18 @@ def _load_graph():
         import gzip
         with gzip.open(epath, "rt", encoding="utf-8") as f:
             ed = json.load(f)
-        g = nx.Graph()
         nodes = ed["nodes"]
+        edge_list = ed["edges"]
+        ed = None  # free the dict wrapper
+        g = nx.Graph()
         g.add_nodes_from(nodes)
-        for u, v, r in ed["edges"]:
+        # Add edges in chunks, freeing as we go
+        n_edges = len(edge_list)
+        for idx in range(n_edges):
+            u, v, r = edge_list[idx]
             g.add_edge(nodes[u], nodes[v], relation=r)
+            edge_list[idx] = None  # free each tuple after use
+        edge_list = None
         _graph = g
     else:
         _graph = nx.Graph()
