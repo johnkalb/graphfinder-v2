@@ -499,6 +499,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .path-result { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
                   padding: 1.5rem; margin-bottom: 1rem; position: relative; }
   .path-result .length { color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem; }
+  .path-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;
+                 flex-wrap: wrap; }
+  .path-rank { font-weight: 600; color: #e6edf3; font-size: 0.9rem; }
+  .path-viability { font-size: 0.8rem; font-weight: 600; padding: 2px 8px;
+                    border: 1px solid; border-radius: 12px; }
+  .path-header .length { margin-bottom: 0; margin-left: auto; }
+  .path-chain { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .step-rel small { color: #6e7681; font-weight: 600; }
+  .path-note { color: #6e7681; font-size: 0.78rem; line-height: 1.5; margin-top: 0.5rem;
+               padding: 0.75rem; background: #0d1117; border-radius: 6px; }
   .path-step { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0;
                 flex-wrap: wrap; }
   .step-node { color: #e6edf3; font-weight: 500; cursor: pointer; }
@@ -724,17 +734,28 @@ async function findPath() {
     } else if (!data.paths || data.paths.length === 0) {
       html = '<div class="no-path">No path found between <strong>' + escHtml(state.src.selected) + '</strong> and <strong>' + escHtml(state.tgt.selected) + '</strong></div>';
     } else {
-      data.paths.forEach(p => {
+      data.paths.forEach((p, idx) => {
+        const bandColors = {Strong:'#3fb950', Plausible:'#d29922', Weak:'#db6d28', Tenuous:'#8b949e'};
+        const bc = bandColors[p.band] || '#8b949e';
         html += '<div class="path-result">';
-        html += '<div class="length">' + p.length + ' edge' + (p.length !== 1 ? 's' : '') + '</div>';
+        html += '<div class="path-header">';
+        html += '<span class="path-rank">' + (idx === 0 ? 'Best path' : 'Alternate ' + idx) + '</span>';
+        html += '<span class="path-viability" style="color:' + bc + ';border-color:' + bc + ';">'
+              + escHtml(p.band) + ' &middot; ' + escHtml(p.prob_label) + '</span>';
+        html += '<span class="length">' + p.length + ' hop' + (p.length !== 1 ? 's' : '') + '</span>';
+        html += '</div>';
+        html += '<div class="path-chain">';
         p.path.forEach((step, i) => {
           if (i > 0) {
-            html += '<span class="step-arrow">→</span>';
             const prev = p.path[i-1];
             const rel = prev.relation;
+            const lp = prev.prob;
+            html += '<span class="step-arrow">→</span>';
             if (rel) {
               const ri = Math.random().toString(36).slice(2);
-              html += '<span class="step-rel" id="rel-' + ri + '" title="' + escHtml(rel) + '">' + escHtml(rel) + '</span>';
+              const lpct = lp != null ? Math.round(lp*100) + '%' : '';
+              html += '<span class="step-rel" id="rel-' + ri + '" title="Click for sources">'
+                    + escHtml(rel) + (lpct ? ' <small>' + lpct + '</small>' : '') + '</span>';
               html += '<span class="step-arrow">→</span>';
               setTimeout(() => {
                 const el = document.getElementById('rel-' + ri);
@@ -744,8 +765,9 @@ async function findPath() {
           }
           html += '<span class="step-node">' + escHtml(step.label) + '</span>';
         });
-        html += '</div>';
+        html += '</div></div>';
       });
+      html += '<div class="path-note">Viability = estimated probability the chain would pass a warm introduction at each step (each person would take the call). Multiple alternate paths shown — your own knowledge may favor a different one.</div>';
     }
     document.getElementById('results').innerHTML = html;
   } catch(e) {
