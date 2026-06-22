@@ -667,13 +667,15 @@ async function findPath() {
         p.path.forEach((step, i) => {
           if (i > 0) {
             html += '<span class="step-arrow">→</span>';
-            if (step.relation) {
+            const prev = p.path[i-1];
+            const rel = prev.relation;
+            if (rel) {
               const ri = Math.random().toString(36).slice(2);
-              html += '<span class="step-rel" id="rel-' + ri + '" title="' + escHtml(step.relation) + '">' + escHtml(step.relation) + '</span>';
+              html += '<span class="step-rel" id="rel-' + ri + '" title="' + escHtml(rel) + '">' + escHtml(rel) + '</span>';
               html += '<span class="step-arrow">→</span>';
               setTimeout(() => {
                 const el = document.getElementById('rel-' + ri);
-                if (el) el.onclick = function(e) { showRelTooltip(e, step.relation, p.path[i-1].label, step.label); };
+                if (el) el.onclick = function(e) { showRelTooltip(e, rel, prev.label, step.label); };
               }, 0);
             }
           }
