@@ -81,7 +81,7 @@ CATEGORY_DESC = {
 
 METHODOLOGY = (
     "Every connection is assigned a probability answering one question: "
-    "\u201cif this were the only link between two people, how likely is it that one would take the other's phone call?\u201d "
+    "\u201cif this were the only link between two people, how likely is it that one would (or would have) taken the other's phone call?\u201d "
     "These per-category probabilities are editorial estimates based on what each relationship type actually implies "
     "about real acquaintance.\n\n"
     "When two people share several relationships, the evidence is combined with a noisy-OR model: "
