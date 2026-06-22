@@ -11,6 +11,11 @@ import uvicorn
 app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 DATA_DIR = Path(__file__).parent / "data"
 
+try:
+    from link_scoring import CATEGORY_PROB as _CATEGORY_PROB
+except ImportError:
+    from webapp.link_scoring import CATEGORY_PROB as _CATEGORY_PROB
+
 _graph: Optional[nx.Graph] = None
 _search_index = None
 _canonical_map = None
@@ -33,32 +38,44 @@ def _load_search():
             _labels = json.load(f)
 
 def _load_graph():
-    """Load the full NetworkX graph with edge attributes (sources, snippets)."""
+    """Load the scored NetworkX graph. Each edge carries:
+       prob  (P would take a call), weight (-log prob, for shortest path),
+       cats  (contributing relationship categories)."""
     global _graph
     if _graph is not None:
         return
-    gpath = DATA_DIR / "graph.pkl"
+    import gzip, math
+    spath = DATA_DIR / "graph_scored.json.gz"
     epath = DATA_DIR / "graph_edges.json.gz"
-    if gpath.exists():
-        with open(gpath, "rb") as f:
-            _graph = pickle.load(f)
-        if _graph.is_directed():
-            _graph = nx.Graph(_graph)
+    if spath.exists():
+        with gzip.open(spath, "rt", encoding="utf-8") as f:
+            ed = json.load(f)
+        nodes = ed["nodes"]
+        edge_list = ed["edges"]
+        ed = None
+        g = nx.Graph()
+        g.add_nodes_from(nodes)
+        n_edges = len(edge_list)
+        for idx in range(n_edges):
+            u, v, prob, cats = edge_list[idx]
+            p = prob if prob > 1e-9 else 1e-9
+            g.add_edge(nodes[u], nodes[v], prob=prob, weight=-math.log(p), cats=cats)
+            edge_list[idx] = None
+        edge_list = None
+        _graph = g
     elif epath.exists():
-        import gzip
+        # Fallback: legacy unscored edge list
         with gzip.open(epath, "rt", encoding="utf-8") as f:
             ed = json.load(f)
         nodes = ed["nodes"]
         edge_list = ed["edges"]
-        ed = None  # free the dict wrapper
+        ed = None
         g = nx.Graph()
         g.add_nodes_from(nodes)
-        # Add edges in chunks, freeing as we go
-        n_edges = len(edge_list)
-        for idx in range(n_edges):
+        for idx in range(len(edge_list)):
             u, v, r = edge_list[idx]
-            g.add_edge(nodes[u], nodes[v], relation=r)
-            edge_list[idx] = None  # free each tuple after use
+            g.add_edge(nodes[u], nodes[v], relation=r, prob=0.5, weight=0.693, cats=[])
+            edge_list[idx] = None
         edge_list = None
         _graph = g
     else:
@@ -219,7 +236,23 @@ def _find_entry(query):
     results.sort(key=lambda x: (-x[0], x[1]["canonical"]))
     return [r[1] for r in results[:50]]
 
-def _find_path(src_name, tgt_name, max_depth=6):
+def _viability_band(p):
+    if p >= 0.5:
+        return "Strong"
+    if p >= 0.1:
+        return "Plausible"
+    if p >= 0.01:
+        return "Weak"
+    return "Tenuous"
+
+def _one_in(p):
+    if p <= 0:
+        return "\u2248 negligible"
+    if p >= 0.5:
+        return f"{round(p*100)}%"
+    return f"\u2248 1 in {round(1.0/p)}"
+
+def _find_path(src_name, tgt_name, max_depth=6, k=5):
     _load_graph()
     if _graph is None:
         return {"error": "Graph not loaded"}
@@ -230,28 +263,47 @@ def _find_path(src_name, tgt_name, max_depth=6):
     if not tgt_node:
         return {"error": f"Target '{tgt_name}' not found"}
     try:
-        # Graph already undirected. Fast single shortest path via BFS first.
+        def build(path):
+            # path probability = product of per-edge probs
+            path_prob = 1.0
+            step_objects = []
+            for j in range(len(path)):
+                step_objects.append({"node": path[j], "label": _get_label(path[j]),
+                                     "relation": None, "prob": None, "cats": None})
+            for j in range(len(path) - 1):
+                ed = _graph.get_edge_data(path[j], path[j + 1]) or {}
+                p = ed.get("prob", 0.5)
+                cats = ed.get("cats", []) or []
+                path_prob *= p
+                # primary label = strongest contributing category by editorial prob
+                rel = None
+                if cats:
+                    rel = max(cats, key=lambda c: _CATEGORY_PROB.get(c, 0.0))
+                elif ed.get("relation"):
+                    rel = ed.get("relation")
+                step_objects[j]["relation"] = rel
+                step_objects[j]["prob"] = round(p, 4)
+                step_objects[j]["cats"] = cats
+            return {
+                "length": len(path) - 1,
+                "probability": round(path_prob, 6),
+                "prob_label": _one_in(path_prob),
+                "band": _viability_band(path_prob),
+                "path": step_objects,
+            }
+
+        # k most-probable paths = k shortest in -log(prob) weight space
         paths = []
         try:
-            first = nx.shortest_path(_graph, src_node, tgt_node)
+            gen = nx.shortest_simple_paths(_graph, src_node, tgt_node, weight="weight")
+            for i, p in enumerate(gen):
+                if i >= k:
+                    break
+                paths.append(build(p))
         except nx.NetworkXNoPath:
             return {"paths": [], "src_found": True, "tgt_found": True}
 
-        def build(path):
-            step_objects = []
-            for j in range(len(path)):
-                step_objects.append({"node": path[j], "label": _get_label(path[j]), "relation": None})
-            for j in range(len(path) - 1):
-                ed = _graph.get_edge_data(path[j], path[j + 1])
-                rel = None
-                if ed:
-                    rel = ed.get("relation") or ed.get("type") or ed.get("label", "")
-                    if not rel or rel == "None":
-                        rel = None
-                step_objects[j]["relation"] = rel
-            return {"length": len(path) - 1, "path": step_objects}
-
-        paths.append(build(first))
+        # already in decreasing-probability order from the weighted generator
         return {"paths": paths, "src_found": True, "tgt_found": True}
     except nx.NodeNotFound:
         return {"paths": [], "src_found": src_node is not None, "tgt_found": tgt_node is not None}
