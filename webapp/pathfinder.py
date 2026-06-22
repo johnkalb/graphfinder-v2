@@ -167,28 +167,30 @@ def _find_path(src_name, tgt_name, max_depth=6):
     if not tgt_node:
         return {"error": f"Target '{tgt_name}' not found"}
     try:
-        ug = _graph if not _graph.is_directed() else nx.Graph(_graph)
-        paths_gen = nx.shortest_simple_paths(ug, src_node, tgt_node)
+        # Graph already undirected. Fast single shortest path via BFS first.
         paths = []
-        for i, path in enumerate(paths_gen):
-            if i >= 5:
-                break
+        try:
+            first = nx.shortest_path(_graph, src_node, tgt_node)
+        except nx.NetworkXNoPath:
+            return {"paths": [], "src_found": True, "tgt_found": True}
+
+        def build(path):
             step_objects = []
             for j in range(len(path)):
-                label = _get_label(path[j])
-                step_objects.append({"node": path[j], "label": label, "relation": None})
+                step_objects.append({"node": path[j], "label": _get_label(path[j]), "relation": None})
             for j in range(len(path) - 1):
-                u, v = path[j], path[j + 1]
-                ed = _graph.get_edge_data(u, v)
+                ed = _graph.get_edge_data(path[j], path[j + 1])
                 rel = None
                 if ed:
                     rel = ed.get("relation") or ed.get("type") or ed.get("label", "")
                     if not rel or rel == "None":
                         rel = None
                 step_objects[j]["relation"] = rel
-            paths.append({"length": len(path) - 1, "path": step_objects})
+            return {"length": len(path) - 1, "path": step_objects}
+
+        paths.append(build(first))
         return {"paths": paths, "src_found": True, "tgt_found": True}
-    except (nx.NetworkXNoPath, nx.NodeNotFound):
+    except nx.NodeNotFound:
         return {"paths": [], "src_found": src_node is not None, "tgt_found": tgt_node is not None}
 
 def _resolve_name(name):
