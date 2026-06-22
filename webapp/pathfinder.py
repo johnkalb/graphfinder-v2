@@ -215,9 +215,11 @@ def _find_entry(query):
         if q == canon_lower:
             score = 100
         elif canon_lower.startswith(q):
-            score = 90
+            score = 92
         elif any(p.startswith(q) for p in parts):
-            score = 80
+            # A query matching the start of ANY name token (e.g. a surname)
+            # is as good as matching the start of the whole string.
+            score = 90
         elif q in canon_lower:
             score = 50
         elif alias_matches:
@@ -230,10 +232,18 @@ def _find_entry(query):
             if matching > 0:
                 score = 20 + matching * 5
         if score is not None and score > 0:
+            # Boost well-connected hubs so the real person outranks tiny
+            # same-name committees/trusts. A strong hub (high degree) can
+            # cross one tier (e.g. surname-match person over a starts-with org),
+            # but the cap keeps an exact full-name match (100) always on top.
+            deg = entry.get("degree", 0)
+            if deg > 0:
+                import math
+                score += min(15.0, math.log10(deg + 1) * 4.0)
             if canon_lower not in seen:
                 seen.add(canon_lower)
                 results.append((score, entry))
-    results.sort(key=lambda x: (-x[0], x[1]["canonical"]))
+    results.sort(key=lambda x: (-x[0], -x[1].get("degree", 0), x[1]["canonical"]))
     return [r[1] for r in results[:50]]
 
 def _viability_band(p):
