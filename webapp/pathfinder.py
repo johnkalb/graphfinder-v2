@@ -73,6 +73,25 @@ async def startup():
     """Load only the search index at startup; graph loads lazily on first path request."""
     _load_search()
 
+@app.get("/meminfo")
+async def meminfo():
+    import os
+    info = {}
+    try:
+        # Read cgroup memory limit (what the container actually has)
+        for path in ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]:
+            if os.path.exists(path):
+                with open(path) as f:
+                    info["cgroup_limit"] = f.read().strip()
+                break
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal") or line.startswith("MemAvailable"):
+                    info[line.split(":")[0]] = line.split(":")[1].strip()
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
 @app.get("/health")
 async def health():
     return {"ok": True}
