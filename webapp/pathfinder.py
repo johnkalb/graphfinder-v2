@@ -92,6 +92,28 @@ async def meminfo():
         info["error"] = str(e)
     return info
 
+@app.get("/loadgraph")
+async def loadgraph():
+    """Manually trigger graph load with memory tracking."""
+    import os
+    steps = []
+    def mem():
+        try:
+            with open(f"/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS"):
+                        return line.split(":")[1].strip()
+        except: return "?"
+    steps.append(f"start: {mem()}")
+    try:
+        _load_graph()
+        steps.append(f"after load: {mem()}")
+        steps.append(f"nodes: {len(_graph.nodes())}, edges: {len(_graph.edges())}")
+    except Exception as e:
+        import traceback
+        steps.append(f"ERROR: {traceback.format_exc()[:500]}")
+    return {"steps": steps}
+
 @app.get("/health")
 async def health():
     return {"ok": True}
