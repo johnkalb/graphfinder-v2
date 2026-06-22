@@ -33,39 +33,29 @@ def _load_search():
             _labels = json.load(f)
 
 def _load_graph():
-    """Load a CSR-style adjacency — ultra memory-efficient, no NetworkX."""
+    """Load the full NetworkX graph with edge attributes (sources, snippets)."""
     global _graph
     if _graph is not None:
         return
+    gpath = DATA_DIR / "graph.pkl"
     epath = DATA_DIR / "graph_edges.json.gz"
-    if not epath.exists():
-        _graph = {"nodes": [], "offsets": None, "neighbors": None, "name_to_id": {}}
-        return
-    import gzip, array
-    with gzip.open(epath, "rt", encoding="utf-8") as f:
-        ed = json.load(f)
-    nodes = ed["nodes"]
-    n = len(nodes)
-    # Count degrees
-    deg = array.array("i", [0] * n)
-    for u, v, r in ed["edges"]:
-        deg[u] += 1
-        deg[v] += 1
-    # Build offset array (CSR row pointers)
-    offsets = array.array("i", [0] * (n + 1))
-    for i in range(n):
-        offsets[i + 1] = offsets[i] + deg[i]
-    total = offsets[n]
-    # Fill neighbors using a cursor per node
-    neighbors = array.array("i", [0] * total)
-    cursor = array.array("i", offsets[:n])
-    for u, v, r in ed["edges"]:
-        neighbors[cursor[u]] = v
-        cursor[u] += 1
-        neighbors[cursor[v]] = u
-        cursor[v] += 1
-    name_to_id = {nm: i for i, nm in enumerate(nodes)}
-    _graph = {"nodes": nodes, "offsets": offsets, "neighbors": neighbors, "name_to_id": name_to_id}
+    if gpath.exists():
+        with open(gpath, "rb") as f:
+            _graph = pickle.load(f)
+        if _graph.is_directed():
+            _graph = nx.Graph(_graph)
+    elif epath.exists():
+        import gzip
+        with gzip.open(epath, "rt", encoding="utf-8") as f:
+            ed = json.load(f)
+        g = nx.Graph()
+        nodes = ed["nodes"]
+        g.add_nodes_from(nodes)
+        for u, v, r in ed["edges"]:
+            g.add_edge(nodes[u], nodes[v], relation=r)
+        _graph = g
+    else:
+        _graph = nx.Graph()
 
 def load_data():
     _load_search()
@@ -96,7 +86,7 @@ async def debug():
             fp = DATA_DIR / f
             info["files"][f] = os.path.getsize(fp) if fp.is_file() else "dir"
     info["search_index_loaded"] = len(_search_index) if _search_index else 0
-    info["graph_loaded"] = len(_graph["nodes"]) if (_graph and isinstance(_graph, dict) and _graph.get("nodes")) else 0
+    info["graph_loaded"] = len(_graph.nodes()) if (_graph is not None and hasattr(_graph, "nodes")) else 0
     return info
 
 RELATION_INFO = {
@@ -168,57 +158,38 @@ def _find_entry(query):
 
 def _find_path(src_name, tgt_name, max_depth=6):
     _load_graph()
-    if not _graph or not _graph.get("nodes"):
+    if _graph is None:
         return {"error": "Graph not loaded"}
-    name_to_id = _graph["name_to_id"]
-    offsets = _graph["offsets"]
-    neighbors = _graph["neighbors"]
-    nodes = _graph["nodes"]
-
     src_node = _resolve_name(src_name)
     tgt_node = _resolve_name(tgt_name)
-    if not src_node or src_node not in name_to_id:
+    if not src_node:
         return {"error": f"Source '{src_name}' not found"}
-    if not tgt_node or tgt_node not in name_to_id:
+    if not tgt_node:
         return {"error": f"Target '{tgt_name}' not found"}
-
-    src_id = name_to_id[src_node]
-    tgt_id = name_to_id[tgt_node]
-
-    from collections import deque
-    if src_id == tgt_id:
-        return {"paths": [{"length": 0, "path": [{"node": src_node, "label": _get_label(src_node), "relation": None}]}], "src_found": True, "tgt_found": True}
-
-    # BFS over CSR adjacency
-    visited = {src_id: -1}
-    queue = deque([src_id])
-    while queue:
-        cur = queue.popleft()
-        if cur == tgt_id:
-            break
-        for k in range(offsets[cur], offsets[cur + 1]):
-            nb = neighbors[k]
-            if nb not in visited:
-                visited[nb] = cur
-                queue.append(nb)
-
-    if tgt_id not in visited:
-        return {"paths": [], "src_found": True, "tgt_found": True}
-
-    # Reconstruct path
-    path_ids = []
-    cur = tgt_id
-    while cur != -1:
-        path_ids.append(cur)
-        cur = visited[cur]
-    path_ids.reverse()
-
-    step_objects = []
-    for pid in path_ids:
-        nm = nodes[pid]
-        step_objects.append({"node": nm, "label": _get_label(nm), "relation": None})
-
-    return {"paths": [{"length": len(path_ids) - 1, "path": step_objects}], "src_found": True, "tgt_found": True}
+    try:
+        ug = _graph if not _graph.is_directed() else nx.Graph(_graph)
+        paths_gen = nx.shortest_simple_paths(ug, src_node, tgt_node)
+        paths = []
+        for i, path in enumerate(paths_gen):
+            if i >= 5:
+                break
+            step_objects = []
+            for j in range(len(path)):
+                label = _get_label(path[j])
+                step_objects.append({"node": path[j], "label": label, "relation": None})
+            for j in range(len(path) - 1):
+                u, v = path[j], path[j + 1]
+                ed = _graph.get_edge_data(u, v)
+                rel = None
+                if ed:
+                    rel = ed.get("relation") or ed.get("type") or ed.get("label", "")
+                    if not rel or rel == "None":
+                        rel = None
+                step_objects[j]["relation"] = rel
+            paths.append({"length": len(path) - 1, "path": step_objects})
+        return {"paths": paths, "src_found": True, "tgt_found": True}
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return {"paths": [], "src_found": src_node is not None, "tgt_found": tgt_node is not None}
 
 def _resolve_name(name):
     name_lower = name.strip().lower()
@@ -233,10 +204,10 @@ def _resolve_name(name):
                         return nid2
             else:
                 return info.get("canonical")
-    if _graph and isinstance(_graph, dict) and name_lower in _graph.get("name_to_id", {}):
+    if _graph is not None and name_lower in _graph:
         return name_lower
-    if _graph and isinstance(_graph, dict):
-        for n in _graph.get("nodes", []):
+    if _graph is not None:
+        for n in _graph.nodes():
             if n.lower() == name_lower:
                 return n
     return None
