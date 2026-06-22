@@ -240,16 +240,20 @@ def _find_path(src_name, tgt_name, max_depth=6):
         return {"paths": paths, "src_found": True, "tgt_found": True}
     except nx.NodeNotFound:
         return {"paths": [], "src_found": src_node is not None, "tgt_found": tgt_node is not None}
+    except Exception as e:
+        import traceback
+        return {"error": "pathfind_failed", "detail": traceback.format_exc()[:600]}
 
 def _resolve_name(name):
     name_lower = name.strip().lower()
-    for node_id, info in _canonical_map.items():
+    cmap = _canonical_map or {}
+    for node_id, info in cmap.items():
         if info.get("canonical", "").lower() == name_lower:
             return info.get("canonical") if not info.get("is_alias") else node_id
-    for node_id, info in _canonical_map.items():
+    for node_id, info in cmap.items():
         if info.get("name", "").lower() == name_lower:
             if info.get("is_alias"):
-                for nid2, info2 in _canonical_map.items():
+                for nid2, info2 in cmap.items():
                     if info2.get("canonical") == info.get("canonical") and not info2.get("is_alias"):
                         return nid2
             else:
