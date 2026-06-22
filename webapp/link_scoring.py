@@ -53,6 +53,47 @@ CO_EMPLOYMENT = {"CO_OFFICER", "CO_DIRECTOR", "CO_EXECUTIVE", "EMPLOYMENT", "SEC
 # Categories that are NOT relationships (same-entity markers) -> ignore / merge nodes.
 NON_RELATION = {"SAME_ENTITY"}
 
+# Human-readable label + how the probability was established, per category.
+CATEGORY_DESC = {
+    "FAMILY": ("Family / Spouse", "Family or marital tie. Among the strongest signals — family members almost always take each other's calls."),
+    "FRIEND": ("Friend", "Explicitly documented friendship (including close, childhood, or romantic ties). Stated friendship strongly implies a call would be accepted."),
+    "COMMUNICATED": ("Direct Communication", "Documented calls, emails, or correspondence between the parties. Direct prior contact makes a future call likely."),
+    "CO_OFFICER": ("Co-Officer", "Both served as officers of the same company (SEC filings). Corporate colleagues at the officer level typically know each other."),
+    "CO_DIRECTOR": ("Co-Director", "Both served on the same company's board (SEC filings). Fellow directors interact directly in board settings."),
+    "CO_EXECUTIVE": ("Co-Executive", "Both held senior executive roles, generally at the same organization. Senior colleagues are likely to take each other's calls."),
+    "EMPLOYMENT": ("Employment", "An employment relationship connected the parties. Working together implies meaningful acquaintance."),
+    "TRAVEL_MET": ("Travel / Meeting", "Documented joint travel or a recorded meeting. In-person contact supports call acceptance."),
+    "ADVISORY": ("Advisory Role", "Advisory-board, trustee, or advisor relationship. Advisory ties imply ongoing professional contact."),
+    "MEMBERSHIP": ("Shared Membership", "Shared membership or affiliation in an organization. Common membership is a moderate signal — members don't always know one another."),
+    "EDUCATION": ("Shared Education", "Attended the same institution. A moderate signal — alumni overlap doesn't guarantee acquaintance."),
+    "DONATION": ("Political Donation", "One party donated to the other's campaign (campaign-finance records). A weak signal — most donors never speak with recipients."),
+    "FINANCIAL": ("Financial Transaction", "A payment, grant, or fund commitment between the parties. Financial dealings imply some direct contact."),
+    "LOBBYING": ("Lobbying", "A documented lobbying relationship. Lobbyists typically have direct access to their targets."),
+    "STAFF_AIDE": ("Staff / Aide", "A staff or aide relationship (works directly for). Close working proximity strongly implies call acceptance."),
+    "PUBLIC_OFFICE": ("Public Office", "Both connected through holding public office. A moderate signal depending on overlap."),
+    "FELLOW_OFFICEHOLDER": ("Fellow Officeholder", "Served in the same body (e.g. governors, judges, justices). Peers in the same institution generally know each other."),
+    "SEC_INSIDER": ("SEC Insider", "Insider, 10%-owner, or filer relationship at the same company. A moderate corporate signal."),
+    "NEWS_COMENTION": ("News Co-mention", "Both named in the same news article (GDELT). A weak signal — co-mention in news does not imply acquaintance."),
+    "CO_OCCURS_DOC": ("Document Co-occurrence", "Both names appear in the same Epstein estate document. The weakest signal — co-occurrence is not evidence of a real relationship."),
+    "WEAK_SOCIAL": ("Weak Social Tie", "Mentor, neighbor, acquaintance, or roommate. A weak-to-moderate informal tie."),
+    "OTHER": ("Other", "An uncategorized relationship. Treated as very weak evidence."),
+}
+
+METHODOLOGY = (
+    "Every connection is assigned a probability answering one question: "
+    "\u201cif this were the only link between two people, how likely is it that one would take the other's phone call?\u201d "
+    "These per-category probabilities are editorial estimates based on what each relationship type actually implies "
+    "about real acquaintance.\n\n"
+    "When two people share several relationships, the evidence is combined with a noisy-OR model: "
+    "P = 1 \u2212 \u220f(1 \u2212 p\u1d62). Intuitively, the connection is at least as strong as its strongest single link, and additional "
+    "links can only raise confidence \u2014 never lower it. Correlated corporate links (co-officer, co-director, etc.) are counted "
+    "once, since they usually come from the same shared company.\n\n"
+    "A path's overall viability is the product of its links' probabilities \u2014 the chance a warm introduction would succeed at "
+    "every step from start to end. Because each step can only reduce the product, a short chain of strong links can beat a long "
+    "chain of weak ones; the \u201cbest path\u201d shown is the one with the highest overall probability, which is not always the "
+    "shortest. Alternate paths are ranked by probability so you can apply your own private knowledge."
+)
+
 _DEFAULT_P = CATEGORY_PROB["OTHER"]
 
 

@@ -12,9 +12,9 @@ app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_
 DATA_DIR = Path(__file__).parent / "data"
 
 try:
-    from link_scoring import CATEGORY_PROB as _CATEGORY_PROB
+    from link_scoring import CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC, METHODOLOGY as _METHODOLOGY
 except ImportError:
-    from webapp.link_scoring import CATEGORY_PROB as _CATEGORY_PROB
+    from webapp.link_scoring import CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC, METHODOLOGY as _METHODOLOGY
 
 _graph: Optional[nx.Graph] = None
 _search_index = None
@@ -447,6 +447,21 @@ async def relation_info(rtype: str = Query(default="")):
         return info
     return {"title": rtype, "desc": "Relationship type from document analysis or data extraction."}
 
+@app.get("/api/category-info")
+async def category_info(cat: str = Query(default="")):
+    """Per-category call-acceptance probability + how it was established."""
+    label, desc = _CATEGORY_DESC.get(cat, (cat, "Uncategorized relationship; treated as weak evidence."))
+    return {
+        "category": cat,
+        "label": label,
+        "probability": _CATEGORY_PROB.get(cat, _CATEGORY_PROB.get("OTHER", 0.05)),
+        "desc": desc,
+    }
+
+@app.get("/api/methodology")
+async def methodology():
+    return {"text": _METHODOLOGY}
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(HTML_TEMPLATE)
@@ -509,6 +524,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .step-rel small { color: #6e7681; font-weight: 600; }
   .path-note { color: #6e7681; font-size: 0.78rem; line-height: 1.5; margin-top: 0.5rem;
                padding: 0.75rem; background: #0d1117; border-radius: 6px; }
+  .tip-prob { color: #3fb950; font-weight: 600; font-size: 0.95rem; margin: 6px 0; }
+  .tip-calc { font-family: ui-monospace, monospace; font-size: 0.9rem; color: #e6edf3;
+              background: #0d1117; border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+  .tip-method-link { color: #58a6ff; font-size: 0.82rem; cursor: pointer; margin-top: 8px; }
+  .tip-method-link:hover { text-decoration: underline; }
   .path-step { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0;
                 flex-wrap: wrap; }
   .step-node { color: #e6edf3; font-weight: 500; cursor: pointer; }
@@ -740,10 +760,17 @@ async function findPath() {
         html += '<div class="path-result">';
         html += '<div class="path-header">';
         html += '<span class="path-rank">' + (idx === 0 ? 'Best path' : 'Alternate ' + idx) + '</span>';
-        html += '<span class="path-viability" style="color:' + bc + ';border-color:' + bc + ';">'
+        const vid = 'via' + Math.random().toString(36).slice(2);
+        html += '<span class="path-viability" id="' + vid + '" style="color:' + bc + ';border-color:' + bc + ';cursor:pointer;" title="Click to explain">'
               + escHtml(p.band) + ' &middot; ' + escHtml(p.prob_label) + '</span>';
         html += '<span class="length">' + p.length + ' hop' + (p.length !== 1 ? 's' : '') + '</span>';
         html += '</div>';
+        (function(pp, id){
+          setTimeout(function(){
+            const el = document.getElementById(id);
+            if (el) el.onclick = function(){ showPathExplain(pp); };
+          }, 0);
+        })(p, vid);
         html += '<div class="path-chain">';
         p.path.forEach((step, i) => {
           if (i > 0) {
@@ -779,13 +806,25 @@ async function findPath() {
 
 async function showRelTooltip(event, rtype, src, tgt) {
   try {
-    const res = await fetch('/api/relation-info?rtype=' + encodeURIComponent(rtype));
-    const info = await res.json();
     const content = document.getElementById('tooltip-content');
-    let html = '<div class="tooltip-title">' + escHtml(info.title || rtype) + '</div>'
-      + '<div class="tooltip-desc">' + escHtml(info.desc || '') + '</div>';
-    
-    // Fetch evidence
+    let html = '';
+    // Lead with the call-acceptance probability for this link category
+    try {
+      const cres = await fetch('/api/category-info?cat=' + encodeURIComponent(rtype));
+      const ci = await cres.json();
+      const pct = Math.round((ci.probability || 0) * 100);
+      html += '<div class="tooltip-title">' + escHtml(ci.label || rtype) + '</div>';
+      html += '<div class="tip-prob">' + pct + '% &mdash; probability a phone call would be accepted on this link alone</div>';
+      html += '<div class="tooltip-desc">' + escHtml(ci.desc || '') + '</div>';
+    } catch(e) {
+      const res = await fetch('/api/relation-info?rtype=' + encodeURIComponent(rtype));
+      const info = await res.json();
+      html += '<div class="tooltip-title">' + escHtml(info.title || rtype) + '</div>'
+            + '<div class="tooltip-desc">' + escHtml(info.desc || '') + '</div>';
+    }
+    html += '<div class="tip-method-link" onclick="event.stopPropagation(); showMethodology();">How are these probabilities calculated? &rsaquo;</div>';
+
+    // Sources & evidence
     if (src && tgt) {
       try {
         const eres = await fetch('/api/evidence?src=' + encodeURIComponent(src) + '&tgt=' + encodeURIComponent(tgt) + '&rel=' + encodeURIComponent(rtype));
@@ -794,18 +833,15 @@ async function showRelTooltip(event, rtype, src, tgt) {
           html += '<div style="margin-top:8px;border-top:1px solid #30363d;padding-top:6px;"><strong style="font-size:0.85rem;">Sources &amp; Evidence:</strong></div>';
           edata.evidence.forEach(function(ev) {
             html += '<div style="margin-top:6px;font-size:0.8rem;">';
-            // Source name (with link if available)
             if (ev.source) {
               if (ev.url)
                 html += '<a href="' + escHtml(ev.url) + '" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:none;">🔗 ' + escHtml(ev.source) + '</a>';
               else
                 html += '<span style="color:#8b949e;">' + escHtml(ev.source) + '</span>';
             }
-            // Snippet quote
             if (ev.snippet) {
               html += '<div style="margin-top:3px;padding:4px 8px;background:#0d1117;border-left:2px solid #30363d;color:#c9d1d9;font-style:italic;">“' + escHtml(ev.snippet) + '”</div>';
             }
-            // Doc/page citation
             if (ev.doc) {
               html += '<div style="color:#6e7681;font-size:0.75rem;margin-top:2px;">📄 ' + escHtml(ev.doc) + (ev.page ? ', p.' + escHtml(String(ev.page)) : '') + '</div>';
             }
@@ -814,7 +850,44 @@ async function showRelTooltip(event, rtype, src, tgt) {
         }
       } catch(e) {}
     }
-    
+
+    content.innerHTML = html;
+    document.getElementById('tooltip').classList.add('show');
+  } catch(e) { console.error(e); }
+}
+
+function showPathExplain(p) {
+  const content = document.getElementById('tooltip-content');
+  const start = p.path[0].label, end = p.path[p.path.length-1].label;
+  const pct = (p.probability != null) ? (p.probability*100) : 0;
+  const pctStr = pct >= 1 ? pct.toFixed(0) + '%' : pct.toFixed(2) + '%';
+  let html = '<div class="tooltip-title">' + escHtml(p.band) + ' connection &middot; ' + escHtml(p.prob_label) + '</div>';
+  html += '<div class="tooltip-desc">This is the estimated likelihood that a phone call could be passed all the way along this path \u2014 from <strong>'
+        + escHtml(start) + '</strong> to <strong>' + escHtml(end) + '</strong> \u2014 with each person in the chain willing to take the call and make the next introduction.</div>';
+  // Show the multiplication of link probabilities
+  html += '<div class="tip-calc">';
+  let parts = [];
+  for (let i = 0; i < p.path.length - 1; i++) {
+    const lp = p.path[i].prob;
+    if (lp != null) parts.push(Math.round(lp*100) + '%');
+  }
+  html += parts.join(' &times; ') + ' = <strong>' + pctStr + '</strong>';
+  html += '</div>';
+  html += '<div class="tooltip-desc" style="margin-top:6px;">Each link\u2019s percentage is the chance that single step\u2019s call would be accepted. The path multiplies them because every step must succeed. Click any relationship label for that link\u2019s detail.</div>';
+  html += '<div class="tip-method-link" onclick="event.stopPropagation(); showMethodology();">How are these probabilities calculated? &rsaquo;</div>';
+  content.innerHTML = html;
+  document.getElementById('tooltip').classList.add('show');
+}
+
+async function showMethodology() {
+  try {
+    const res = await fetch('/api/methodology');
+    const d = await res.json();
+    const content = document.getElementById('tooltip-content');
+    let html = '<div class="tooltip-title">How connection probabilities work</div>';
+    (d.text || '').split('\n\n').forEach(function(para){
+      html += '<div class="tooltip-desc" style="margin-top:8px;">' + escHtml(para) + '</div>';
+    });
     content.innerHTML = html;
     document.getElementById('tooltip').classList.add('show');
   } catch(e) { console.error(e); }
