@@ -158,6 +158,17 @@ RELATION_INFO = {
   'EMPLOYER': {'title': 'Employer', 'desc': 'One party employed the other.'},
   'ALMA_MATER': {'title': 'Alma Mater', 'desc': 'One party attended or graduated from the other institution.'},
   'MEMBER_OF': {'title': 'Member', 'desc': 'One party was a member of the other organization.'},
+  'POSITION': {'title': 'Position Held', 'desc': 'One party held a position (role, title, or office) at the other organization, per LittleSis records.'},
+  'DONATION': {'title': 'Donation', 'desc': 'One party made a political or charitable donation involving the other, per LittleSis campaign-finance records.'},
+  'MEMBERSHIP': {'title': 'Membership', 'desc': 'One party was a member of the other organization or group, per LittleSis records.'},
+  'CO_DIRECTOR': {'title': 'Co-Director', 'desc': 'Both parties served as directors of the same company, per SEC filings.'},
+  'CO_OFFICER': {'title': 'Co-Officer', 'desc': 'Both parties served as officers of the same company, per SEC filings.'},
+  'ALUMNI_OF': {'title': 'Alumnus', 'desc': 'One party attended or graduated from the other institution.'},
+  'BOARD_MEMBER_OF': {'title': 'Board Member', 'desc': 'One party served on the board of the other organization.'},
+  'VISITING_PROFESSOR': {'title': 'Visiting Professor', 'desc': 'One party served as a visiting professor at the other institution.'},
+  'FELLOW_JUDGE': {'title': 'Fellow Judge', 'desc': 'Both parties served as judges on the same federal appellate circuit.'},
+  'FELLOW_JUSTICE': {'title': 'Fellow Justice', 'desc': 'Both parties served together on the U.S. Supreme Court.'},
+  'FELLOW_GOVERNOR': {'title': 'Fellow Governor', 'desc': 'Both parties served as U.S. state governors.'},
 }
 
 def _get_label(node):
