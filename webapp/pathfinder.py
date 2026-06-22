@@ -270,24 +270,55 @@ def _resolve_name(name):
                 return n
     return None
 
+_evidence = None
+def _load_evidence():
+    global _evidence
+    if _evidence is None:
+        p = DATA_DIR / "evidence.json.gz"
+        if p.exists():
+            import gzip
+            with gzip.open(p, "rt", encoding="utf-8") as f:
+                _evidence = json.load(f)
+        else:
+            _evidence = {}
+    return _evidence
+
+# Source attribution by relation type (for bulk sources without per-edge snippets)
+_REL_SOURCE = {
+    "CO_DIRECTOR": ("SEC Filings (co-directorship)", "https://www.sec.gov/edgar/search/"),
+    "CO_OFFICER": ("SEC Filings (co-officers)", "https://www.sec.gov/edgar/search/"),
+    "DIRECTOR": ("SEC / LittleSis", "https://littlesis.org/"),
+    "OFFICER": ("SEC / LittleSis", "https://littlesis.org/"),
+    "CEO": ("LittleSis / Wikidata", "https://littlesis.org/"),
+    "CHAIRMAN": ("LittleSis / Wikidata", "https://littlesis.org/"),
+    "MEMBERSHIP": ("LittleSis", "https://littlesis.org/"),
+    "DONATION": ("LittleSis (campaign finance)", "https://littlesis.org/"),
+    "MENTIONED_WITH": ("GDELT Global News", "https://www.gdeltproject.org/"),
+    "COMMUNICATED_WITH": ("Epstein Estate Documents", "https://oversight.house.gov/"),
+    "EMPLOYER": ("Wikidata / LittleSis", "https://www.wikidata.org/"),
+    "ALMA_MATER": ("Wikidata", "https://www.wikidata.org/"),
+    "ALUMNI_OF": ("Wikidata / LittleSis", "https://www.wikidata.org/"),
+    "BOARD_MEMBER_OF": ("LittleSis / Wikidata", "https://littlesis.org/"),
+    "VISITING_PROFESSOR": ("LittleSis", "https://littlesis.org/"),
+    "FELLOW_JUDGE": ("US Courts (same circuit)", "https://www.uscourts.gov/"),
+    "FELLOW_JUSTICE": ("US Supreme Court", "https://www.supremecourt.gov/"),
+    "FELLOW_GOVERNOR": ("Wikipedia (US governors)", "https://en.wikipedia.org/"),
+    "FELLOW_REPRESENTATIVE": ("State Legislature records", ""),
+    "FELLOW_SENATOR": ("State Legislature records", ""),
+}
+
 @app.get("/api/evidence")
 async def get_evidence(src: str = Query(...), tgt: str = Query(...), rel: str = Query(...)):
-    """Return evidence for a specific relationship edge."""
-    import sqlite3
-    db_path = Path(__file__).parent.parent / "data" / "pipeline_cache.db"
-    if not db_path.exists():
-        return {"evidence": []}
-    conn = sqlite3.connect(str(db_path))
-    c = conn.cursor()
-    c.execute('SELECT evidence FROM relationships WHERE source_name = ? AND target_name = ? AND relation_type = ? LIMIT 1',
-              (src, tgt, rel))
-    row = c.fetchone()
-    conn.close()
-    if row and row[0]:
-        try:
-            return {"evidence": json.loads(row[0])}
-        except:
-            return {"evidence": [{"note": row[0]}]}
+    """Return evidence (snippets + sources) for a specific relationship edge."""
+    ev_idx = _load_evidence()
+    key = f"{src.lower()}|{tgt.lower()}|{rel}"
+    items = ev_idx.get(key, [])
+    if items:
+        return {"evidence": items}
+    # Fall back to relation-type attribution for bulk sources
+    srcinfo = _REL_SOURCE.get(rel)
+    if srcinfo:
+        return {"evidence": [{"source": srcinfo[0], "snippet": "", "doc": "", "page": "", "url": srcinfo[1]}]}
     return {"evidence": []}
 
 import hashlib
@@ -673,12 +704,25 @@ async function showRelTooltip(event, rtype, src, tgt) {
         const eres = await fetch('/api/evidence?src=' + encodeURIComponent(src) + '&tgt=' + encodeURIComponent(tgt) + '&rel=' + encodeURIComponent(rtype));
         const edata = await eres.json();
         if (edata.evidence && edata.evidence.length > 0) {
-          html += '<br><strong style="font-size:0.85rem;">Evidence:</strong><br>';
+          html += '<div style="margin-top:8px;border-top:1px solid #30363d;padding-top:6px;"><strong style="font-size:0.85rem;">Sources &amp; Evidence:</strong></div>';
           edata.evidence.forEach(function(ev) {
-            if (ev.doc_id)
-              html += '<span style="font-size:0.8rem;color:#8b949e;">📄 ' + escHtml(ev.doc_id) + (ev.page ? ' p.' + ev.page : '') + '</span><br>';
-            if (ev.note)
-              html += '<span style="font-size:0.8rem;color:#8b949e;">' + escHtml(ev.note) + '</span><br>';
+            html += '<div style="margin-top:6px;font-size:0.8rem;">';
+            // Source name (with link if available)
+            if (ev.source) {
+              if (ev.url)
+                html += '<a href="' + escHtml(ev.url) + '" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:none;">🔗 ' + escHtml(ev.source) + '</a>';
+              else
+                html += '<span style="color:#8b949e;">' + escHtml(ev.source) + '</span>';
+            }
+            // Snippet quote
+            if (ev.snippet) {
+              html += '<div style="margin-top:3px;padding:4px 8px;background:#0d1117;border-left:2px solid #30363d;color:#c9d1d9;font-style:italic;">“' + escHtml(ev.snippet) + '”</div>';
+            }
+            // Doc/page citation
+            if (ev.doc) {
+              html += '<div style="color:#6e7681;font-size:0.75rem;margin-top:2px;">📄 ' + escHtml(ev.doc) + (ev.page ? ', p.' + escHtml(String(ev.page)) : '') + '</div>';
+            }
+            html += '</div>';
           });
         }
       } catch(e) {}
