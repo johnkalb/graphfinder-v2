@@ -161,7 +161,11 @@ RELATION_INFO = {
 }
 
 def _get_label(node):
-    return _labels.get(node, _canonical_map.get(node, {}).get("canonical", node))
+    if _labels and node in _labels:
+        return _labels[node]
+    if _canonical_map and node in _canonical_map:
+        return _canonical_map[node].get("canonical", node)
+    return node
 
 def _find_entry(query):
     _load_search()
