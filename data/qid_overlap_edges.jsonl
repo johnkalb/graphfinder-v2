@@ -1,0 +1,605 @@
+{"a": "Leon Black", "b": "Josh Harris", "rel": "SAME_ORG_OVERLAP", "org": "Drexel Burnham Lambert", "start": 1986, "end": 1988}
+{"a": "Gail Goodman", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of California, Los Angeles", "start": 1969, "end": 1974}
+{"a": "Sherrod Brown", "b": "Steve Stivers", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1981, "end": 1981}
+{"a": "Sherrod Brown", "b": "Marcia Fudge", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1973, "end": 1975}
+{"a": "Alan Lowenthal", "b": "Tom Carper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1960, "end": 1965}
+{"a": "Alan Lowenthal", "b": "Marcia Fudge", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1967, "end": 1967}
+{"a": "Jim Jordan", "b": "Steve Stivers", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1983, "end": 1989}
+{"a": "Jim Jordan", "b": "Mike Carey", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1985, "end": 1991}
+{"a": "Steve Stivers", "b": "Mike Carey", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1985, "end": 1989}
+{"a": "Marcia Fudge", "b": "Tom Carper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Ohio State University", "start": 1967, "end": 1968}
+{"a": "Dick Durbin", "b": "John Barrasso", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1966, "end": 1966}
+{"a": "John Barrasso", "b": "Lisa Murkowski", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1972, "end": 1974}
+{"a": "John Barrasso", "b": "Henry Cuellar", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1970, "end": 1974}
+{"a": "John Barrasso", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1967, "end": 1974}
+{"a": "Jeff Fortenberry", "b": "Lisa Murkowski", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1978, "end": 1980}
+{"a": "Jeff Fortenberry", "b": "Hakeem Jeffries", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1986, "end": 1986}
+{"a": "Jeff Fortenberry", "b": "Henry Cuellar", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1978, "end": 1978}
+{"a": "Jeff Fortenberry", "b": "Pramila Jayapal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1978, "end": 1986}
+{"a": "Lisa Murkowski", "b": "Henry Cuellar", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1972, "end": 1978}
+{"a": "Lisa Murkowski", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1972, "end": 1975}
+{"a": "Lisa Murkowski", "b": "Pramila Jayapal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1978, "end": 1980}
+{"a": "Hakeem Jeffries", "b": "Pramila Jayapal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1986, "end": 1986}
+{"a": "Henry Cuellar", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1970, "end": 1975}
+{"a": "Henry Cuellar", "b": "Pramila Jayapal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University", "start": 1978, "end": 1978}
+{"a": "Dara Khosrowshahi", "b": "Jill Hazelbaker", "rel": "SAME_ORG_OVERLAP", "org": "Uber", "start": 2017, "end": 2023}
+{"a": "Amy Hood", "b": "Martin Lau", "rel": "SAME_ORG_OVERLAP", "org": "Goldman Sachs", "start": 2000, "end": 2002}
+{"a": "Amy Hood", "b": "Eric Mindich", "rel": "SAME_ORG_OVERLAP", "org": "Goldman Sachs", "start": 1996, "end": 2002}
+{"a": "Steve Bannon", "b": "Robert Rubin", "rel": "SAME_ORG_OVERLAP", "org": "Goldman Sachs", "start": 1990, "end": 1990}
+{"a": "Martin Lau", "b": "Eric Mindich", "rel": "SAME_ORG_OVERLAP", "org": "Goldman Sachs", "start": 2000, "end": 2004}
+{"a": "Kimberly Guilfoyle", "b": "John Bolton", "rel": "SAME_ORG_OVERLAP", "org": "Fox News", "start": 2006, "end": 2014}
+{"a": "Kimberly Guilfoyle", "b": "Megyn Kelly", "rel": "SAME_ORG_OVERLAP", "org": "Fox News", "start": 2006, "end": 2017}
+{"a": "John Bolton", "b": "Megyn Kelly", "rel": "SAME_ORG_OVERLAP", "org": "Fox News", "start": 2006, "end": 2014}
+{"a": "Josh Green", "b": "Brian Fitzpatrick", "rel": "SAME_SCHOOL_OVERLAP", "org": "Pennsylvania State University", "start": 1993, "end": 1997}
+{"a": "Gregory Smith", "b": "Josh Gottheimer", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Pennsylvania", "start": 1990, "end": 1996}
+{"a": "Gregory Smith", "b": "Elon Musk", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Pennsylvania", "start": 1991, "end": 1995}
+{"a": "Josh Gottheimer", "b": "Elon Musk", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Pennsylvania", "start": 1991, "end": 1995}
+{"a": "Mike Haridopolos", "b": "Bruce Westerman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Arkansas", "start": 1985, "end": 1990}
+{"a": "Neil Gorsuch", "b": "John Delaney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Columbia University", "start": 1980, "end": 1985}
+{"a": "Peter Meijer", "b": "Sara Jacobs", "rel": "SAME_SCHOOL_OVERLAP", "org": "Columbia University", "start": 2008, "end": 2011}
+{"a": "Tony West", "b": "Bill Foster", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1983, "end": 1984}
+{"a": "Tony West", "b": "Ben Sasse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1987}
+{"a": "Tony West", "b": "Jim Himes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1983, "end": 1987}
+{"a": "Tony West", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1984, "end": 1987}
+{"a": "Tony West", "b": "Jim Langevin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1987}
+{"a": "Tony West", "b": "Kristin Mugford", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1985, "end": 1987}
+{"a": "Elise Stefanik", "b": "Mark Zuckerberg", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 2002, "end": 2006}
+{"a": "Bill Foster", "b": "Jim Himes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1980, "end": 1984}
+{"a": "Bill Foster", "b": "Lawrence Summers", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1976, "end": 1982}
+{"a": "Bill Foster", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1984, "end": 1984}
+{"a": "Bill Foster", "b": "Robert Rosner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1976, "end": 1976}
+{"a": "Bill Foster", "b": "Steve Ballmer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1976, "end": 1977}
+{"a": "Ben Sasse", "b": "Jim Himes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1988}
+{"a": "Ben Sasse", "b": "Ketanji Brown Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1988, "end": 1992}
+{"a": "Ben Sasse", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1992}
+{"a": "Ben Sasse", "b": "Jim Langevin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1994}
+{"a": "Ben Sasse", "b": "Kristin Mugford", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1989}
+{"a": "Jim Himes", "b": "Lawrence Summers", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1980, "end": 1982}
+{"a": "Jim Himes", "b": "Ketanji Brown Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1988, "end": 1988}
+{"a": "Jim Himes", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1984, "end": 1988}
+{"a": "Jim Himes", "b": "Jim Langevin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1988}
+{"a": "Jim Himes", "b": "Kristin Mugford", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1985, "end": 1988}
+{"a": "Lawrence Summers", "b": "Robert Rosner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1974, "end": 1976}
+{"a": "Lawrence Summers", "b": "Steve Ballmer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1974, "end": 1977}
+{"a": "Ketanji Brown Jackson", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1988, "end": 1992}
+{"a": "Ketanji Brown Jackson", "b": "Jim Langevin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1988, "end": 1992}
+{"a": "Ketanji Brown Jackson", "b": "Kristin Mugford", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1988, "end": 1989}
+{"a": "Cecilia Rouse", "b": "Jim Langevin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1992}
+{"a": "Cecilia Rouse", "b": "Kristin Mugford", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1985, "end": 1989}
+{"a": "Howard Gardner", "b": "Robert Rosner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1968, "end": 1971}
+{"a": "Howard Gardner", "b": "Steve Ballmer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1969, "end": 1971}
+{"a": "Jim Langevin", "b": "Kristin Mugford", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1986, "end": 1989}
+{"a": "Robert Rosner", "b": "Steve Ballmer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard University", "start": 1969, "end": 1976}
+{"a": "Ted Cruz", "b": "Jared Polis", "rel": "SAME_SCHOOL_OVERLAP", "org": "Princeton University", "start": 1992, "end": 1992}
+{"a": "Ted Cruz", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Princeton University", "start": 1984, "end": 1984}
+{"a": "Ted Cruz", "b": "Terri Sewell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Princeton University", "start": 1984, "end": 1986}
+{"a": "Jared Polis", "b": "Gregory Smith", "rel": "SAME_SCHOOL_OVERLAP", "org": "Princeton University", "start": 1996, "end": 1996}
+{"a": "Sonia Sotomayor", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Princeton University", "start": 1976, "end": 1976}
+{"a": "John Sarbanes", "b": "Terri Sewell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Princeton University", "start": 1978, "end": 1984}
+{"a": "Lee Zeldin", "b": "Megyn Kelly", "rel": "SAME_SCHOOL_OVERLAP", "org": "Albany Law School", "start": 1995, "end": 1995}
+{"a": "Mitt Romney", "b": "Chuck Schumer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1967, "end": 1974}
+{"a": "Mitt Romney", "b": "Mark Warner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1975}
+{"a": "Mitt Romney", "b": "Tim Kaine", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1975}
+{"a": "Mitt Romney", "b": "Jack Reed", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1975}
+{"a": "Mitt Romney", "b": "Mike Crapo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1969, "end": 1975}
+{"a": "Mitt Romney", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1975}
+{"a": "Mitt Romney", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1975}
+{"a": "Mitt Romney", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1970, "end": 1975}
+{"a": "Mitt Romney", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1975}
+{"a": "Mitt Romney", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1975}
+{"a": "Chuck Schumer", "b": "Mark Warner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1974}
+{"a": "Chuck Schumer", "b": "Jack Reed", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1974}
+{"a": "Chuck Schumer", "b": "Mike Crapo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1969, "end": 1974}
+{"a": "Chuck Schumer", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1974}
+{"a": "Chuck Schumer", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1974}
+{"a": "Chuck Schumer", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1970, "end": 1974}
+{"a": "Chuck Schumer", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1974}
+{"a": "Chuck Schumer", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1974}
+{"a": "Mark Warner", "b": "Adam Schiff", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1980}
+{"a": "Mark Warner", "b": "Tim Kaine", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1980}
+{"a": "Mark Warner", "b": "Jack Reed", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1980}
+{"a": "Mark Warner", "b": "Mike Crapo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1977}
+{"a": "Mark Warner", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1980}
+{"a": "Mark Warner", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1980, "end": 1980}
+{"a": "Mark Warner", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1979}
+{"a": "Mark Warner", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1978}
+{"a": "Mark Warner", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1980}
+{"a": "Mark Warner", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1979}
+{"a": "Mark Warner", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1980}
+{"a": "Ted Cruz", "b": "Tom Cotton", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1994, "end": 1995}
+{"a": "Ted Cruz", "b": "Neil Gorsuch", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1987, "end": 1991}
+{"a": "Ted Cruz", "b": "Ketanji Brown Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1993, "end": 1995}
+{"a": "Ted Cruz", "b": "Anthony G. Brown", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1987, "end": 1992}
+{"a": "Ted Cruz", "b": "Josh Stein", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1991, "end": 1995}
+{"a": "Ted Cruz", "b": "Mike Pompeo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1987, "end": 1994}
+{"a": "Ted Cruz", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1992, "end": 1995}
+{"a": "Ted Cruz", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1987, "end": 1987}
+{"a": "Tom Cotton", "b": "Ketanji Brown Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1994, "end": 1996}
+{"a": "Tom Cotton", "b": "Josh Gottheimer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1996, "end": 2002}
+{"a": "Tom Cotton", "b": "Joe Kennedy III", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 2001, "end": 2002}
+{"a": "Tom Cotton", "b": "Ron DeSantis", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1997, "end": 2002}
+{"a": "Tom Cotton", "b": "Josh Stein", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1994, "end": 1995}
+{"a": "Tom Cotton", "b": "Mike Pompeo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1994, "end": 1994}
+{"a": "Tom Cotton", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1994, "end": 2000}
+{"a": "Adam Schiff", "b": "Tim Kaine", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1983}
+{"a": "Adam Schiff", "b": "Jack Reed", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1982}
+{"a": "Adam Schiff", "b": "Mike Crapo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1977}
+{"a": "Adam Schiff", "b": "Neil Gorsuch", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1983, "end": 1985}
+{"a": "Adam Schiff", "b": "Anthony G. Brown", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1985}
+{"a": "Adam Schiff", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1980}
+{"a": "Adam Schiff", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1980, "end": 1985}
+{"a": "Adam Schiff", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1979}
+{"a": "Adam Schiff", "b": "Terri Sewell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1985}
+{"a": "Adam Schiff", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1978}
+{"a": "Adam Schiff", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1985}
+{"a": "Adam Schiff", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1979}
+{"a": "Adam Schiff", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1977, "end": 1980}
+{"a": "Tim Kaine", "b": "Jack Reed", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1982}
+{"a": "Tim Kaine", "b": "Mike Crapo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1977}
+{"a": "Tim Kaine", "b": "Neil Gorsuch", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1983, "end": 1983}
+{"a": "Tim Kaine", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1980}
+{"a": "Tim Kaine", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1980, "end": 1983}
+{"a": "Tim Kaine", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1979}
+{"a": "Tim Kaine", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1978}
+{"a": "Tim Kaine", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1983}
+{"a": "Tim Kaine", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1979}
+{"a": "Tim Kaine", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1975, "end": 1980}
+{"a": "Jack Reed", "b": "Mike Crapo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1977}
+{"a": "Jack Reed", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1980}
+{"a": "Jack Reed", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1980, "end": 1982}
+{"a": "Jack Reed", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1979}
+{"a": "Jack Reed", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1978}
+{"a": "Jack Reed", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1982}
+{"a": "Jack Reed", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1979}
+{"a": "Jack Reed", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1974, "end": 1980}
+{"a": "Mike Crapo", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1977}
+{"a": "Mike Crapo", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1977}
+{"a": "Mike Crapo", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1970, "end": 1977}
+{"a": "Mike Crapo", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1977}
+{"a": "Mike Crapo", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1977}
+{"a": "Neil Gorsuch", "b": "Anthony G. Brown", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1991}
+{"a": "Neil Gorsuch", "b": "Josh Stein", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1991, "end": 1991}
+{"a": "Neil Gorsuch", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1983, "end": 1988}
+{"a": "Neil Gorsuch", "b": "Mike Pompeo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1986, "end": 1991}
+{"a": "Neil Gorsuch", "b": "Terri Sewell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1991}
+{"a": "Neil Gorsuch", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1983, "end": 1987}
+{"a": "Ketanji Brown Jackson", "b": "Josh Gottheimer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1996, "end": 1996}
+{"a": "Ketanji Brown Jackson", "b": "Josh Stein", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1993, "end": 1995}
+{"a": "Ketanji Brown Jackson", "b": "Mike Pompeo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1993, "end": 1994}
+{"a": "Ketanji Brown Jackson", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1993, "end": 1996}
+{"a": "Josh Gottheimer", "b": "Joe Kennedy III", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 2001, "end": 2004}
+{"a": "Josh Gottheimer", "b": "Ron DeSantis", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1997, "end": 2004}
+{"a": "Josh Gottheimer", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1996, "end": 2000}
+{"a": "Joe Kennedy III", "b": "Ron DeSantis", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 2001, "end": 2005}
+{"a": "Joe Kennedy III", "b": "Kayleigh McEnany", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 2009, "end": 2009}
+{"a": "Ron DeSantis", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1997, "end": 2000}
+{"a": "Anthony G. Brown", "b": "Josh Stein", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1991, "end": 1992}
+{"a": "Anthony G. Brown", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1988}
+{"a": "Anthony G. Brown", "b": "Mike Pompeo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1986, "end": 1992}
+{"a": "Anthony G. Brown", "b": "Terri Sewell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1992}
+{"a": "Anthony G. Brown", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1992, "end": 1992}
+{"a": "Anthony G. Brown", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1987}
+{"a": "Josh Stein", "b": "Mike Pompeo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1991, "end": 1994}
+{"a": "Josh Stein", "b": "Terri Sewell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1991, "end": 1992}
+{"a": "Josh Stein", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1992, "end": 1995}
+{"a": "Jim Cooper", "b": "John Sarbanes", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1980, "end": 1980}
+{"a": "Jim Cooper", "b": "Brad Sherman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1979}
+{"a": "Jim Cooper", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1978}
+{"a": "Jim Cooper", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1980}
+{"a": "Jim Cooper", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1979}
+{"a": "Jim Cooper", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1980}
+{"a": "John Sarbanes", "b": "Mike Pompeo", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1986, "end": 1988}
+{"a": "John Sarbanes", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1980, "end": 1987}
+{"a": "John Sarbanes", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1980, "end": 1980}
+{"a": "Mike Pompeo", "b": "Terri Sewell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1986, "end": 1992}
+{"a": "Mike Pompeo", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1992, "end": 1994}
+{"a": "Mike Pompeo", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1986, "end": 1987}
+{"a": "Brad Sherman", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1978}
+{"a": "Brad Sherman", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1979}
+{"a": "Brad Sherman", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1979}
+{"a": "Brad Sherman", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1979}
+{"a": "Terri Sewell", "b": "Raja Krishnamoorthi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1992, "end": 1992}
+{"a": "Terri Sewell", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1984, "end": 1987}
+{"a": "Erwin Chemerinsky", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1971, "end": 1978}
+{"a": "Erwin Chemerinsky", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1978}
+{"a": "Jamie Raskin", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1979}
+{"a": "Jamie Raskin", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1979, "end": 1980}
+{"a": "John Roberts", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Law School", "start": 1972, "end": 1979}
+{"a": "Ed Markey", "b": "John Kerry", "rel": "SAME_SCHOOL_OVERLAP", "org": "Boston College Law School", "start": 1968, "end": 1972}
+{"a": "Ed Markey", "b": "Bobby Scott", "rel": "SAME_SCHOOL_OVERLAP", "org": "Boston College Law School", "start": 1965, "end": 1972}
+{"a": "John Kerry", "b": "Bobby Scott", "rel": "SAME_SCHOOL_OVERLAP", "org": "Boston College Law School", "start": 1968, "end": 1973}
+{"a": "Valerie Mosley", "b": "Risa Lavizzo-Mourey", "rel": "SAME_SCHOOL_OVERLAP", "org": "The Wharton School", "start": 1984, "end": 1986}
+{"a": "Valerie Mosley", "b": "Josh Harris", "rel": "SAME_SCHOOL_OVERLAP", "org": "The Wharton School", "start": 1984, "end": 1986}
+{"a": "Risa Lavizzo-Mourey", "b": "Josh Harris", "rel": "SAME_SCHOOL_OVERLAP", "org": "The Wharton School", "start": 1984, "end": 1986}
+{"a": "Elon Musk", "b": "Neel Kashkari", "rel": "SAME_SCHOOL_OVERLAP", "org": "The Wharton School", "start": 1994, "end": 1995}
+{"a": "Chuck Schumer", "b": "Bobby Scott", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1963, "end": 1969}
+{"a": "Chuck Schumer", "b": "Richard Blumenthal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1963, "end": 1967}
+{"a": "Chuck Schumer", "b": "Howard Gardner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1963, "end": 1965}
+{"a": "Tom Cotton", "b": "Seth Moulton", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1993, "end": 1998}
+{"a": "Tom Cotton", "b": "Pete Buttigieg", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1996, "end": 1998}
+{"a": "Tom Cotton", "b": "Maura Healey", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1990, "end": 1992}
+{"a": "Tom Cotton", "b": "Elbridge Colby", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1994, "end": 1998}
+{"a": "Seth Moulton", "b": "Pete Buttigieg", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1996, "end": 2001}
+{"a": "Seth Moulton", "b": "Elbridge Colby", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1994, "end": 2001}
+{"a": "Ron Kind", "b": "Anthony G. Brown", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1977, "end": 1984}
+{"a": "Ron Kind", "b": "Antony Blinken", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1980, "end": 1984}
+{"a": "Ron Kind", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1978, "end": 1985}
+{"a": "Ron Kind", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1977, "end": 1983}
+{"a": "Bobby Scott", "b": "Richard Blumenthal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1961, "end": 1967}
+{"a": "Bobby Scott", "b": "Howard Gardner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1961, "end": 1965}
+{"a": "Bobby Scott", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1968, "end": 1969}
+{"a": "Pete Buttigieg", "b": "Elbridge Colby", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1996, "end": 2002}
+{"a": "Ned Lamont", "b": "Anthony G. Brown", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1976, "end": 1976}
+{"a": "Ned Lamont", "b": "Bill Gates", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1973, "end": 1975}
+{"a": "Ned Lamont", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1975, "end": 1976}
+{"a": "Ned Lamont", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1972, "end": 1976}
+{"a": "Anthony G. Brown", "b": "Antony Blinken", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1980, "end": 1984}
+{"a": "Anthony G. Brown", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1978, "end": 1984}
+{"a": "Anthony G. Brown", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1976, "end": 1976}
+{"a": "Richard Blumenthal", "b": "Howard Gardner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1959, "end": 1965}
+{"a": "Richard Blumenthal", "b": "Robert Rubin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1959, "end": 1960}
+{"a": "Antony Blinken", "b": "Cecilia Rouse", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1980, "end": 1984}
+{"a": "Antony Blinken", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1980, "end": 1983}
+{"a": "Bill Gates", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1975, "end": 1975}
+{"a": "Bill Gates", "b": "John Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1973, "end": 1975}
+{"a": "Cecilia Rouse", "b": "Jamie Raskin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1978, "end": 1983}
+{"a": "Howard Gardner", "b": "Robert Rubin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard College", "start": 1957, "end": 1960}
+{"a": "John Kerry", "b": "Sherrod Brown", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1966}
+{"a": "John Kerry", "b": "John Yarmuth", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1961, "end": 1966}
+{"a": "John Kerry", "b": "David Price", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1961, "end": 1966}
+{"a": "John Kerry", "b": "Tom Cole", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1966}
+{"a": "John Kerry", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1964, "end": 1966}
+{"a": "Sherrod Brown", "b": "Amy Klobuchar", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1974, "end": 1974}
+{"a": "Sherrod Brown", "b": "John Yarmuth", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1969}
+{"a": "Sherrod Brown", "b": "David Price", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1969}
+{"a": "Sherrod Brown", "b": "Tom Cole", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1974}
+{"a": "Sherrod Brown", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1972}
+{"a": "Amy Klobuchar", "b": "Tom Cole", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1974, "end": 1974}
+{"a": "Ben Sasse", "b": "Alexei Navalny", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 2002, "end": 2004}
+{"a": "Ben Sasse", "b": "Brett Guthrie", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1996, "end": 1997}
+{"a": "Ben Sasse", "b": "Bruce Westerman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1996, "end": 2001}
+{"a": "Ben Sasse", "b": "Dan Goldman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1996, "end": 1998}
+{"a": "John Yarmuth", "b": "David Price", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1961, "end": 1969}
+{"a": "John Yarmuth", "b": "Tom Cole", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1969}
+{"a": "John Yarmuth", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1964, "end": 1969}
+{"a": "Brett Guthrie", "b": "Bruce Westerman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1993, "end": 1997}
+{"a": "Brett Guthrie", "b": "Dan Goldman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1990, "end": 1997}
+{"a": "Bruce Westerman", "b": "Dan Goldman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1993, "end": 1998}
+{"a": "David Price", "b": "Tom Cole", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1969}
+{"a": "David Price", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1964, "end": 1969}
+{"a": "Tom Cole", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale University", "start": 1966, "end": 1972}
+{"a": "Ron DeSantis", "b": "Usha Vance", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale College", "start": 1999, "end": 2001}
+{"a": "Mitt Romney", "b": "Ron Wyden", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1965, "end": 1966}
+{"a": "Mitt Romney", "b": "Jim Sensenbrenner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1965, "end": 1965}
+{"a": "Mitt Romney", "b": "Zoe Lofgren", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1965, "end": 1966}
+{"a": "Sergey Brin", "b": "Tsu-Jae King Liu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1993, "end": 1994}
+{"a": "Sergey Brin", "b": "Tsu-Jae Liu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1993, "end": 1994}
+{"a": "Sergey Brin", "b": "Joe Kennedy III", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1995, "end": 1995}
+{"a": "Sergey Brin", "b": "John Field", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1993, "end": 1995}
+{"a": "Sergey Brin", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1993, "end": 1995}
+{"a": "Ron Wyden", "b": "Jim Sensenbrenner", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1963, "end": 1965}
+{"a": "Ron Wyden", "b": "Jay Inslee", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1969, "end": 1970}
+{"a": "Ron Wyden", "b": "Zoe Lofgren", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1963, "end": 1970}
+{"a": "Joe Lonsdale", "b": "Joe Kennedy III", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1996, "end": 2003}
+{"a": "Joe Lonsdale", "b": "John Field", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1996, "end": 2004}
+{"a": "Joe Lonsdale", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1996, "end": 1998}
+{"a": "Joe Lonsdale", "b": "Josh Hawley", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1998, "end": 2002}
+{"a": "Ted Lieu", "b": "Cory Booker", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1983, "end": 1991}
+{"a": "Ted Lieu", "b": "Tsu-Jae King Liu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1986, "end": 1991}
+{"a": "Ted Lieu", "b": "Tsu-Jae Liu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1986, "end": 1991}
+{"a": "Ted Lieu", "b": "John Field", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1983, "end": 1991}
+{"a": "Ted Lieu", "b": "Steve Jurvetson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1989, "end": 1990}
+{"a": "Ted Lieu", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1990, "end": 1991}
+{"a": "Cory Booker", "b": "Tsu-Jae King Liu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1986, "end": 1991}
+{"a": "Cory Booker", "b": "Tsu-Jae Liu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1986, "end": 1991}
+{"a": "Cory Booker", "b": "John Field", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1983, "end": 1991}
+{"a": "Cory Booker", "b": "Steve Jurvetson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1989, "end": 1990}
+{"a": "Cory Booker", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1990, "end": 1991}
+{"a": "Tsu-Jae King Liu", "b": "Tsu-Jae Liu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1986, "end": 1994}
+{"a": "Tsu-Jae King Liu", "b": "John Field", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1986, "end": 1994}
+{"a": "Tsu-Jae King Liu", "b": "Steve Jurvetson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1989, "end": 1990}
+{"a": "Tsu-Jae King Liu", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1990, "end": 1994}
+{"a": "Jim Sensenbrenner", "b": "Zoe Lofgren", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1962, "end": 1965}
+{"a": "Tsu-Jae Liu", "b": "John Field", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1986, "end": 1994}
+{"a": "Tsu-Jae Liu", "b": "Steve Jurvetson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1989, "end": 1990}
+{"a": "Tsu-Jae Liu", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1990, "end": 1994}
+{"a": "Joe Kennedy III", "b": "John Field", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1995, "end": 2003}
+{"a": "Joe Kennedy III", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1995, "end": 1998}
+{"a": "Joe Kennedy III", "b": "Josh Hawley", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1998, "end": 2002}
+{"a": "John Field", "b": "Matthew Farrell", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 2005, "end": 2006}
+{"a": "John Field", "b": "Steve Jurvetson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1989, "end": 1990}
+{"a": "John Field", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1990, "end": 1998}
+{"a": "John Field", "b": "Josh Hawley", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1998, "end": 2002}
+{"a": "Steve Jurvetson", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1990, "end": 1990}
+{"a": "Jay Inslee", "b": "Zoe Lofgren", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1969, "end": 1970}
+{"a": "Martin Lau", "b": "Josh Hawley", "rel": "SAME_SCHOOL_OVERLAP", "org": "Stanford University", "start": 1998, "end": 1998}
+{"a": "Henry Cuellar", "b": "Kevin Roberts", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Texas at Austin", "start": 1995, "end": 1998}
+{"a": "Tom Daschle", "b": "Mike Rounds", "rel": "SAME_SCHOOL_OVERLAP", "org": "South Dakota State University", "start": 1969, "end": 1969}
+{"a": "Steny Hoyer", "b": "Lois Frankel", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1965, "end": 1966}
+{"a": "Steny Hoyer", "b": "Dick Durbin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1961, "end": 1966}
+{"a": "Lois Frankel", "b": "Dick Durbin", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1965, "end": 1969}
+{"a": "Lois Frankel", "b": "Mazie Hirono", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1970, "end": 1973}
+{"a": "Lois Frankel", "b": "John Yarmuth", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1971, "end": 1972}
+{"a": "Lois Frankel", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1970, "end": 1973}
+{"a": "Ted Lieu", "b": "April McClain-Delaney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1986, "end": 1989}
+{"a": "Ted Lieu", "b": "John Delaney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1986, "end": 1988}
+{"a": "Ted Lieu", "b": "David Cicilline", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1986, "end": 1986}
+{"a": "Ted Lieu", "b": "Derek Schmidt", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1988, "end": 1994}
+{"a": "Ann McLane Kuster", "b": "April McClain-Delaney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1981, "end": 1984}
+{"a": "Ann McLane Kuster", "b": "Mazie Hirono", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1976, "end": 1978}
+{"a": "Ann McLane Kuster", "b": "John Delaney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1980, "end": 1984}
+{"a": "Ann McLane Kuster", "b": "David Cicilline", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1978, "end": 1984}
+{"a": "Ann McLane Kuster", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1976, "end": 1978}
+{"a": "Ann McLane Kuster", "b": "Pete Visclosky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1976, "end": 1982}
+{"a": "Josh Shapiro", "b": "Mikie Sherrill", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1999, "end": 2002}
+{"a": "Josh Shapiro", "b": "Avril Haines", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1999, "end": 2001}
+{"a": "April McClain-Delaney", "b": "John Delaney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1981, "end": 1988}
+{"a": "April McClain-Delaney", "b": "David Cicilline", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1981, "end": 1986}
+{"a": "April McClain-Delaney", "b": "Derek Schmidt", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1988, "end": 1989}
+{"a": "April McClain-Delaney", "b": "Pete Visclosky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1981, "end": 1982}
+{"a": "Mazie Hirono", "b": "John Yarmuth", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1971, "end": 1972}
+{"a": "Mazie Hirono", "b": "David Cicilline", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1978, "end": 1978}
+{"a": "Mazie Hirono", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1970, "end": 1978}
+{"a": "Mazie Hirono", "b": "Pete Visclosky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1974, "end": 1978}
+{"a": "John Delaney", "b": "David Cicilline", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1980, "end": 1986}
+{"a": "John Delaney", "b": "Derek Schmidt", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1988, "end": 1988}
+{"a": "John Delaney", "b": "Pete Visclosky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1980, "end": 1982}
+{"a": "Mikie Sherrill", "b": "Avril Haines", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1999, "end": 2001}
+{"a": "John Yarmuth", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1971, "end": 1972}
+{"a": "David Cicilline", "b": "Francis Rooney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1978, "end": 1978}
+{"a": "David Cicilline", "b": "Pete Visclosky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1978, "end": 1982}
+{"a": "Francis Rooney", "b": "Pete Visclosky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgetown University Law Center", "start": 1974, "end": 1978}
+{"a": "David Cicilline", "b": "Dean Phillips", "rel": "SAME_SCHOOL_OVERLAP", "org": "Brown University", "start": 1983, "end": 1983}
+{"a": "Hakeem Jeffries", "b": "Martha Roby", "rel": "SAME_SCHOOL_OVERLAP", "org": "New York University", "start": 1990, "end": 1997}
+{"a": "Steve Chabot", "b": "Dina Titus", "rel": "SAME_SCHOOL_OVERLAP", "org": "College of William & Mary", "start": 1967, "end": 1970}
+{"a": "Hillary Clinton", "b": "Bill Clinton", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1970, "end": 1973}
+{"a": "Hillary Clinton", "b": "Richard Blumenthal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1969, "end": 1973}
+{"a": "Chris Coons", "b": "Michael Bennet", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1985, "end": 1992}
+{"a": "Chris Coons", "b": "Alex Azar", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1984, "end": 1991}
+{"a": "Chris Coons", "b": "Brett Kavanaugh", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1984, "end": 1990}
+{"a": "Chris Coons", "b": "Cory Booker", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1989, "end": 1992}
+{"a": "Bill Clinton", "b": "Richard Blumenthal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1970, "end": 1973}
+{"a": "Michael Bennet", "b": "Alex Azar", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1985, "end": 1991}
+{"a": "Michael Bennet", "b": "Brett Kavanaugh", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1985, "end": 1990}
+{"a": "Michael Bennet", "b": "Ro Khanna", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1993, "end": 1993}
+{"a": "Michael Bennet", "b": "Cory Booker", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1989, "end": 1993}
+{"a": "Alex Azar", "b": "Brett Kavanaugh", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1983, "end": 1990}
+{"a": "Alex Azar", "b": "Cory Booker", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1989, "end": 1991}
+{"a": "Brett Kavanaugh", "b": "Cory Booker", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1989, "end": 1990}
+{"a": "Ro Khanna", "b": "Cory Booker", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 1993, "end": 1997}
+{"a": "Ro Khanna", "b": "Elbridge Colby", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 2001, "end": 2001}
+{"a": "Josh Hawley", "b": "Elbridge Colby", "rel": "SAME_SCHOOL_OVERLAP", "org": "Yale Law School", "start": 2003, "end": 2006}
+{"a": "Mitt Romney", "b": "John Garamendi", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Business School", "start": 1967, "end": 1970}
+{"a": "Glenn Youngkin", "b": "Kristin Mugford", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Business School", "start": 1992, "end": 1993}
+{"a": "John Garamendi", "b": "Hansj\u00f6rg Wyss", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Business School", "start": 1963, "end": 1965}
+{"a": "John Garamendi", "b": "Michael Bloomberg", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Business School", "start": 1962, "end": 1966}
+{"a": "Hansj\u00f6rg Wyss", "b": "Michael Bloomberg", "rel": "SAME_SCHOOL_OVERLAP", "org": "Harvard Business School", "start": 1963, "end": 1965}
+{"a": "Kirsten Gillibrand", "b": "Alex Azar", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1980, "end": 1988}
+{"a": "Kirsten Gillibrand", "b": "Josh Stein", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1984, "end": 1988}
+{"a": "John Hoeven", "b": "Rob Portman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1971, "end": 1979}
+{"a": "John Hoeven", "b": "John Carney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1971, "end": 1978}
+{"a": "John Hoeven", "b": "Ann McLane Kuster", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1971, "end": 1978}
+{"a": "Rob Portman", "b": "John Carney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1971, "end": 1978}
+{"a": "Rob Portman", "b": "Ann McLane Kuster", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1971, "end": 1978}
+{"a": "Alex Azar", "b": "Josh Stein", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1984, "end": 1988}
+{"a": "John Carney", "b": "Ann McLane Kuster", "rel": "SAME_SCHOOL_OVERLAP", "org": "Dartmouth College", "start": 1970, "end": 1978}
+{"a": "Todd Young", "b": "Mikie Sherrill", "rel": "SAME_SCHOOL_OVERLAP", "org": "United States Naval Academy", "start": 1987, "end": 1994}
+{"a": "Rob Portman", "b": "Ted Deutch", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Michigan Law School", "start": 1982, "end": 1984}
+{"a": "Fred Upton", "b": "Marcy Kaptur", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Michigan", "start": 1967, "end": 1974}
+{"a": "Grace Meng", "b": "Martin Lau", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Michigan", "start": 1990, "end": 1994}
+{"a": "Grace Meng", "b": "Justin Amash", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Michigan", "start": 1994, "end": 1997}
+{"a": "Martin Lau", "b": "Justin Amash", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Michigan", "start": 1994, "end": 1994}
+{"a": "Tim Walberg", "b": "Stephen F. Lynch", "rel": "SAME_SCHOOL_OVERLAP", "org": "primary school", "start": 1965, "end": 1969}
+{"a": "Ryan McInerney", "b": "Martin Lau", "rel": "SAME_ORG_OVERLAP", "org": "McKinsey & Company", "start": 1998, "end": 2000}
+{"a": "Bruce Chizen", "b": "Steve Ballmer", "rel": "SAME_ORG_OVERLAP", "org": "Microsoft", "start": 1983, "end": 1987}
+{"a": "Amy Hood", "b": "Doug Burgum", "rel": "SAME_ORG_OVERLAP", "org": "Microsoft", "start": 2002, "end": 2007}
+{"a": "Amy Hood", "b": "Steve Ballmer", "rel": "SAME_ORG_OVERLAP", "org": "Microsoft", "start": 2002, "end": 2010}
+{"a": "Satya Nadella", "b": "Steve Ballmer", "rel": "SAME_ORG_OVERLAP", "org": "Microsoft", "start": 1992, "end": 2000}
+{"a": "Doug Burgum", "b": "Steve Ballmer", "rel": "SAME_ORG_OVERLAP", "org": "Microsoft", "start": 2001, "end": 2007}
+{"a": "Marco Rubio", "b": "Ashley Moody", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1988, "end": 1993}
+{"a": "Marco Rubio", "b": "Debbie Wasserman Schultz", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1985, "end": 1990}
+{"a": "Marco Rubio", "b": "Pam Bondi", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1985, "end": 1987}
+{"a": "Marco Rubio", "b": "Gus Bilirakis", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1985, "end": 1986}
+{"a": "Ashley Moody", "b": "Debbie Wasserman Schultz", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1988, "end": 1990}
+{"a": "Debbie Wasserman Schultz", "b": "Pam Bondi", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1982, "end": 1987}
+{"a": "Debbie Wasserman Schultz", "b": "Gus Bilirakis", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1982, "end": 1986}
+{"a": "Pam Bondi", "b": "Gus Bilirakis", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Florida", "start": 1979, "end": 1986}
+{"a": "David Perdue", "b": "Bill Johnson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Georgia Tech", "start": 1976, "end": 1976}
+{"a": "Jack Reed", "b": "Jerry McNerney", "rel": "SAME_SCHOOL_OVERLAP", "org": "United States Military Academy", "start": 1969, "end": 1971}
+{"a": "Mike Pompeo", "b": "Brett Guthrie", "rel": "SAME_SCHOOL_OVERLAP", "org": "United States Military Academy", "start": 1979, "end": 1986}
+{"a": "Michelle Lujan Grisham", "b": "Jerry McNerney", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of New Mexico", "start": 1977, "end": 1981}
+{"a": "Greg Walden", "b": "Ryan Zinke", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Oregon", "start": 1976, "end": 1981}
+{"a": "Greg Walden", "b": "Suzanne Bonamici", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Oregon", "start": 1975, "end": 1981}
+{"a": "Tina Kotek", "b": "Ryan Zinke", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Oregon", "start": 1982, "end": 1984}
+{"a": "Tina Kotek", "b": "Suzanne Bonamici", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Oregon", "start": 1982, "end": 1983}
+{"a": "Ryan Zinke", "b": "Suzanne Bonamici", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Oregon", "start": 1976, "end": 1983}
+{"a": "Barbara Weber", "b": "Suzan DelBene", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Washington", "start": 1982, "end": 1982}
+{"a": "Barbara Weber", "b": "Bob Ferguson", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Washington", "start": 1981, "end": 1982}
+{"a": "Suzan DelBene", "b": "Bob Ferguson", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Washington", "start": 1982, "end": 1989}
+{"a": "Suzan DelBene", "b": "Tina Kotek", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Washington", "start": 1990, "end": 1990}
+{"a": "Tina Kotek", "b": "Jaime Herrera Beutler", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Washington", "start": 1996, "end": 1998}
+{"a": "Thomas Kenny", "b": "Alejandro Mayorkas", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of California, Berkeley", "start": 1981, "end": 1981}
+{"a": "Thomas Kenny", "b": "David Schneider", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of California, Berkeley", "start": 1984, "end": 1989}
+{"a": "Doris Matsui", "b": "John Garamendi", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of California, Berkeley", "start": 1958, "end": 1966}
+{"a": "Andy Biggs", "b": "Ra\u00fal Grijalva", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Arizona", "start": 1978, "end": 1984}
+{"a": "Abraham Hamadeh", "b": "Kyrsten Sinema", "rel": "SAME_SCHOOL_OVERLAP", "org": "Arizona State University", "start": 2009, "end": 2012}
+{"a": "Katie Hobbs", "b": "Kyrsten Sinema", "rel": "SAME_SCHOOL_OVERLAP", "org": "Arizona State University", "start": 1991, "end": 1995}
+{"a": "Katie Hobbs", "b": "Andy Biggs", "rel": "SAME_SCHOOL_OVERLAP", "org": "Arizona State University", "start": 1991, "end": 1995}
+{"a": "Katie Hobbs", "b": "David Schweikert", "rel": "SAME_SCHOOL_OVERLAP", "org": "Arizona State University", "start": 1987, "end": 1988}
+{"a": "Kyrsten Sinema", "b": "Andy Biggs", "rel": "SAME_SCHOOL_OVERLAP", "org": "Arizona State University", "start": 1996, "end": 1999}
+{"a": "Kirsten Gillibrand", "b": "Terri Sewell", "rel": "SAME_ORG_OVERLAP", "org": "Davis Polk & Wardwell", "start": 1994, "end": 2000}
+{"a": "Abigail Spanberger", "b": "Will Hurd", "rel": "SAME_ORG_OVERLAP", "org": "Central Intelligence Agency", "start": 2006, "end": 2009}
+{"a": "Abigail Spanberger", "b": "Elissa Slotkin", "rel": "SAME_ORG_OVERLAP", "org": "Central Intelligence Agency", "start": 2006, "end": 2007}
+{"a": "Abigail Spanberger", "b": "Avril Haines", "rel": "SAME_ORG_OVERLAP", "org": "Central Intelligence Agency", "start": 2013, "end": 2014}
+{"a": "Abigail Spanberger", "b": "Edward Snowden", "rel": "SAME_ORG_OVERLAP", "org": "Central Intelligence Agency", "start": 2006, "end": 2009}
+{"a": "Will Hurd", "b": "Elissa Slotkin", "rel": "SAME_ORG_OVERLAP", "org": "Central Intelligence Agency", "start": 2006, "end": 2007}
+{"a": "Will Hurd", "b": "Edward Snowden", "rel": "SAME_ORG_OVERLAP", "org": "Central Intelligence Agency", "start": 2006, "end": 2009}
+{"a": "Elissa Slotkin", "b": "Edward Snowden", "rel": "SAME_ORG_OVERLAP", "org": "Central Intelligence Agency", "start": 2006, "end": 2007}
+{"a": "Marc Andreessen", "b": "Neel Kashkari", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Illinois Urbana-Champaign", "start": 1990, "end": 1993}
+{"a": "Lindsey Graham", "b": "Joe Wilson", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of South Carolina", "start": 1969, "end": 1972}
+{"a": "Shanti Gupta", "b": "David Price", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of North Carolina at Chapel Hill", "start": 1953, "end": 1956}
+{"a": "John Edwards", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of North Carolina at Chapel Hill", "start": 1969, "end": 1975}
+{"a": "Mike Gallagher", "b": "Xochitl Torres Small", "rel": "SAME_SCHOOL_OVERLAP", "org": "Walsh School of Foreign Service", "start": 2004, "end": 2007}
+{"a": "Mark Warner", "b": "Roger Stone", "rel": "SAME_SCHOOL_OVERLAP", "org": "George Washington University", "start": 1970, "end": 1977}
+{"a": "Mark Warner", "b": "Susan Tomasky", "rel": "SAME_SCHOOL_OVERLAP", "org": "George Washington University", "start": 1977, "end": 1977}
+{"a": "Elizabeth Warren", "b": "Mike Enzi", "rel": "SAME_SCHOOL_OVERLAP", "org": "George Washington University", "start": 1966, "end": 1966}
+{"a": "Roger Stone", "b": "Susan Tomasky", "rel": "SAME_SCHOOL_OVERLAP", "org": "George Washington University", "start": 1977, "end": 1978}
+{"a": "Barbara Lagoa", "b": "Antony Blinken", "rel": "SAME_SCHOOL_OVERLAP", "org": "Columbia Law School", "start": 1985, "end": 1988}
+{"a": "Catherine Cortez Masto", "b": "Mark Amodei", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Nevada, Reno", "start": 1978, "end": 1980}
+{"a": "Abigail Spanberger", "b": "Alexis Ohanian", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Virginia", "start": 1997, "end": 2001}
+{"a": "Alexis Ohanian", "b": "Greg Casar", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Virginia", "start": 2003, "end": 2005}
+{"a": "David Green", "b": "Debbie Stabenow", "rel": "SAME_SCHOOL_OVERLAP", "org": "Michigan State University", "start": 1968, "end": 1972}
+{"a": "Martha McSally", "b": "John Moolenaar", "rel": "SAME_SCHOOL_OVERLAP", "org": "John F. Kennedy School of Government", "start": 1982, "end": 1989}
+{"a": "Martha McSally", "b": "Stephen F. Lynch", "rel": "SAME_SCHOOL_OVERLAP", "org": "John F. Kennedy School of Government", "start": 1990, "end": 1990}
+{"a": "Josh Stein", "b": "John Fetterman", "rel": "SAME_SCHOOL_OVERLAP", "org": "John F. Kennedy School of Government", "start": 1991, "end": 1995}
+{"a": "Josh Stein", "b": "Stephen F. Lynch", "rel": "SAME_SCHOOL_OVERLAP", "org": "John F. Kennedy School of Government", "start": 1991, "end": 1995}
+{"a": "Brendan F. Boyle", "b": "John Fetterman", "rel": "SAME_SCHOOL_OVERLAP", "org": "John F. Kennedy School of Government", "start": 1997, "end": 1999}
+{"a": "Brendan F. Boyle", "b": "Stephen F. Lynch", "rel": "SAME_SCHOOL_OVERLAP", "org": "John F. Kennedy School of Government", "start": 1997, "end": 1998}
+{"a": "John Fetterman", "b": "Stephen F. Lynch", "rel": "SAME_SCHOOL_OVERLAP", "org": "John F. Kennedy School of Government", "start": 1991, "end": 1998}
+{"a": "Ben Cardin", "b": "John Murtha", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Pittsburgh", "start": 1956, "end": 1961}
+{"a": "Ben Cardin", "b": "Elijah Cummings", "rel": "SAME_SCHOOL_OVERLAP", "org": "Baltimore City College", "start": 1961, "end": 1961}
+{"a": "Bob Casey", "b": "Kathy Hochul", "rel": "SAME_SCHOOL_OVERLAP", "org": "The Catholic University of America", "start": 1980, "end": 1983}
+{"a": "Bob Menendez", "b": "Albio Sires", "rel": "SAME_SCHOOL_OVERLAP", "org": "Saint Peter's University", "start": 1968, "end": 1974}
+{"a": "Bob Menendez", "b": "Elizabeth Warren", "rel": "SAME_SCHOOL_OVERLAP", "org": "Rutgers School of Law\u2013Newark", "start": 1971, "end": 1976}
+{"a": "Bill Flores", "b": "Louie Gohmert", "rel": "SAME_SCHOOL_OVERLAP", "org": "Texas A&M University", "start": 1968, "end": 1975}
+{"a": "Todd Young", "b": "Ro Khanna", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Chicago", "start": 1992, "end": 1998}
+{"a": "Todd Young", "b": "Avril Haines", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Chicago", "start": 1992, "end": 1992}
+{"a": "Ro Khanna", "b": "Avril Haines", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Chicago", "start": 1990, "end": 1992}
+{"a": "Tim Kaine", "b": "Vicky Hartzler", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Missouri", "start": 1975, "end": 1979}
+{"a": "Tim Kaine", "b": "Ann Wagner", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Missouri", "start": 1976, "end": 1979}
+{"a": "Tim Kaine", "b": "Sam Graves", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Missouri", "start": 1978, "end": 1979}
+{"a": "Jean Robitaille", "b": "Martin Heinrich", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Missouri", "start": 1993, "end": 1995}
+{"a": "Vicky Hartzler", "b": "Ann Wagner", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Missouri", "start": 1976, "end": 1983}
+{"a": "Vicky Hartzler", "b": "Sam Graves", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Missouri", "start": 1978, "end": 1983}
+{"a": "Ann Wagner", "b": "Sam Graves", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Missouri", "start": 1978, "end": 1984}
+{"a": "John Hoeven", "b": "Brad Schneider", "rel": "SAME_SCHOOL_OVERLAP", "org": "Northwestern University", "start": 1975, "end": 1981}
+{"a": "John Hoeven", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Northwestern University", "start": 1973, "end": 1975}
+{"a": "Brad Schneider", "b": "Erwin Chemerinsky", "rel": "SAME_SCHOOL_OVERLAP", "org": "Northwestern University", "start": 1975, "end": 1975}
+{"a": "Brad Schneider", "b": "Pramila Jayapal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Northwestern University", "start": 1982, "end": 1983}
+{"a": "Martin Lau", "b": "Pramila Jayapal", "rel": "SAME_SCHOOL_OVERLAP", "org": "Northwestern University", "start": 1990, "end": 1990}
+{"a": "John Thune", "b": "Kevin Brady", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of South Dakota", "start": 1982, "end": 1984}
+{"a": "Bradley Horowitz", "b": "Alex Padilla", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1986, "end": 1991}
+{"a": "Bradley Horowitz", "b": "Bilal Khan", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1989, "end": 1991}
+{"a": "Alex Padilla", "b": "Bilal Khan", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1989, "end": 1993}
+{"a": "Lawrence Summers", "b": "Benjamin Netanyahu", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1972, "end": 1975}
+{"a": "Lawrence Summers", "b": "Marcy Kaptur", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1973, "end": 1975}
+{"a": "Lawrence Summers", "b": "Shirley Ann Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1967, "end": 1973}
+{"a": "Benjamin Netanyahu", "b": "Marcy Kaptur", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1973, "end": 1975}
+{"a": "Benjamin Netanyahu", "b": "Shirley Ann Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1972, "end": 1973}
+{"a": "David Koch", "b": "David Baltimore", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1960, "end": 1961}
+{"a": "David Koch", "b": "Shirley Ann Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1960, "end": 1963}
+{"a": "David Baltimore", "b": "Shirley Ann Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1960, "end": 1961}
+{"a": "Marcy Kaptur", "b": "Shirley Ann Jackson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Massachusetts Institute of Technology", "start": 1973, "end": 1973}
+{"a": "Sheldon Whitehouse", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Virginia School of Law", "start": 1974, "end": 1975}
+{"a": "John Cornyn", "b": "Andy Beshear", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Virginia School of Law", "start": 1995, "end": 1995}
+{"a": "Angus King", "b": "Robert Mueller", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Virginia School of Law", "start": 1965, "end": 1969}
+{"a": "Angus King", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Virginia School of Law", "start": 1967, "end": 1969}
+{"a": "Robert Mueller", "b": "Sheila Jackson Lee", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Virginia School of Law", "start": 1967, "end": 1973}
+{"a": "Glenn Youngkin", "b": "Pete Olson", "rel": "SAME_SCHOOL_OVERLAP", "org": "Rice University", "start": 1985, "end": 1985}
+{"a": "Cathy Williams", "b": "Anthony Lee", "rel": "SAME_ORG_OVERLAP", "org": "University of Bristol", "start": 2017, "end": 2023}
+{"a": "Ron Kind", "b": "Janet Napolitano", "rel": "SAME_SCHOOL_OVERLAP", "org": "London School of Economics and Political Science", "start": 1978, "end": 1986}
+{"a": "Johnny Isakson", "b": "Dina Titus", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Georgia", "start": 1965, "end": 1966}
+{"a": "Tom Graves", "b": "Austin Scott", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Georgia", "start": 1985, "end": 1993}
+{"a": "Tom Graves", "b": "Marjorie Taylor Greene", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Georgia", "start": 1988, "end": 1993}
+{"a": "Tom Graves", "b": "Rob Woodall", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Georgia", "start": 1990, "end": 1993}
+{"a": "Austin Scott", "b": "Marjorie Taylor Greene", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Georgia", "start": 1988, "end": 1993}
+{"a": "Austin Scott", "b": "Rob Woodall", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Georgia", "start": 1990, "end": 1993}
+{"a": "Marjorie Taylor Greene", "b": "Rob Woodall", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Georgia", "start": 1990, "end": 1996}
+{"a": "Valerie Mosley", "b": "Scott Peters", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1978, "end": 1980}
+{"a": "Valerie Mosley", "b": "Melinda Gates", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1978, "end": 1982}
+{"a": "Valerie Mosley", "b": "Tim Cook", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1980, "end": 1982}
+{"a": "Shelley Moore Capito", "b": "Scott Peters", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1972, "end": 1975}
+{"a": "Shelley Moore Capito", "b": "Bradley Byrne", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1969, "end": 1975}
+{"a": "Shelley Moore Capito", "b": "Mo Brooks", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1967, "end": 1975}
+{"a": "Scott Peters", "b": "Melinda Gates", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1978, "end": 1980}
+{"a": "Scott Peters", "b": "Bradley Byrne", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1972, "end": 1977}
+{"a": "Scott Peters", "b": "Mo Brooks", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1972, "end": 1975}
+{"a": "Scott Peters", "b": "Tim Cook", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1980, "end": 1980}
+{"a": "Melinda Gates", "b": "Tim Cook", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1980, "end": 1986}
+{"a": "Bradley Byrne", "b": "Mo Brooks", "rel": "SAME_SCHOOL_OVERLAP", "org": "Duke University", "start": 1969, "end": 1975}
+{"a": "Tom Udall", "b": "Richard Blumenthal", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Cambridge", "start": 1967, "end": 1968}
+{"a": "Richard Burr", "b": "Charlie Crist", "rel": "SAME_SCHOOL_OVERLAP", "org": "Wake Forest University", "start": 1974, "end": 1976}
+{"a": "Steven Murray", "b": "Quan Nguyen", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Queensland", "start": 2009, "end": 2009}
+{"a": "John Edwards", "b": "Chris Collins", "rel": "SAME_SCHOOL_OVERLAP", "org": "North Carolina State University", "start": 1966, "end": 1972}
+{"a": "Mac Thornberry", "b": "Pete Olson", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Texas School of Law", "start": 1980, "end": 1983}
+{"a": "Don Beyer", "b": "Ed Case", "rel": "SAME_SCHOOL_OVERLAP", "org": "Williams College", "start": 1967, "end": 1972}
+{"a": "Jim DeMint", "b": "Jeff Duncan", "rel": "SAME_SCHOOL_OVERLAP", "org": "Clemson University", "start": 1980, "end": 1981}
+{"a": "Bill Foster", "b": "Tony Evers", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1968, "end": 1975}
+{"a": "Bill Foster", "b": "Glenn Grothman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1970, "end": 1975}
+{"a": "Bill Foster", "b": "Marcy Kaptur", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1967, "end": 1968}
+{"a": "Bill Foster", "b": "Tom Barrett", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1968, "end": 1975}
+{"a": "Jim Jordan", "b": "Tony Evers", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1978, "end": 1986}
+{"a": "Jim Jordan", "b": "Mark Pocan", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1978, "end": 1986}
+{"a": "Jim Jordan", "b": "Glenn Grothman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1978, "end": 1978}
+{"a": "Tony Evers", "b": "Mark Pocan", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1978, "end": 1986}
+{"a": "Tony Evers", "b": "Glenn Grothman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1978, "end": 1978}
+{"a": "Tony Evers", "b": "Marcy Kaptur", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1968, "end": 1968}
+{"a": "Tony Evers", "b": "Tom Barrett", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1968, "end": 1976}
+{"a": "Mark Pocan", "b": "Glenn Grothman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1978, "end": 1978}
+{"a": "Glenn Grothman", "b": "Tom Barrett", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1970, "end": 1976}
+{"a": "Marcy Kaptur", "b": "Tom Barrett", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin\u2013Madison", "start": 1968, "end": 1968}
+{"a": "Elizabeth Warren", "b": "Sylvester Turner", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Houston", "start": 1969, "end": 1970}
+{"a": "Gregory Smith", "b": "Tony C\u00e1rdenas", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of California, Santa Barbara", "start": 1985, "end": 1986}
+{"a": "Burgess Owens", "b": "Frederica Wilson", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Miami", "start": 1967, "end": 1972}
+{"a": "Mikie Sherrill", "b": "John Bolton", "rel": "SAME_ORG_OVERLAP", "org": "Kirkland & Ellis", "start": 2008, "end": 2011}
+{"a": "Kamala Harris", "b": "Ed Case", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of California College of the Law, San Francisco", "start": 1981, "end": 1981}
+{"a": "Jackie Speier", "b": "Ed Case", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of California College of the Law, San Francisco", "start": 1973, "end": 1976}
+{"a": "Kamala Harris", "b": "Gregory Meeks", "rel": "SAME_SCHOOL_OVERLAP", "org": "Howard University", "start": 1978, "end": 1978}
+{"a": "Elijah Cummings", "b": "Gregory Meeks", "rel": "SAME_SCHOOL_OVERLAP", "org": "Howard University", "start": 1970, "end": 1973}
+{"a": "Jeff Fortenberry", "b": "Bill Cassidy", "rel": "SAME_SCHOOL_OVERLAP", "org": "Louisiana State University", "start": 1974, "end": 1979}
+{"a": "Jeanne Shaheen", "b": "Roger Wicker", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Mississippi", "start": 1965, "end": 1973}
+{"a": "Jeanne Shaheen", "b": "John Fleming", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Mississippi", "start": 1965, "end": 1973}
+{"a": "Roger Wicker", "b": "John Fleming", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Mississippi", "start": 1965, "end": 1973}
+{"a": "Jackie Walorski", "b": "Tim Walberg", "rel": "SAME_SCHOOL_OVERLAP", "org": "Taylor University", "start": 1977, "end": 1983}
+{"a": "Tammy Baldwin", "b": "Glenn Grothman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wisconsin Law School", "start": 1981, "end": 1983}
+{"a": "Frank Pallone", "b": "Bill Richardson", "rel": "SAME_SCHOOL_OVERLAP", "org": "The Fletcher School of Law and Diplomacy", "start": 1966, "end": 1971}
+{"a": "Mike Kelly", "b": "Peter King", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Notre Dame", "start": 1962, "end": 1968}
+{"a": "Brendan F. Boyle", "b": "Jeff Hurd", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Notre Dame", "start": 1993, "end": 1999}
+{"a": "Sam Altman", "b": "Elon Musk", "rel": "SAME_ORG_OVERLAP", "org": "OpenAI", "start": 2018, "end": 2019}
+{"a": "Bill Richardson", "b": "Joe Courtney", "rel": "SAME_SCHOOL_OVERLAP", "org": "Tufts University", "start": 1967, "end": 1970}
+{"a": "Gary Peters", "b": "Vern Buchanan", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Detroit Mercy", "start": 1978, "end": 1984}
+{"a": "Patty Murray", "b": "Edmund Schweitzer", "rel": "SAME_SCHOOL_OVERLAP", "org": "Washington State University", "start": 1969, "end": 1972}
+{"a": "Andy Harris", "b": "Bilal Khan", "rel": "SAME_SCHOOL_OVERLAP", "org": "Johns Hopkins University", "start": 1995, "end": 1995}
+{"a": "Kash Patel", "b": "Dan Goldman", "rel": "SAME_ORG_OVERLAP", "org": "United States House Permanent Select Committee on Intelligence", "start": 2019, "end": 2019}
+{"a": "Robert Reynolds", "b": "Kathryn Hill", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Melbourne", "start": 1994, "end": 1996}
+{"a": "Anita Sands", "b": "Kathryn Hill", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Melbourne", "start": 2006, "end": 2007}
+{"a": "Bobby Scott", "b": "Jim Cooper", "rel": "SAME_SCHOOL_OVERLAP", "org": "Groton School", "start": 1964, "end": 1965}
+{"a": "Dina Titus", "b": "Charlie Crist", "rel": "SAME_SCHOOL_OVERLAP", "org": "Florida State University", "start": 1970, "end": 1976}
+{"a": "Dina Titus", "b": "Val Demings", "rel": "SAME_SCHOOL_OVERLAP", "org": "Florida State University", "start": 1976, "end": 1976}
+{"a": "Charlie Crist", "b": "Val Demings", "rel": "SAME_SCHOOL_OVERLAP", "org": "Florida State University", "start": 1976, "end": 1978}
+{"a": "Byron Donalds", "b": "Matt Gaetz", "rel": "SAME_SCHOOL_OVERLAP", "org": "Florida State University", "start": 1995, "end": 2002}
+{"a": "Steve Bannon", "b": "Charlie Kirk", "rel": "SAME_ORG_OVERLAP", "org": "Breitbart News", "start": 2012, "end": 2016}
+{"a": "Steve Bannon", "b": "Brian Jack", "rel": "SAME_ORG_OVERLAP", "org": "Donald Trump 2016 presidential campaign", "start": 2016, "end": 2016}
+{"a": "Elissa Slotkin", "b": "Elbridge Colby", "rel": "SAME_ORG_OVERLAP", "org": "Office of the Director of National Intelligence", "start": 2005, "end": 2006}
+{"a": "Steve Bannon", "b": "Rob Wittman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Virginia Tech", "start": 1973, "end": 1976}
+{"a": "Doug Jones", "b": "Charlie Crist", "rel": "SAME_SCHOOL_OVERLAP", "org": "Cumberland School of Law", "start": 1973, "end": 1979}
+{"a": "Doug Jones", "b": "Bradley Byrne", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Alabama", "start": 1972, "end": 1976}
+{"a": "Bradley Byrne", "b": "Joe Scarborough", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Alabama", "start": 1977, "end": 1980}
+{"a": "Anthony G. Brown", "b": "Claudia Tenney", "rel": "SAME_SCHOOL_OVERLAP", "org": "secondary school", "start": 1971, "end": 1979}
+{"a": "Anthony G. Brown", "b": "Bradley Byrne", "rel": "SAME_SCHOOL_OVERLAP", "org": "secondary school", "start": 1971, "end": 1973}
+{"a": "Anthony G. Brown", "b": "French Hill", "rel": "SAME_SCHOOL_OVERLAP", "org": "secondary school", "start": 1971, "end": 1975}
+{"a": "Claudia Tenney", "b": "Bradley Byrne", "rel": "SAME_SCHOOL_OVERLAP", "org": "secondary school", "start": 1971, "end": 1973}
+{"a": "Claudia Tenney", "b": "French Hill", "rel": "SAME_SCHOOL_OVERLAP", "org": "secondary school", "start": 1971, "end": 1975}
+{"a": "Bradley Byrne", "b": "French Hill", "rel": "SAME_SCHOOL_OVERLAP", "org": "secondary school", "start": 1967, "end": 1973}
+{"a": "Deepak Ahuja", "b": "Jerome Guillen", "rel": "SAME_ORG_OVERLAP", "org": "Tesla", "start": 2017, "end": 2021}
+{"a": "Deepak Ahuja", "b": "Robyn Denholm", "rel": "SAME_ORG_OVERLAP", "org": "Tesla", "start": 2017, "end": 2022}
+{"a": "Deepak Ahuja", "b": "Elon Musk", "rel": "SAME_ORG_OVERLAP", "org": "Tesla", "start": 2008, "end": 2012}
+{"a": "Jerome Guillen", "b": "Elon Musk", "rel": "SAME_ORG_OVERLAP", "org": "Tesla", "start": 2010, "end": 2012}
+{"a": "Jerome Guillen", "b": "Robyn Denholm", "rel": "SAME_ORG_OVERLAP", "org": "Tesla", "start": 2014, "end": 2021}
+{"a": "Sam Brownback", "b": "Jerry Moran", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Kansas", "start": 1974, "end": 1976}
+{"a": "Sam Brownback", "b": "Doug Lamborn", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Kansas", "start": 1974, "end": 1978}
+{"a": "Sam Brownback", "b": "Derek Schmidt", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Kansas", "start": 1982, "end": 1982}
+{"a": "Jerry Moran", "b": "Doug Lamborn", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Kansas", "start": 1970, "end": 1976}
+{"a": "Doug Lamborn", "b": "Derek Schmidt", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Kansas", "start": 1982, "end": 1985}
+{"a": "Jeff Sessions", "b": "Mo Brooks", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Alabama School of Law", "start": 1970, "end": 1973}
+{"a": "Melissa Kennedy", "b": "Kathryn Hill", "rel": "SAME_ORG_OVERLAP", "org": "La Trobe University", "start": 2013, "end": 2018}
+{"a": "Claudia Tenney", "b": "Leslie Seidman", "rel": "SAME_SCHOOL_OVERLAP", "org": "Colgate University", "start": 1980, "end": 1983}
+{"a": "Brian Jack", "b": "Max Miller", "rel": "SAME_ORG_OVERLAP", "org": "White House Office", "start": 2017, "end": 2021}
+{"a": "Linda McMahon", "b": "Vince McMahon", "rel": "SAME_ORG_OVERLAP", "org": "WWE", "start": 2003, "end": 2009}
+{"a": "John Bolton", "b": "Robert Lighthizer", "rel": "SAME_ORG_OVERLAP", "org": "Covington & Burling", "start": 1974, "end": 1978}
+{"a": "Cynthia Lummis", "b": "Harriet Hageman", "rel": "SAME_SCHOOL_OVERLAP", "org": "University of Wyoming", "start": 1978, "end": 1978}
+{"a": "Frederica Wilson", "b": "John Lewis", "rel": "SAME_SCHOOL_OVERLAP", "org": "Fisk University", "start": 1961, "end": 1963}
+{"a": "David Rouzer", "b": "George Holding", "rel": "SAME_ORG_OVERLAP", "org": "Jesse Helms", "start": 1998, "end": 2000}
+{"a": "Pete Ricketts", "b": "John Bolton", "rel": "SAME_ORG_OVERLAP", "org": "American Enterprise Institute", "start": 2007, "end": 2013}
+{"a": "Elbridge Colby", "b": "Victoria Nuland", "rel": "SAME_ORG_OVERLAP", "org": "Center for a New American Security", "start": 2018, "end": 2019}
+{"a": "Tom Marino", "b": "Lisa Blunt Rochester", "rel": "SAME_SCHOOL_OVERLAP", "org": "Fairleigh Dickinson University", "start": 1982, "end": 1985}

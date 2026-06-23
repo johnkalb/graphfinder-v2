@@ -94,7 +94,7 @@ print(f"Unique scorable pairs: {len(pair_rels)}")
 # --- Merge Wikidata time-overlap edges (if harvested) ---
 # Only connect people who ALREADY exist as graph nodes, so we densify the
 # existing network rather than appending disconnected Wikidata names.
-OVERLAP_FILE = "wikidata_overlap_edges.jsonl"
+OVERLAP_FILE = "qid_overlap_edges.jsonl"
 if os.path.exists(OVERLAP_FILE):
     existing = set(name_canon.keys())  # lowercase names already in the graph
     n_ov = n_ov_kept = 0
