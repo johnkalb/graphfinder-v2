@@ -44,11 +44,14 @@ CATEGORY_PROB = {
     "NEWS_COMENTION": 0.10,
     "CO_OCCURS_DOC": 0.05,
     "WEAK_SOCIAL": 0.20,
+    "SAME_ORG_OVERLAP": 0.18,
+    "SAME_SCHOOL_OVERLAP": 0.12,
     "OTHER": 0.05,
 }
 
 # Categories that derive from the same shared employer -> count once (strongest).
-CO_EMPLOYMENT = {"CO_OFFICER", "CO_DIRECTOR", "CO_EXECUTIVE", "EMPLOYMENT", "SEC_INSIDER"}
+CO_EMPLOYMENT = {"CO_OFFICER", "CO_DIRECTOR", "CO_EXECUTIVE", "EMPLOYMENT",
+                 "SEC_INSIDER", "SAME_ORG_OVERLAP"}
 
 # Categories that are NOT relationships (same-entity markers) -> ignore / merge nodes.
 NON_RELATION = {"SAME_ENTITY"}
@@ -76,6 +79,8 @@ CATEGORY_DESC = {
     "NEWS_COMENTION": ("News Co-mention", "Both named in the same news article (GDELT). A weak signal — co-mention in news does not imply acquaintance."),
     "CO_OCCURS_DOC": ("Document Co-occurrence", "Both names appear in the same Epstein estate document. The weakest signal — co-occurrence is not evidence of a real relationship."),
     "WEAK_SOCIAL": ("Weak Social Tie", "Mentor, neighbor, acquaintance, or roommate. A weak-to-moderate informal tie."),
+    "SAME_ORG_OVERLAP": ("Same Workplace (overlapping years)", "Both worked at the same organization during overlapping years (Wikidata employment dates). A weak-to-moderate signal — colleagues at a large employer may never have met, but overlapping tenure raises the odds."),
+    "SAME_SCHOOL_OVERLAP": ("Same School (overlapping years)", "Both attended the same institution during overlapping years (Wikidata education dates). A weak signal — large schools dilute the chance of acquaintance, but contemporaneous enrollment is suggestive."),
     "OTHER": ("Other", "An uncategorized relationship. Treated as very weak evidence."),
 }
 

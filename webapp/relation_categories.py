@@ -6,6 +6,11 @@ def categorize(rt):
     # Same-entity markers — NOT relationships (should merge nodes)
     if r in ("ALIAS", "FORMER_NAME"):
         return "SAME_ENTITY"
+    # Wikidata time-overlap edges (pass through directly)
+    if r == "SAME_ORG_OVERLAP":
+        return "SAME_ORG_OVERLAP"
+    if r == "SAME_SCHOOL_OVERLAP":
+        return "SAME_SCHOOL_OVERLAP"
     # SEC co-directorship (all DIRECTOR(...) title variants + board roles)
     if r.startswith("DIRECTOR") or r in (
         "CO_DIRECTOR", "INDEPENDENT_DIRECTOR", "NON-EXECUTIVE_DIRECTOR",

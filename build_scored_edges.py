@@ -91,6 +91,29 @@ conn.close()
 print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}")
 print(f"Unique scorable pairs: {len(pair_rels)}")
 
+# --- Merge Wikidata time-overlap edges (if harvested) ---
+# Only connect people who ALREADY exist as graph nodes, so we densify the
+# existing network rather than appending disconnected Wikidata names.
+OVERLAP_FILE = "wikidata_overlap_edges.jsonl"
+if os.path.exists(OVERLAP_FILE):
+    existing = set(name_canon.keys())  # lowercase names already in the graph
+    n_ov = n_ov_kept = 0
+    with open(OVERLAP_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            n_ov += 1
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            al, bl = e["a"].lower(), e["b"].lower()
+            # require BOTH endpoints to already be graph nodes
+            if al in existing and bl in existing and al != bl:
+                key = tuple(sorted([al, bl]))
+                pair_rels[key].add(e["rel"])
+                n_ov_kept += 1
+    print(f"Wikidata overlap edges: {n_ov} read, {n_ov_kept} connect existing nodes")
+    print(f"Unique scorable pairs after overlap merge: {len(pair_rels)}")
+
 # Score each pair
 node_ids = {}
 nodes = []
