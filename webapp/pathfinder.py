@@ -198,6 +198,13 @@ def _get_label(node):
 def _find_entry(query):
     _load_search()
     q = query.lower().strip()
+    # Normalize: strip surrounding punctuation, collapse whitespace, expand
+    # common suffix spellings so "donald trump junior" / "...jr," still match "Jr."
+    import re as _re
+    q = _re.sub(r"[,;]+", " ", q)
+    q = _re.sub(r"\bjunior\b", "jr", q)
+    q = _re.sub(r"\bsenior\b", "sr", q)
+    q = _re.sub(r"\s+", " ", q).strip(" .,")
     results = []
     seen = set()
     if not _search_index:
@@ -824,7 +831,7 @@ async function showRelTooltip(event, rtype, src, tgt) {
       const ci = await cres.json();
       const pct = Math.round((ci.probability || 0) * 100);
       html += '<div class="tooltip-title">' + escHtml(ci.label || rtype) + '</div>';
-      html += '<div class="tip-prob">' + pct + '% &mdash; probability a phone call would (or would have) been accepted on this link alone</div>';
+      html += '<div class="tip-prob">' + pct + '% &mdash; probability a phone call would be accepted on this link alone</div>';
       html += '<div class="tooltip-desc">' + escHtml(ci.desc || '') + '</div>';
     } catch(e) {
       const res = await fetch('/api/relation-info?rtype=' + encodeURIComponent(rtype));
@@ -873,7 +880,7 @@ function showPathExplain(p) {
   const pctStr = pct >= 1 ? pct.toFixed(0) + '%' : pct.toFixed(2) + '%';
   let html = '<div class="tooltip-title">' + escHtml(p.band) + ' connection &middot; ' + escHtml(p.prob_label) + '</div>';
   html += '<div class="tooltip-desc">This is the estimated likelihood that a phone call could be passed all the way along this path \u2014 from <strong>'
-        + escHtml(start) + '</strong> to <strong>' + escHtml(end) + '</strong> \u2014 with each person in the chain willing (or, where no longer living, having been willing) to take the call and make the next introduction.</div>';
+        + escHtml(start) + '</strong> to <strong>' + escHtml(end) + '</strong> \u2014 with each person in the chain willing to take the call and make the next introduction.</div>';
   // Show the multiplication of link probabilities
   html += '<div class="tip-calc">';
   let parts = [];
