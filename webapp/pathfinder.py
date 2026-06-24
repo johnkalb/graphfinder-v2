@@ -1,11 +1,12 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
-import os, pickle, json
+import os, pickle, json, sqlite3
 from pathlib import Path
 from typing import Optional
 import networkx as nx
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 import uvicorn
 
 app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
@@ -542,6 +543,57 @@ async def category_info(cat: str = Query(default="")):
 async def methodology():
     return {"text": _METHODOLOGY}
 
+# --- USER CONTRIBUTION & QUALITY CONTROL (MVP PHASE 1) ---
+
+class SuggestionRequest(BaseModel):
+    subject: str = Field(..., min_length=2, max_length=100)
+    predicate: str = Field(..., min_length=2, max_length=50)
+    object: str = Field(..., min_length=2, max_length=100)
+    source_name: str = Field(..., min_length=2, max_length=100)
+    source_url: str = Field(...)
+    snippet: str = Field(..., min_length=5, max_length=1000)
+    email: Optional[str] = None
+
+class DisputeRequest(BaseModel):
+    edge_key: str = Field(..., min_length=2, max_length=250)
+    reason: str = Field(..., min_length=5, max_length=1000)
+    source_url: Optional[str] = None
+    email: Optional[str] = None
+
+@app.post("/api/suggest-link")
+async def suggest_link(req: SuggestionRequest, request: Request):
+    try:
+        email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
+        db_path = DATA_DIR / "user_submissions.db"
+        conn = sqlite3.connect(str(db_path))
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO claims (subject, predicate, object, source_name, source_url, snippet, user_email)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (req.subject.strip(), req.predicate.strip(), req.object.strip(), req.source_name.strip(), req.source_url.strip(), req.snippet.strip(), email))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Thank you! Your connection suggestion has been submitted for review."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.post("/api/dispute-link")
+async def dispute_link(req: DisputeRequest, request: Request):
+    try:
+        email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
+        db_path = DATA_DIR / "user_submissions.db"
+        conn = sqlite3.connect(str(db_path))
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO disputes (edge_key, reason, source_url, user_email)
+            VALUES (?, ?, ?, ?)
+        """, (req.edge_key.strip(), req.reason.strip(), req.source_url.strip() if req.source_url else None, email))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Thank you! Your dispute/correction has been submitted for review."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(HTML_TEMPLATE)
@@ -661,6 +713,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .psi-section button:hover { background: #388bfd; }
   .psi-note { color: #8b949e; font-size: 0.8rem; margin-top: 0.5rem; }
   .psi-result { display: inline-block; margin-left: 1rem; font-weight: 600; color: #3fb950; }
+  
+  /* Modal system for User Submissions */
+  .modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+           background: #1c2128; border: 1px solid #30363d; border-radius: 8px;
+           padding: 1.5rem; max-width: 500px; width: 90%; z-index: 250; box-shadow: 0 8px 32px #00000088; }
+  .modal.show { display: block; }
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                   background: rgba(0, 0, 0, 0.6); z-index: 240; }
+  .modal-overlay.show { display: block; }
+  .modal-title { font-weight: 600; color: #e6edf3; margin-bottom: 1rem; font-size: 1.1rem; }
+  .modal-close { float: right; cursor: pointer; color: #8b949e; font-size: 1.2rem; }
+  .form-group { margin-bottom: 1rem; text-align: left; }
+  .form-group label { display: block; font-size: 0.85rem; color: #8b949e; margin-bottom: 0.3rem; }
+  .form-group input, .form-group select, .form-group textarea {
+    width: 100%; background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 6px; padding: 0.5rem 0.8rem; font-size: 0.9rem; outline: none; }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #58a6ff; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem; }
 </style>
 </head>
 <body>
@@ -694,7 +764,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="tgt-selected"></div>
   </div>
 
-  <button id="find-btn" onclick="findPath()" disabled>🔍 Find Path</button>
+  <div style="display: flex; gap: 10px; align-items: center; margin-top: 15px;">
+    <button id="find-btn" onclick="findPath()" disabled>🔍 Find Path</button>
+    <button id="suggest-btn" class="secondary-btn" style="margin-top: 0; padding: 0.7rem 1.5rem;" onclick="showSuggestModal()">➕ Suggest Link</button>
+  </div>
   <label style="display:block; margin-top:10px; font-size:0.82rem; color:#8b949e; cursor:pointer;">
     <input type="checkbox" id="include-deceased" onchange="if(state.src.selected&&state.tgt.selected) findPath();" style="vertical-align:middle; margin-right:6px;">
     Include deceased people as go-betweens (off by default — the dead can&rsquo;t make introductions, but may reveal historical connections)
@@ -717,6 +790,92 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div id="tooltip" class="tooltip" onclick="hideTooltip()">
     <span class="close" onclick="hideTooltip()">✕</span>
     <div id="tooltip-content"></div>
+  </div>
+
+  <!-- Modal Overlay -->
+  <div id="modal-overlay" class="modal-overlay" onclick="closeAllModals()"></div>
+
+  <!-- Suggest Connection Modal -->
+  <div id="suggest-modal" class="modal">
+    <span class="modal-close" onclick="closeAllModals()">✕</span>
+    <div class="modal-title">➕ Suggest a New Connection</div>
+    <form id="suggest-form" onsubmit="submitSuggestion(event)">
+      <div class="form-group">
+        <label for="sug-subject">Person/Organization A (Subject)</label>
+        <input type="text" id="sug-subject" required placeholder="e.g. Donald Trump">
+      </div>
+      <div class="form-group">
+        <label for="sug-predicate">Relationship (Predicate)</label>
+        <select id="sug-predicate" required>
+          <option value="" disabled selected>Select relationship type...</option>
+          <option value="FAMILY">Family / Spouse</option>
+          <option value="FRIEND">Friend / Social</option>
+          <option value="EMPLOYMENT">Employment</option>
+          <option value="CO_DIRECTOR">Co-Director (Board)</option>
+          <option value="CO_OFFICER">Co-Officer (Corporate)</option>
+          <option value="CO_EXECUTIVE">Co-Executive</option>
+          <option value="MEMBERSHIP">Shared Membership / Affiliation</option>
+          <option value="ADVISORY">Advisory / Trustee</option>
+          <option value="DONATION">Political Donation</option>
+          <option value="LOBBYING">Lobbying</option>
+          <option value="TRAVEL_MET">Travel or Documented Meeting</option>
+          <option value="PUBLIC_OFFICE">Held Public Office</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="sug-object">Person/Organization B (Object)</label>
+        <input type="text" id="sug-object" required placeholder="e.g. Bill Clinton">
+      </div>
+      <div class="form-group">
+        <label for="sug-source-name">Source Name</label>
+        <input type="text" id="sug-source-name" required placeholder="e.g. SEC DEF 14A, NY Times, LittleSis">
+      </div>
+      <div class="form-group">
+        <label for="sug-source-url">Source URL (Mandatory verification link)</label>
+        <input type="url" id="sug-source-url" required placeholder="https://example.com/source-doc">
+      </div>
+      <div class="form-group">
+        <label for="sug-snippet">Supporting Quote / Snippet (Required proof text)</label>
+        <textarea id="sug-snippet" required rows="3" placeholder="Paste the exact text or sentence from the source that proves this connection..."></textarea>
+      </div>
+      <div class="form-group">
+        <label for="sug-email">Your Email (Optional, used for notification only)</label>
+        <input type="email" id="sug-email" placeholder="you@example.com">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
+        <button type="submit" id="sug-submit-btn">Submit Suggestion</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Dispute Connection Modal -->
+  <div id="dispute-modal" class="modal">
+    <span class="modal-close" onclick="closeAllModals()">✕</span>
+    <div class="modal-title">⚠️ Dispute or Correct a Link</div>
+    <form id="dispute-form" onsubmit="submitDispute(event)">
+      <input type="hidden" id="disp-edge-key">
+      <div class="form-group">
+        <label>Disputing Link:</label>
+        <div id="disp-edge-display" style="font-weight:600; font-size:0.95rem; color:#58a6ff; padding: 0.3rem 0;"></div>
+      </div>
+      <div class="form-group">
+        <label for="disp-reason">Why is this connection incorrect or misleading?</label>
+        <textarea id="disp-reason" required rows="4" placeholder="Explain the error (e.g. namesakes conflated, outdated role, wrong citation)..."></textarea>
+      </div>
+      <div class="form-group">
+        <label for="disp-source-url">Corrective Source URL (Optional verification link)</label>
+        <input type="url" id="disp-source-url" placeholder="https://example.com/proof">
+      </div>
+      <div class="form-group">
+        <label for="disp-email">Your Email (Optional, used for notification only)</label>
+        <input type="email" id="disp-email" placeholder="you@example.com">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
+        <button type="submit" id="disp-submit-btn" style="background:#d1242f;">Submit Dispute</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -1000,6 +1159,14 @@ async function showRelTooltip(event, rtype, src, tgt) {
       } catch(e) {}
     }
 
+    // Append Dispute/Correction link at the bottom of the tooltip
+    if (src && tgt) {
+      const edgeKey = src + '|' + tgt + '|' + rtype;
+      html += '<div style="margin-top:12px;border-top:1px solid #30363d;padding-top:8px;text-align:right;">';
+      html += '  <span class="tip-method-link" onclick="event.stopPropagation(); showDisputeModal(\'' + escHtml(edgeKey) + '\')">⚠️ Dispute / Correct this link</span>';
+      html += '</div>';
+    }
+
     content.innerHTML = html;
     document.getElementById('tooltip').classList.add('show');
   } catch(e) { console.error(e); }
@@ -1086,6 +1253,107 @@ async function showMethodology() {
 
 function hideTooltip() {
   document.getElementById('tooltip').classList.remove('show');
+}
+
+/* Modal system handlers for Suggest & Dispute forms */
+function showSuggestModal() {
+  document.getElementById('modal-overlay').classList.add('show');
+  document.getElementById('suggest-modal').classList.add('show');
+}
+
+function showDisputeModal(edgeKey) {
+  document.getElementById('modal-overlay').classList.add('show');
+  document.getElementById('dispute-modal').classList.add('show');
+  document.getElementById('disp-edge-key').value = edgeKey;
+  
+  // Format edgeKey for display (e.g. "Donald Trump ↔ Bill Clinton (FAMILY)")
+  const parts = edgeKey.split('|');
+  if (parts.length === 3) {
+    document.getElementById('disp-edge-display').textContent = parts[0] + ' \u2194 ' + parts[1] + ' (' + parts[2].replace(/_/g, ' ') + ')';
+  } else {
+    document.getElementById('disp-edge-display').textContent = edgeKey;
+  }
+}
+
+function closeAllModals() {
+  document.getElementById('modal-overlay').classList.remove('show');
+  document.getElementById('suggest-modal').classList.remove('show');
+  document.getElementById('dispute-modal').classList.remove('show');
+}
+
+async function submitSuggestion(event) {
+  event.preventDefault();
+  const btn = document.getElementById('sug-submit-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '\u23f3 Submitting...';
+  btn.disabled = true;
+
+  const payload = {
+    subject: document.getElementById('sug-subject').value,
+    predicate: document.getElementById('sug-predicate').value,
+    object: document.getElementById('sug-object').value,
+    source_name: document.getElementById('sug-source-name').value,
+    source_url: document.getElementById('sug-source-url').value,
+    snippet: document.getElementById('sug-snippet').value,
+    email: document.getElementById('sug-email').value || null
+  };
+
+  try {
+    const res = await fetch('/api/suggest-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.success) {
+      alert(d.message);
+      document.getElementById('suggest-form').reset();
+      closeAllModals();
+    } else {
+      alert('Error: ' + d.error);
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
+}
+
+async function submitDispute(event) {
+  event.preventDefault();
+  const btn = document.getElementById('disp-submit-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '\u23f3 Submitting...';
+  btn.disabled = true;
+
+  const payload = {
+    edge_key: document.getElementById('disp-edge-key').value,
+    reason: document.getElementById('disp-reason').value,
+    source_url: document.getElementById('disp-source-url').value || null,
+    email: document.getElementById('disp-email').value || null
+  };
+
+  try {
+    const res = await fetch('/api/dispute-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.success) {
+      alert(d.message);
+      document.getElementById('dispute-form').reset();
+      closeAllModals();
+    } else {
+      alert('Error: ' + d.error);
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
 }
 
 function escHtml(s) {
