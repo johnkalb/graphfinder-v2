@@ -590,6 +590,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
            transition: background 0.2s; }
   button:hover:not(:disabled) { background: #2ea043; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .secondary-btn { background: #30363d; border: 1px solid #30363d; margin-top: 1rem; }
+  .secondary-btn:hover { background: #484f58; border-color: #8b949e; }
   #results { margin-top: 1.5rem; }
   .path-result { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
                   padding: 1.5rem; margin-bottom: 1rem; position: relative; }
@@ -705,6 +707,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <span id="psi-result" style="display:none;"></span>
     <p class="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
     <input type="file" id="psi-file" accept=".vcf,.csv,.txt" style="display:none" onchange="doPSI(this)">
+  </div>
+
+  <div class="footer-meta" style="margin-top: 2rem; border-top: 1px solid #30363d; padding-top: 1.5rem; text-align: center;">
+    <button class="secondary-btn" onclick="window.open('https://docs.google.com/forms/d/e/1FAIpQLSfOR_ydz782hR27PzVrQ_xhqjl0k_ek_49c8RSuFTfp7ciP_A/viewform?usp=sf_link', '_blank')">💬 Give Feedback</button>
+    <p style="font-size: 0.8rem; color: #8b949e; margin-top: 1rem;">sixdegrees.net &bull; built for research and discovery</p>
   </div>
   
   <div id="tooltip" class="tooltip" onclick="hideTooltip()">
