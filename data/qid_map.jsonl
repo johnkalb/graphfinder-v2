@@ -56,14 +56,12 @@
 {"name": "Gary Hoffman", "qid": "Q5525251", "score": 2, "facts": ["university of california santa cruz", "christian brothers high school"]}
 {"name": "John Swainson", "qid": "Q373170", "score": 1, "facts": ["university of olivet"]}
 {"name": "Lloyd Carney", "qid": "Q16727839", "score": 3, "facts": ["lesley university", "wolmers schools", "wentworth institute of technology"]}
-{"name": "Mary Cranston", "qid": "Q75821656", "score": 1, "facts": ["richard maitland"]}
 {"name": "Ryan McInerney", "qid": "Q114837486", "score": 2, "facts": ["visa inc", "mckinsey  company"]}
 {"name": "Suzanne Johnson", "qid": "Q56983750", "score": 1, "facts": ["university of manchester"]}
 {"name": "William Sheedy", "qid": "Q114837562", "score": 1, "facts": ["visa inc"]}
 {"name": "Sergey Brin", "qid": "Q92764", "score": 4, "facts": ["stanford university", "nicole shanahan", "anne wojcicki", "alphabet inc"]}
 {"name": "Charles Chi", "qid": "Q16203890", "score": 2, "facts": ["carleton university", "board of governors of carleton university"]}
 {"name": "Kenny Thomas", "qid": "Q2335114", "score": 3, "facts": ["university of new mexico", "austin high school", "albuquerque high school"]}
-{"name": "Markus Lutz", "qid": "Q119017", "score": 1, "facts": ["university of basel"]}
 {"name": "Thomas Kenny", "qid": "Q95001959", "score": 4, "facts": ["national academy of engineering", "jet propulsion laboratory", "university of california berkeley", "university of minnesota"]}
 {"name": "Anthony Noto", "qid": "Q18631242", "score": 3, "facts": ["united states military academy", "the wharton school", "franklin delano roosevelt high school"]}
 {"name": "Derek White", "qid": "Q116979949", "score": 3, "facts": ["massey university", "agresearch", "university of florida"]}
@@ -142,7 +140,6 @@
 {"name": "Heath Tarbert", "qid": "Q29514890", "score": 4, "facts": ["mount st marys university", "calvert hall college high school", "st johns college", "university of pennsylvania carey law school"]}
 {"name": "Jeremy Allaire", "qid": "Q6181059", "score": 3, "facts": ["brightcove", "circle", "macalester college"]}
 {"name": "Patrick Neville", "qid": "Q28317003", "score": 2, "facts": ["university of colorado denver", "columbine high school"]}
-{"name": "Adam Smith", "qid": "Q9381", "score": 2, "facts": ["balliol college", "university of glasgow"]}
 {"name": "Adnan Khashoggi", "qid": "Q359381", "score": 1, "facts": ["california state university chico"]}
 {"name": "Alan Schriesheim", "qid": "Q4707730", "score": 6, "facts": ["pennsylvania state university", "national academy of engineering", "new york university tandon school of engineering", "new york university", "university of chicago"]}
 {"name": "Steven Walker", "qid": "Q106396527", "score": 3, "facts": ["vanderbilt department of urology", "brigham young university", "vanderbilt university"]}
@@ -200,7 +197,6 @@
 {"name": "Pamela Carter", "qid": "Q7129117", "score": 1, "facts": ["university of michigan"]}
 {"name": "Rebecca Roberts", "qid": "Q41169574", "score": 5, "facts": ["sheffield medical school", "babraham institute", "university of sheffield", "university of east anglia", "university of law"]}
 {"name": "Robert Rooney", "qid": "Q75983353", "score": 1, "facts": ["fiona llewellyn"]}
-{"name": "William Yardley", "qid": "Q8020653", "score": 2, "facts": ["jane heath", "province of pennsylvania"]}
 {"name": "Clifford Davis", "qid": "Q1101243", "score": 3, "facts": ["ku klux klan", "university of mississippi school of law", "primary school"]}
 {"name": "David Garofalo", "qid": "Q28233529", "score": 1, "facts": ["university of toronto"]}
 {"name": "David Smith", "qid": "Q5239892", "score": 8, "facts": ["linnean society of london", "university of oxford", "royal society", "royal society of edinburgh", "university of bristol"]}
@@ -232,7 +228,6 @@
 {"name": "Dick Olver", "qid": "Q5273247", "score": 2, "facts": ["city university of london", "bae systems"]}
 {"name": "Edward Gelsthorpe", "qid": "Q5343084", "score": 1, "facts": ["hamilton college"]}
 {"name": "Ewan Kirk", "qid": "Q17418781", "score": 3, "facts": ["university of cambridge", "queens college", "cantab capital partners"]}
-{"name": "George Rose", "qid": "Q5544040", "score": 4, "facts": ["royal society", "trinity college", "inner temple", "westminster school"]}
 {"name": "Guy Griffiths", "qid": "Q123438808", "score": 1, "facts": ["royal australian navy"]}
 {"name": "Harriet Green", "qid": "Q76325012", "score": 2, "facts": ["frederick edward hicksbeach", "oren clark burt"]}
 {"name": "Ian King", "qid": "Q6829080", "score": 1, "facts": ["hanley castle high school"]}
@@ -271,7 +266,6 @@
 {"name": "Mitchell Rales", "qid": "Q6881360", "score": 3, "facts": ["miami university", "emily wei rales", "walt whitman high school"]}
 {"name": "Peter Underwood", "qid": "Q982736", "score": 3, "facts": ["university of tasmania", "christ college", "sally sorell"]}
 {"name": "Steven Rales", "qid": "Q7615005", "score": 3, "facts": ["depauw university", "washington college of law", "walt whitman high school"]}
-{"name": "William Pringle", "qid": "Q101052346", "score": 3, "facts": ["selkirk", "university of edinburgh", "university of glasgow"]}
 {"name": "Ann Kirkpatrick", "qid": "Q558460", "score": 1, "facts": ["university of arizona"]}
 {"name": "Bill Foster", "qid": "Q2903389", "score": 1, "facts": ["university of wisconsinmadison"]}
 {"name": "Brad Schneider", "qid": "Q2923426", "score": 1, "facts": ["northwestern university"]}
@@ -424,7 +418,6 @@
 {"name": "David Viniar", "qid": "Q5240656", "score": 4, "facts": ["bronx high school of science", "union college", "harvard business school", "harvard university"]}
 {"name": "Dion Weisler", "qid": "Q26923230", "score": 1, "facts": ["monash university"]}
 {"name": "Frank Yeary", "qid": "Q109751224", "score": 1, "facts": ["university of california berkeley"]}
-{"name": "George Davis", "qid": "Q326218", "score": 2, "facts": ["mary alexander polk", "university of north carolina at chapel hill"]}
 {"name": "Gregory Smith", "qid": "Q57421290", "score": 6, "facts": ["northwestern university", "university of pennsylvania", "marine biological laboratory", "university of california santa barbara", "amgen"]}
 {"name": "Jack Dorsey", "qid": "Q335552", "score": 3, "facts": ["missouri university of science and technology", "new york university", "bishop dubourg high school"]}
 {"name": "James Goetz", "qid": "Q58226837", "score": 2, "facts": ["laboratory for atmospheric and space physics", "drexel university"]}
@@ -474,12 +467,10 @@
 {"name": "Debra Messing", "qid": "Q228739", "score": 5, "facts": ["sagaftra", "east greenwich high school", "new york university tisch school of the arts", "brandeis university", "daniel zelman"]}
 {"name": "Jason Kilar", "qid": "Q371312", "score": 5, "facts": ["spanish river community high school", "university of north carolina at chapel hill", "harvard business school", "harvard university", "kenanflagler business school"]}
 {"name": "Manuel Bronstein", "qid": "Q102186044", "score": 1, "facts": ["university of california berkeley"]}
-{"name": "Andrew Brown", "qid": "Q19996366", "score": 3, "facts": ["royal society of edinburgh", "university of edinburgh", "university of glasgow"]}
 {"name": "Charles Giancarlo", "qid": "Q5078017", "score": 4, "facts": ["brown university", "university of california berkeley", "harvard business school", "harvard university"]}
 {"name": "David Schneider", "qid": "Q59750600", "score": 2, "facts": ["university of toronto", "university of california berkeley"]}
 {"name": "David Fleck", "qid": "Q88228873", "score": 1, "facts": ["rwth aachen university"]}
 {"name": "David Gower", "qid": "Q3345451", "score": 4, "facts": ["holy cross college ryde", "marlborough house school", "university college london", "the kings school canterbury"]}
-{"name": "James Porter", "qid": "Q6141367", "score": 3, "facts": ["united states military academy", "bates college", "norwich university"]}
 {"name": "Mark Daniel", "qid": "Q63479690", "score": 11, "facts": ["university of montreal health centre", "university of north carolina", "university of canberra", "monash university", "university of south australia"]}
 {"name": "Patrick Downey", "qid": "Q7146401", "score": 3, "facts": ["bishop fenwick high school", "worcester academy", "university of new hampshire"]}
 {"name": "Ronald Smith", "qid": "Q4388357", "score": 3, "facts": ["royal academy of music", "priory school", "durham university"]}
@@ -647,7 +638,6 @@
 {"name": "John Yarmuth", "qid": "Q699970", "score": 1, "facts": ["yale university"]}
 {"name": "Frank Slootman", "qid": "Q123573828", "score": 4, "facts": ["snowflake inc", "erasmus university rotterdam", "dell emc data domain", "compuware"]}
 {"name": "Jayshree Ullal", "qid": "Q16194372", "score": 2, "facts": ["santa clara university", "san francisco state university"]}
-{"name": "John McMahon", "qid": "Q75667441", "score": 2, "facts": ["mary stacpoole", "eldin berth"]}
 {"name": "Mark Garrett", "qid": "Q114626552", "score": 2, "facts": ["marist university", "boston university"]}
 {"name": "Mark McLaughlin", "qid": "Q92125467", "score": 1, "facts": ["university of glasgow"]}
 {"name": "Michael Gannon", "qid": "Q6830516", "score": 3, "facts": ["the catholic university of america", "catholic university of leuven", "university of florida"]}
@@ -657,7 +647,6 @@
 {"name": "Amy Sherman-Palladino", "qid": "Q436780", "score": 1, "facts": ["daniel palladino"]}
 {"name": "Carole Bayer Sager", "qid": "Q292399", "score": 1, "facts": ["burt bacharach"]}
 {"name": "Frank Marshall", "qid": "Q549570", "score": 1, "facts": ["kathleen kennedy"]}
-{"name": "Benjamin Franklin", "qid": "Q34969", "score": 3, "facts": ["university of pennsylvania", "freemasonry", "boston latin school"]}
 {"name": "Benjamin Netanyahu", "qid": "Q43723", "score": 2, "facts": ["sara netanyahu", "massachusetts institute of technology"]}
 {"name": "David Montgomery", "qid": "Q709804", "score": 4, "facts": ["reach plc", "sophie birdwood", "down high school", "news of the world"]}
 {"name": "Scott Thompson", "qid": "Q125706969", "score": 4, "facts": ["stanford university", "teach for america", "contra costa county", "new college"]}
@@ -692,7 +681,6 @@
 {"name": "Brad Sherman", "qid": "Q672919", "score": 1, "facts": ["harvard law school"]}
 {"name": "Kelcy Warren", "qid": "Q6385527", "score": 3, "facts": ["university of texas at arlington", "energy transfer", "white oak high school"]}
 {"name": "Thomas Mason", "qid": "Q59105814", "score": 6, "facts": ["battelle memorial institute", "university of toronto", "mcmaster university", "los alamos national laboratory", "dalhousie university"]}
-{"name": "William Williams", "qid": "Q8020389", "score": 4, "facts": ["southwell minster school", "hertford college", "jane williams", "church missionary society college islington"]}
 {"name": "Jaime Herrera Beutler", "qid": "Q168592", "score": 3, "facts": ["seattle pacific university", "cathy mcmorris rodgers", "university of washington"]}
 {"name": "Jay Inslee", "qid": "Q1100710", "score": 5, "facts": ["stanford university", "willamette university college of law", "ingraham high school", "united states department of health and human services", "university of washington"]}
 {"name": "Mike Lee", "qid": "Q627098", "score": 1, "facts": ["brigham young university"]}
@@ -726,7 +714,6 @@
 {"name": "Deval Patrick", "qid": "Q11100", "score": 6, "facts": ["the cocacola company", "milton academy", "harvard law school", "diane b patrick", "harvard college"]}
 {"name": "George Hu", "qid": "Q1140329", "score": 3, "facts": ["annie chen", "st johns university", "wu hu jiang"]}
 {"name": "Jeff Immelt", "qid": "Q1686485", "score": 6, "facts": ["new enterprise associates", "finneytown secondary campus", "harvard business school", "harvard university", "dartmouth college"]}
-{"name": "Richard Dalzell", "qid": "Q75244199", "score": 1, "facts": ["elizabeth johnston"]}
 {"name": "Richard Neal", "qid": "Q1464697", "score": 2, "facts": ["university of hartford", "american international college"]}
 {"name": "Rick Dalzell", "qid": "Q7331327", "score": 1, "facts": ["united states military academy"]}
 {"name": "Byron Donalds", "qid": "Q59726216", "score": 1, "facts": ["erika donalds"]}
@@ -776,7 +763,6 @@
 {"name": "Mike Gallagher", "qid": "Q27842981", "score": 2, "facts": ["national intelligence university", "georgetown university"]}
 {"name": "Michael Cohen", "qid": "Q16728129", "score": 1, "facts": ["temple university"]}
 {"name": "Justin R. Walker", "qid": "Q64748397", "score": 6, "facts": ["judge of the united states court of appeals for the dc circuit", "university of kentucky", "harvard law school", "gibson dunn", "duke university"]}
-{"name": "Cornelius Vanderbilt", "qid": "Q313721", "score": 1, "facts": ["sophia johnson"]}
 {"name": "Cynthia Lummis", "qid": "Q456064", "score": 2, "facts": ["university of wyoming", "university of wyoming college of law"]}
 {"name": "Stephanos Bibas", "qid": "Q7608476", "score": 5, "facts": ["yale law school", "columbia university", "university college oxford", "university of chicago", "university of iowa college of law"]}
 {"name": "George Nolen", "qid": "Q61911467", "score": 2, "facts": ["virginia tech", "annandale high school"]}
@@ -857,7 +843,6 @@
 {"name": "Eric Adams", "qid": "Q5385992", "score": 1, "facts": ["john jay college of criminal justice"]}
 {"name": "Mary Boies", "qid": "Q6779084", "score": 1, "facts": ["david boies"]}
 {"name": "Elisa New", "qid": "Q5361374", "score": 6, "facts": ["winston churchill high school", "university of pennsylvania", "columbia university", "harvard university", "lawrence summers"]}
-{"name": "John Gordon", "qid": "Q75636378", "score": 1, "facts": ["elizabeth anderson"]}
 {"name": "Justine Musk", "qid": "Q6318376", "score": 1, "facts": ["elon musk"]}
 {"name": "Talulah Riley", "qid": "Q269309", "score": 5, "facts": ["haberdashers askes school for girls", "cheltenham ladies college", "elon musk", "the open university", "berkhamsted school"]}
 {"name": "Eric Mindich", "qid": "Q5387111", "score": 3, "facts": ["eton park capital management", "harvard university", "goldman sachs"]}
