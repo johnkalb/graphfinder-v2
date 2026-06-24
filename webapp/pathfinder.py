@@ -12,9 +12,13 @@ app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_
 DATA_DIR = Path(__file__).parent / "data"
 
 try:
-    from link_scoring import CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC, METHODOLOGY as _METHODOLOGY
+    from link_scoring import (CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC,
+                              METHODOLOGY as _METHODOLOGY, path_probability as _path_probability,
+                              FORWARD_PROB as _FORWARD_PROB)
 except ImportError:
-    from webapp.link_scoring import CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC, METHODOLOGY as _METHODOLOGY
+    from webapp.link_scoring import (CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC,
+                                     METHODOLOGY as _METHODOLOGY, path_probability as _path_probability,
+                                     FORWARD_PROB as _FORWARD_PROB)
 
 _graph: Optional[nx.Graph] = None
 _search_index = None
@@ -56,10 +60,18 @@ def _load_graph():
         g = nx.Graph()
         g.add_nodes_from(nodes)
         n_edges = len(edge_list)
+        # Edge weight = -log(prob) + forwarding penalty -log(FORWARD_PROB).
+        # This makes shortest-path (Dijkstra / shortest_simple_paths) rank by the
+        # TRUE combined probability product(edge probs) * FORWARD_PROB^(hops-1):
+        # the per-edge forwarding penalty differs from the (hops-1) form by a single
+        # constant identical for every path, so ranking is exact while shorter paths
+        # are correctly favored over long ones.
+        _fwd_penalty = -math.log(_FORWARD_PROB) if _FORWARD_PROB > 0 else 0.0
         for idx in range(n_edges):
             u, v, prob, cats = edge_list[idx]
             p = prob if prob > 1e-9 else 1e-9
-            g.add_edge(nodes[u], nodes[v], prob=prob, weight=-math.log(p), cats=cats)
+            g.add_edge(nodes[u], nodes[v], prob=prob,
+                       weight=-math.log(p) + _fwd_penalty, cats=cats)
             edge_list[idx] = None
         edge_list = None
         _graph = g
@@ -281,8 +293,8 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5):
         return {"error": f"Target '{tgt_name}' not found"}
     try:
         def build(path):
-            # path probability = product of per-edge probs
-            path_prob = 1.0
+            # Collect per-edge take-call probabilities along the path
+            edge_probs = []
             step_objects = []
             for j in range(len(path)):
                 step_objects.append({"node": path[j], "label": _get_label(path[j]),
@@ -291,7 +303,7 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5):
                 ed = _graph.get_edge_data(path[j], path[j + 1]) or {}
                 p = ed.get("prob", 0.5)
                 cats = ed.get("cats", []) or []
-                path_prob *= p
+                edge_probs.append(p)
                 # primary label = strongest contributing category by editorial prob
                 rel = None
                 if cats:
@@ -301,9 +313,16 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5):
                 step_objects[j]["relation"] = rel
                 step_objects[j]["prob"] = round(p, 4)
                 step_objects[j]["cats"] = cats
+            # Path probability = link strength * forwarding factor^(hops-1)
+            path_prob, link_comp, fwd_comp = _path_probability(edge_probs)
+            n_relays = max(0, len(edge_probs) - 1)
             return {
                 "length": len(path) - 1,
                 "probability": round(path_prob, 6),
+                "link_prob": round(link_comp, 6),
+                "forward_prob": round(fwd_comp, 6),
+                "n_relays": n_relays,
+                "forward_rate": _FORWARD_PROB,
                 "prob_label": _one_in(path_prob),
                 "band": _viability_band(path_prob),
                 "path": step_objects,
@@ -879,18 +898,32 @@ function showPathExplain(p) {
   const pct = (p.probability != null) ? (p.probability*100) : 0;
   const pctStr = pct >= 1 ? pct.toFixed(0) + '%' : pct.toFixed(2) + '%';
   let html = '<div class="tooltip-title">' + escHtml(p.band) + ' connection &middot; ' + escHtml(p.prob_label) + '</div>';
-  html += '<div class="tooltip-desc">This is the estimated likelihood that a phone call could be passed all the way along this path \u2014 from <strong>'
-        + escHtml(start) + '</strong> to <strong>' + escHtml(end) + '</strong> \u2014 with each person in the chain willing to take the call and make the next introduction.</div>';
-  // Show the multiplication of link probabilities
+  html += '<div class="tooltip-desc">This is the estimated likelihood that an introduction could be passed all the way along this path \u2014 from <strong>'
+        + escHtml(start) + '</strong> to <strong>' + escHtml(end) + '</strong>. It combines two things: whether each person would take the call, and whether each intermediary would actually pass you along.</div>';
+  // Factor 1: link strength (product of per-edge take-call probs)
   html += '<div class="tip-calc">';
   let parts = [];
   for (let i = 0; i < p.path.length - 1; i++) {
     const lp = p.path[i].prob;
     if (lp != null) parts.push(Math.round(lp*100) + '%');
   }
-  html += parts.join(' &times; ') + ' = <strong>' + pctStr + '</strong>';
+  const linkPct = (p.link_prob != null) ? p.link_prob*100 : 0;
+  const linkStr = linkPct >= 1 ? linkPct.toFixed(0) + '%' : linkPct.toFixed(1) + '%';
+  html += '<div style="color:#8b949e;font-size:0.78rem;margin-bottom:3px;">Link strength (each step\u2019s call accepted)</div>';
+  html += parts.join(' &times; ') + ' = <strong>' + linkStr + '</strong>';
+  // Factor 2: forwarding (only intermediaries forward)
+  if (p.n_relays > 0) {
+    const fwdPct = Math.round((p.forward_rate || 0.37)*100);
+    const fwdCompStr = (p.forward_prob*100).toFixed(p.forward_prob*100 >= 1 ? 0 : 1) + '%';
+    html += '<div style="color:#8b949e;font-size:0.78rem;margin:8px 0 3px;">Forwarding (' + p.n_relays + ' intermedi' + (p.n_relays===1?'ary':'aries') + ' must pass you on, ' + fwdPct + '% each)</div>';
+    html += Array(p.n_relays).fill(fwdPct + '%').join(' &times; ') + ' = <strong>' + fwdCompStr + '</strong>';
+    html += '<div style="color:#8b949e;font-size:0.78rem;margin:8px 0 3px;">Combined</div>';
+    html += linkStr + ' &times; ' + fwdCompStr + ' = <strong>' + pctStr + '</strong>';
+  } else {
+    html += '<div style="color:#8b949e;font-size:0.78rem;margin:8px 0 3px;">Direct connection \u2014 no intermediary needed, so no forwarding discount.</div>';
+  }
   html += '</div>';
-  html += '<div class="tooltip-desc" style="margin-top:6px;">Each link\u2019s percentage is the chance that single step\u2019s call would be accepted. The path multiplies them because every step must succeed. Click any relationship label for that link\u2019s detail.</div>';
+  html += '<div class="tooltip-desc" style="margin-top:6px;">A direct (1-hop) connection has no forwarding step. Each additional intermediary multiplies in a ~37% chance they\u2019ll actually make the introduction (Milgram/Watts) \u2014 which is why long chains, even strong ones, become tenuous. Click any relationship label for that link\u2019s detail.</div>';
   html += '<div class="tip-method-link" onclick="event.stopPropagation(); showMethodology();">How are these probabilities calculated? &rsaquo;</div>';
   content.innerHTML = html;
   document.getElementById('tooltip').classList.add('show');
