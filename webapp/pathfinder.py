@@ -14,10 +14,12 @@ DATA_DIR = Path(__file__).parent / "data"
 try:
     from link_scoring import (CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC,
                               METHODOLOGY as _METHODOLOGY, path_probability as _path_probability,
+                              path_probability_guided as _path_probability_guided,
                               FORWARD_PROB as _FORWARD_PROB)
 except ImportError:
     from webapp.link_scoring import (CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC,
                                      METHODOLOGY as _METHODOLOGY, path_probability as _path_probability,
+                                     path_probability_guided as _path_probability_guided,
                                      FORWARD_PROB as _FORWARD_PROB)
 
 _graph: Optional[nx.Graph] = None
@@ -349,12 +351,17 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5, include_deceased=False):
                 step_objects[j]["cats"] = cats
             # Path probability = link strength * forwarding factor^(hops-1)
             path_prob, link_comp, fwd_comp = _path_probability(edge_probs)
+            # Guided (Build My Path) variant: two-tier forwarding (own contact + warm intros)
+            guided_prob, _gl, guided_fwd = _path_probability_guided(edge_probs)
             n_relays = max(0, len(edge_probs) - 1)
             return {
                 "length": len(path) - 1,
                 "probability": round(path_prob, 6),
                 "link_prob": round(link_comp, 6),
                 "forward_prob": round(fwd_comp, 6),
+                "guided_probability": round(guided_prob, 6),
+                "guided_band": _viability_band(guided_prob),
+                "guided_prob_label": _one_in(guided_prob),
                 "n_relays": n_relays,
                 "forward_rate": _FORWARD_PROB,
                 "prob_label": _one_in(path_prob),
@@ -597,6 +604,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .step-rel small { color: #6e7681; font-weight: 600; }
   .path-note { color: #6e7681; font-size: 0.78rem; line-height: 1.5; margin-top: 0.5rem;
                padding: 0.75rem; background: #0d1117; border-radius: 6px; }
+  .bmp-box { margin-top: 0.85rem; padding: 0.85rem; background: #0d1117;
+             border: 1px solid #1f6feb44; border-radius: 8px; }
+  .bmp-pitch { font-size: 0.85rem; color: #adbac7; line-height: 1.5; margin-bottom: 0.7rem; }
+  .bmp-btn { background: #1f6feb; color: #fff; border: none; border-radius: 6px;
+             padding: 0.5rem 1rem; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+  .bmp-btn:hover { background: #388bfd; }
+  .bmp-steps { margin-top: 0.85rem; }
+  .pb-title { font-weight: 700; color: #e6edf3; font-size: 0.95rem; margin-bottom: 0.4rem; }
+  .pb-intro { font-size: 0.8rem; color: #8b949e; line-height: 1.5; margin-bottom: 0.8rem; }
+  .pb-step { padding: 0.6rem 0.7rem; margin-bottom: 0.5rem; background: #161b22;
+             border-left: 3px solid #1f6feb; border-radius: 4px; }
+  .pb-step-h { font-size: 0.88rem; color: #e6edf3; line-height: 1.5; }
+  .pb-num { display: inline-block; width: 1.4em; height: 1.4em; line-height: 1.4em;
+            text-align: center; background: #1f6feb; color: #fff; border-radius: 50%;
+            font-size: 0.78rem; font-weight: 700; margin-right: 0.35rem; }
+  .pb-rel { font-size: 0.76rem; color: #6e7681; margin-top: 0.3rem; padding-left: 1.75em; }
+  .pb-target { padding: 0.6rem 0.7rem; margin: 0.5rem 0; background: #12261a;
+               border-radius: 4px; color: #3fb950; font-size: 0.9rem; }
+  .pb-note { font-size: 0.78rem; color: #8b949e; line-height: 1.5; margin-top: 0.6rem;
+             padding: 0.6rem; background: #161b22; border-radius: 4px; }
   .tip-prob { color: #3fb950; font-weight: 600; font-size: 0.95rem; margin: 6px 0; }
   .tip-calc { font-family: ui-monospace, monospace; font-size: 0.9rem; color: #e6edf3;
               background: #0d1117; border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
@@ -879,7 +906,27 @@ async function findPath() {
           }
           html += '<span class="step-node">' + nodeHtml + '</span>';
         });
-        html += '</div></div>';
+        html += '</div>';
+        // Build My Path: best path only, when it has at least one intermediary
+        if (idx === 0 && p.length >= 2 && p.guided_probability != null) {
+          const passPct = (p.probability*100);
+          const guidPct = (p.guided_probability*100);
+          const passStr = passPct >= 1 ? passPct.toFixed(0)+'%' : passPct.toFixed(1)+'%';
+          const guidStr = guidPct >= 1 ? guidPct.toFixed(0)+'%' : guidPct.toFixed(1)+'%';
+          const bid = 'bmp' + Math.random().toString(36).slice(2);
+          html += '<div class="bmp-box">';
+          html += '<div class="bmp-pitch">Using <strong>Build My Path</strong> could raise your odds on this route from about <strong>' + passStr + '</strong> (passive) to about <strong style="color:#3fb950;">' + guidStr + '</strong> — by staying involved at every step and getting a real introduction at each hop.</div>';
+          html += '<button class="bmp-btn" id="' + bid + '">\ud83e\udded Build My Path</button>';
+          html += '<div class="bmp-steps" id="' + bid + '-steps" style="display:none;"></div>';
+          html += '</div>';
+          (function(pp, id){
+            setTimeout(function(){
+              const b = document.getElementById(id);
+              if (b) b.onclick = function(){ renderPlaybook(pp, id + '-steps'); };
+            }, 0);
+          })(p, bid);
+        }
+        html += '</div>';
       });
       html += '<div class="path-note">Viability = estimated probability the chain would pass a warm introduction at each step (each person would take the call). Multiple alternate paths shown — your own knowledge may favor a different one.</div>';
     }
@@ -941,6 +988,34 @@ async function showRelTooltip(event, rtype, src, tgt) {
     content.innerHTML = html;
     document.getElementById('tooltip').classList.add('show');
   } catch(e) { console.error(e); }
+}
+
+function renderPlaybook(p, containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (el.style.display !== 'none' && el.innerHTML) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+  const nodes = p.path;
+  let html = '<div class="pb-title">Your introduction plan</div>';
+  html += '<div class="pb-intro">Work the chain one step at a time. After each person agrees, <strong>you</strong> personally contact the next \u2014 carrying the introduction forward. Tell each person you\u2019ll let them know once the intro is made (that accountability is what makes this work).</div>';
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const from = nodes[i].label, to = nodes[i+1].label;
+    const rel = nodes[i].relation;
+    const stepNum = i + 1;
+    const isFirst = (i === 0);
+    html += '<div class="pb-step">';
+    html += '<div class="pb-step-h"><span class="pb-num">' + stepNum + '</span> ';
+    if (isFirst) {
+      html += 'Contact <strong>' + escHtml(from) + '</strong> (your connection) and ask for an introduction to <strong>' + escHtml(to) + '</strong>.</div>';
+    } else {
+      html += 'Once introduced, reach out to <strong>' + escHtml(from) + '</strong> directly and ask them to connect you with <strong>' + escHtml(to) + '</strong>.</div>';
+    }
+    if (rel) html += '<div class="pb-rel">Their connection: ' + escHtml(rel.replace(/_/g,' ').toLowerCase()) + (nodes[i].prob!=null ? ' (\u2248' + Math.round(nodes[i].prob*100) + '% likely to take the call)' : '') + '</div>';
+    html += '</div>';
+  }
+  html += '<div class="pb-target">\ud83c\udfaf Goal reached: <strong>' + escHtml(nodes[nodes.length-1].label) + '</strong></div>';
+  html += '<div class="pb-note">Estimated success staying involved at each step: <strong style="color:#3fb950;">' + (p.guided_probability*100).toFixed(p.guided_probability*100>=1?0:1) + '%</strong> (vs ~' + (p.probability*100).toFixed(p.probability*100>=1?0:1) + '% if you just passed a message along and hoped). These are estimates \u2014 your own knowledge of these people matters most.</div>';
+  el.innerHTML = html;
 }
 
 function showPathExplain(p) {
