@@ -129,15 +129,24 @@ _DEFAULT_P = CATEGORY_PROB["OTHER"]
 # FORWARD_PROB is the single weakest assumption in the whole model and is
 # deliberately exposed as a tunable parameter. 0.37 is the Watts/Dodds passive
 # figure; real motivated use likely runs higher (DARPA Red Balloon, Pickard
-# 2011, showed incentive dominates), and the future "Build My Path" guided mode
-# justifies a higher rate because the motivated initiator stays in the loop and
-# each intermediary only makes ONE low-effort introduction.
-FORWARD_PROB = 0.37          # passive / unguided chain (default)
-FORWARD_PROB_GUIDED = 0.60   # "Build My Path" guided mode (initiator drives each step)
+# 2011, showed incentive dominates).
+FORWARD_PROB = 0.37          # passive / unguided chain (default display)
+
+# "Build My Path" GUIDED mode. Here the motivated user stays in the loop at
+# every step: after B introduces them to C, the USER personally contacts C with
+# B's warm intro. So downstream hops are NOT passive forwarding -- they are
+# warm-intro favors with report-back accountability. Two-tier per-hop rates:
+#   - The user's OWN committed contact (first relay): high follow-through,
+#     because agreeing then ghosting carries social cost (they must report the
+#     intro was made). Net of P(agree) x P(follow-through | agree) ~ 0.85.
+#   - DOWNSTREAM warm-intro hops: a favor for a friend-of-a-friend, warm and
+#     motivated but a weaker tie -> ~0.60 (between own-contact and passive).
+FORWARD_GUIDED_OWN = 0.85        # first relay: user's own committed contact
+FORWARD_GUIDED_DOWNSTREAM = 0.60 # subsequent warm-intro relays
 
 
 def path_probability(edge_probs, forward_prob=FORWARD_PROB):
-    """Combine per-edge take-call probabilities with the forwarding factor.
+    """Passive combination: link strength x forward_prob^(intermediaries).
 
     edge_probs: list of per-hop P(take call), length = number of hops.
     Returns (combined_prob, link_component, forward_component).
@@ -145,9 +154,30 @@ def path_probability(edge_probs, forward_prob=FORWARD_PROB):
     link = 1.0
     for p in edge_probs:
         link *= p
-    n_hops = len(edge_probs)
-    n_relays = max(0, n_hops - 1)         # intermediaries who must forward
+    n_relays = max(0, len(edge_probs) - 1)   # intermediaries who must forward
     forward = forward_prob ** n_relays
+    return link * forward, link, forward
+
+
+def path_probability_guided(edge_probs,
+                            own=FORWARD_GUIDED_OWN,
+                            downstream=FORWARD_GUIDED_DOWNSTREAM):
+    """Guided (Build My Path) combination with two-tier per-relay forwarding.
+
+    Relays are the (hops-1) intermediaries. The FIRST relay is the user's own
+    committed contact (rate `own`); every subsequent relay is a downstream
+    warm-intro hop (rate `downstream`). A direct 1-hop link has no relay and
+    therefore no forwarding penalty -- same as passive.
+
+    Returns (combined_prob, link_component, forward_component).
+    """
+    link = 1.0
+    for p in edge_probs:
+        link *= p
+    n_relays = max(0, len(edge_probs) - 1)
+    forward = 1.0
+    for r in range(n_relays):
+        forward *= own if r == 0 else downstream
     return link * forward, link, forward
 
 
