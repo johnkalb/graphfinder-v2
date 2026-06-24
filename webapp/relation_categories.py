@@ -107,4 +107,31 @@ def categorize(rt):
     if r in ("MENTOR", "MENTEE", "NEIGHBOR", "ACQUAINTANCE", "COLLEAGUE",
              "ROOMMATE", "CLASSMATE", "COLLEGE_ROOMMATE", "PARTY_HOST"):
         return "WEAK_SOCIAL"
+    # Academic / faculty roles -> employment at the institution
+    if any(k in r for k in ("PROFESSOR", "FACULTY", "LECTURER", "INSTRUCTOR",
+                            "SCHOLAR_IN_RESIDENCE", "FELLOW_IN_RESIDENCE",
+                            "RESEARCHER", "POSTDOC")):
+        return "EMPLOYMENT"
+    # Law clerk / clerk / counsel / attorney -> employment (works at/for)
+    if any(k in r for k in ("LAW_CLERK", "CLERK", "COUNSEL", "ATTORNEY",
+                            "ASSOCIATE", "CONSULTANT")):
+        return "EMPLOYMENT"
+    # Board / trustee / advisory committee variants -> advisory
+    if any(k in r for k in ("TRUSTEE", "BOARD_OF_TRUSTEES", "BOARD_OF_ADVISORS",
+                            "BOARD_OF_GOVERNORS", "BOARD_OF_VISITORS", "ADVISORY_BOARD",
+                            "ADVISOR", "ADVISER", "BOARD_OF_OVERSEERS")):
+        return "ADVISORY"
+    # Fellow / senior fellow at an institution -> membership/affiliation
+    if "FELLOW" in r or r in ("SENIOR_FELLOW", "RESIDENT_FELLOW"):
+        return "MEMBERSHIP"
+    # Generic committee / council / membership roles -> membership
+    if any(k in r for k in ("COMMITTEE_MEMBER", "COUNCIL_MEMBER", "MEMBER", "DELEGATE",
+                            "RANKING_MEMBER", "COMMITTEE", "COUNCIL", "DELEGATION")):
+        return "MEMBERSHIP"
+    # Legislative co-sponsorship -> a working relationship
+    if r in ("CO-SPONSOR", "CO_SPONSOR", "COSPONSOR", "BILL_COSPONSOR"):
+        return "MEMBERSHIP"
+    # Candidates / political roles connecting a person to office
+    if any(k in r for k in ("CANDIDATE", "NOMINEE", "PARLIAMENTARY")):
+        return "PUBLIC_OFFICE"
     return "OTHER"
