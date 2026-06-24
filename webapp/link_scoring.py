@@ -93,13 +93,63 @@ METHODOLOGY = (
     "P = 1 \u2212 \u220f(1 \u2212 p\u1d62). Intuitively, the connection is at least as strong as its strongest single link, and additional "
     "links can only raise confidence \u2014 never lower it. Correlated corporate links (co-officer, co-director, etc.) are counted "
     "once, since they usually come from the same shared company.\n\n"
-    "A path's overall viability is the product of its links' probabilities \u2014 the chance a warm introduction would succeed at "
-    "every step from start to end. Because each step can only reduce the product, a short chain of strong links can beat a long "
-    "chain of weak ones; the \u201cbest path\u201d shown is the one with the highest overall probability, which is not always the "
-    "shortest. Alternate paths are ranked by probability so you can apply your own private knowledge."
+    "A path's overall viability has TWO parts. First, the link strength: the product of every step's "
+    "take-the-call probability. Second, the forwarding factor: reaching someone through a chain also "
+    "requires each INTERMEDIARY to actually pass you along, not just take your call. Milgram's original "
+    "experiment (~20% of chains completed) and Dodds, Muhamad & Watts (2003, ~37% passed each message on) "
+    "show this forwarding step is the main reason long chains fail. We model it as FORWARD_PROB (default 0.37) "
+    "raised to the number of intermediaries (hops minus one). A direct, one-hop connection has no intermediary, "
+    "so it takes no forwarding penalty; every extra link multiplies the odds down sharply. This is why a short "
+    "chain of strong links can far outscore a long chain, and why paths beyond two or three hops are honestly "
+    "labeled tenuous. The forwarding rate is the single softest assumption in the model and is treated as a "
+    "tunable parameter \u2014 a motivated, system-guided search (where you stay involved at every step and each "
+    "person need only make one easy introduction) plausibly does better than the passive 37%. The \u201cbest path\u201d "
+    "shown is the one with the highest combined probability, which is not always the shortest. Alternate paths "
+    "are ranked by probability so you can apply your own private knowledge."
 )
 
 _DEFAULT_P = CATEGORY_PROB["OTHER"]
+
+# ---------------------------------------------------------------------------
+# Forwarding probability (the chain-completion factor).
+#
+# A path existing in the graph is NOT the same as a real introduction
+# succeeding. Each INTERMEDIARY in a chain must be willing to make the
+# follow-on introduction, not just take the call. Milgram (~20% completion)
+# and Dodds/Muhamad/Watts 2003 (~37% per-step pass-along in a low-incentive
+# email experiment) show this forwarding step is the dominant reason long
+# chains fail.
+#
+# Model: P(chain) = [product of edge take-call probs] * FORWARD_PROB^(hops-1)
+#   - The initiator (you) is motivated -> no forwarding factor for the 1st hop.
+#   - The target is the destination -> does not forward.
+#   - Only the (hops-1) INTERMEDIARIES must choose to forward.
+#   - A direct 1-hop link gets FORWARD_PROB^0 = 1 (no penalty) -- correct.
+#
+# FORWARD_PROB is the single weakest assumption in the whole model and is
+# deliberately exposed as a tunable parameter. 0.37 is the Watts/Dodds passive
+# figure; real motivated use likely runs higher (DARPA Red Balloon, Pickard
+# 2011, showed incentive dominates), and the future "Build My Path" guided mode
+# justifies a higher rate because the motivated initiator stays in the loop and
+# each intermediary only makes ONE low-effort introduction.
+FORWARD_PROB = 0.37          # passive / unguided chain (default)
+FORWARD_PROB_GUIDED = 0.60   # "Build My Path" guided mode (initiator drives each step)
+
+
+def path_probability(edge_probs, forward_prob=FORWARD_PROB):
+    """Combine per-edge take-call probabilities with the forwarding factor.
+
+    edge_probs: list of per-hop P(take call), length = number of hops.
+    Returns (combined_prob, link_component, forward_component).
+    """
+    link = 1.0
+    for p in edge_probs:
+        link *= p
+    n_hops = len(edge_probs)
+    n_relays = max(0, n_hops - 1)         # intermediaries who must forward
+    forward = forward_prob ** n_relays
+    return link * forward, link, forward
+
 
 
 def dedup_categories(categories):
