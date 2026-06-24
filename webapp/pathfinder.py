@@ -24,6 +24,23 @@ _graph: Optional[nx.Graph] = None
 _search_index = None
 _canonical_map = None
 _labels = None
+_deceased = None  # {lowercase name: death date} -- Wikidata P570, authoritative
+
+def _load_deceased():
+    """Load authoritative date-of-death info (Wikidata P570) for known people."""
+    global _deceased
+    if _deceased is not None:
+        return _deceased
+    _deceased = {}
+    dpath = DATA_DIR / "deceased.json"
+    if dpath.exists():
+        try:
+            with open(dpath, "r", encoding="utf-8") as f:
+                _deceased = {k.lower(): v for k, v in json.load(f).items()}
+        except Exception:
+            _deceased = {}
+    return _deceased
+
 
 def _load_search():
     """Load just the search index — fast, independent of graph."""
@@ -281,7 +298,7 @@ def _one_in(p):
         return f"{round(p*100)}%"
     return f"\u2248 1 in {round(1.0/p)}"
 
-def _find_path(src_name, tgt_name, max_depth=6, k=5):
+def _find_path(src_name, tgt_name, max_depth=6, k=5, include_deceased=False):
     _load_graph()
     if _graph is None:
         return {"error": "Graph not loaded"}
@@ -291,14 +308,31 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5):
         return {"error": f"Source '{src_name}' not found"}
     if not tgt_node:
         return {"error": f"Target '{tgt_name}' not found"}
+
+    # Living-only mode (default): deceased people cannot be INTERMEDIARIES
+    # (they can't take a call or make an introduction). They are still allowed
+    # as the source or target endpoint. We search a subgraph with deceased
+    # intermediaries removed; the toggle (include_deceased=True) uses the full graph.
+    deceased = _load_deceased()
+    search_graph = _graph
+    excluded_deceased = []
+    if not include_deceased and deceased:
+        drop = [n for n in _graph.nodes
+                if n.lower() in deceased and n != src_node and n != tgt_node]
+        if drop:
+            search_graph = _graph.subgraph([n for n in _graph.nodes if n not in set(drop)])
+            excluded_deceased = drop
+
     try:
         def build(path):
             # Collect per-edge take-call probabilities along the path
             edge_probs = []
             step_objects = []
             for j in range(len(path)):
+                _dd = deceased.get(path[j].lower()) if deceased else None
                 step_objects.append({"node": path[j], "label": _get_label(path[j]),
-                                     "relation": None, "prob": None, "cats": None})
+                                     "relation": None, "prob": None, "cats": None,
+                                     "deceased": _dd})
             for j in range(len(path) - 1):
                 ed = _graph.get_edge_data(path[j], path[j + 1]) or {}
                 p = ed.get("prob", 0.5)
@@ -331,16 +365,18 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5):
         # k most-probable paths = k shortest in -log(prob) weight space
         paths = []
         try:
-            gen = nx.shortest_simple_paths(_graph, src_node, tgt_node, weight="weight")
+            gen = nx.shortest_simple_paths(search_graph, src_node, tgt_node, weight="weight")
             for i, p in enumerate(gen):
                 if i >= k:
                     break
                 paths.append(build(p))
         except nx.NetworkXNoPath:
-            return {"paths": [], "src_found": True, "tgt_found": True}
+            return {"paths": [], "src_found": True, "tgt_found": True,
+                    "deceased_excluded": len(excluded_deceased), "include_deceased": include_deceased}
 
         # already in decreasing-probability order from the weighted generator
-        return {"paths": paths, "src_found": True, "tgt_found": True}
+        return {"paths": paths, "src_found": True, "tgt_found": True,
+                "deceased_excluded": len(excluded_deceased), "include_deceased": include_deceased}
     except nx.NodeNotFound:
         return {"paths": [], "src_found": src_node is not None, "tgt_found": tgt_node is not None}
     except Exception as e:
@@ -471,10 +507,11 @@ async def search(q: str = Query(default="")):
     return _find_entry(q.strip())
 
 @app.get("/api/path")
-async def path(src_name: str = Query(default=""), tgt_name: str = Query(default="")):
+async def path(src_name: str = Query(default=""), tgt_name: str = Query(default=""),
+               include_deceased: bool = Query(default=False)):
     if not src_name or not tgt_name:
         return {"error": "Both src_name and tgt_name required"}
-    return _find_path(src_name.strip(), tgt_name.strip())
+    return _find_path(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
 
 @app.get("/api/relation-info")
 async def relation_info(rtype: str = Query(default="")):
@@ -625,6 +662,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <button id="find-btn" onclick="findPath()" disabled>🔍 Find Path</button>
+  <label style="display:block; margin-top:10px; font-size:0.82rem; color:#8b949e; cursor:pointer;">
+    <input type="checkbox" id="include-deceased" onchange="if(state.src.selected&&state.tgt.selected) findPath();" style="vertical-align:middle; margin-right:6px;">
+    Include deceased people as go-betweens (off by default — the dead can&rsquo;t make introductions, but may reveal historical connections)
+  </label>
 
   <div id="results" class="results"></div>
   
@@ -779,7 +820,9 @@ async function findPath() {
   btn.textContent = '⏳ Searching...';
   document.getElementById('results').innerHTML = '';
   try {
+    const incDec = !!(document.getElementById('include-deceased') && document.getElementById('include-deceased').checked);
     const params = new URLSearchParams({ src_name: state.src.selected, tgt_name: state.tgt.selected });
+    if (incDec) params.set('include_deceased', 'true');
     const res = await fetch('/api/path?' + params.toString(), {
       headers: { 'Accept': 'application/json' }
     });
@@ -788,7 +831,11 @@ async function findPath() {
     if (data.error) {
       html = '<div class="error-msg">' + escHtml(data.error) + '</div>';
     } else if (!data.paths || data.paths.length === 0) {
-      html = '<div class="no-path">No path found between <strong>' + escHtml(state.src.selected) + '</strong> and <strong>' + escHtml(state.tgt.selected) + '</strong></div>';
+      html = '<div class="no-path">No ' + (incDec ? '' : 'living ') + 'path found between <strong>' + escHtml(state.src.selected) + '</strong> and <strong>' + escHtml(state.tgt.selected) + '</strong>';
+      if (!incDec && data.deceased_excluded > 0) {
+        html += '<div style="margin-top:8px;font-size:0.85rem;">' + data.deceased_excluded + ' deceased ' + (data.deceased_excluded===1?'person was':'people were') + ' excluded as possible go-betweens. <a href="#" onclick="document.getElementById(\'include-deceased\').checked=true; findPath(); return false;" style="color:#58a6ff;">Include deceased intermediaries</a> to see historical connections.</div>';
+      }
+      html += '</div>';
     } else {
       data.paths.forEach((p, idx) => {
         const bandColors = {Strong:'#3fb950', Plausible:'#d29922', Weak:'#db6d28', Tenuous:'#8b949e'};
@@ -826,7 +873,11 @@ async function findPath() {
               }, 0);
             }
           }
-          html += '<span class="step-node">' + escHtml(step.label) + '</span>';
+          let nodeHtml = escHtml(step.label);
+          if (step.deceased) {
+            nodeHtml += ' <span title="Deceased ' + escHtml(step.deceased) + ' \u2014 cannot make an introduction" style="color:#8b949e;font-size:0.8em;">\u271d</span>';
+          }
+          html += '<span class="step-node">' + nodeHtml + '</span>';
         });
         html += '</div></div>';
       });
