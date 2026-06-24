@@ -607,6 +607,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .bmp-box { margin-top: 0.85rem; padding: 0.85rem; background: #0d1117;
              border: 1px solid #1f6feb44; border-radius: 8px; }
   .bmp-pitch { font-size: 0.85rem; color: #adbac7; line-height: 1.5; margin-bottom: 0.7rem; }
+  .bmp-hero { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.5rem; }
+  .bmp-mult { font-size: 2.1rem; font-weight: 800; color: #3fb950; line-height: 1; }
+  .bmp-mult-label { font-size: 0.95rem; font-weight: 600; color: #3fb950; }
+  .bmp-sub { color: #6e7681; font-size: 0.8rem; }
   .bmp-btn { background: #1f6feb; color: #fff; border: none; border-radius: 6px;
              padding: 0.5rem 1rem; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
   .bmp-btn:hover { background: #388bfd; }
@@ -913,9 +917,13 @@ async function findPath() {
           const guidPct = (p.guided_probability*100);
           const passStr = passPct >= 1 ? passPct.toFixed(0)+'%' : passPct.toFixed(1)+'%';
           const guidStr = guidPct >= 1 ? guidPct.toFixed(0)+'%' : guidPct.toFixed(1)+'%';
+          // Hero metric: the uplift multiplier (more motivating + honest than a raw %)
+          const mult = (p.probability > 0) ? (p.guided_probability / p.probability) : 1;
+          const multStr = mult >= 10 ? mult.toFixed(0) : mult.toFixed(1);
           const bid = 'bmp' + Math.random().toString(36).slice(2);
           html += '<div class="bmp-box">';
-          html += '<div class="bmp-pitch">Using <strong>Build My Path</strong> could raise your odds on this route from about <strong>' + passStr + '</strong> (passive) to about <strong style="color:#3fb950;">' + guidStr + '</strong> — by staying involved at every step and getting a real introduction at each hop.</div>';
+          html += '<div class="bmp-hero"><span class="bmp-mult">' + multStr + '\u00d7</span> <span class="bmp-mult-label">more likely to connect</span></div>';
+          html += '<div class="bmp-pitch">Working this route actively with <strong>Build My Path</strong> \u2014 staying involved and getting a real introduction at each step \u2014 beats passively hoping a message gets passed along. <span class="bmp-sub">(about ' + guidStr + ' vs ' + passStr + ')</span></div>';
           html += '<button class="bmp-btn" id="' + bid + '">\ud83e\udded Build My Path</button>';
           html += '<div class="bmp-steps" id="' + bid + '-steps" style="display:none;"></div>';
           html += '</div>';
