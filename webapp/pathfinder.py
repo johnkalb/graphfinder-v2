@@ -703,7 +703,8 @@ async def key_debug():
         "source": source,
         "length": len(google_key),
         "starts_with": google_key[:10] + "...",
-        "ends_with": "..." + google_key[-5:] if len(google_key) > 5 else "..."
+        "ends_with": "..." + google_key[-5:] if len(google_key) > 5 else "...",
+        "ascii_codes": [ord(c) for c in google_key]
     }
 
 @app.get("/", response_class=HTMLResponse)
