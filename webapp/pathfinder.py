@@ -545,6 +545,83 @@ async def methodology():
 
 # --- USER CONTRIBUTION & QUALITY CONTROL (MVP PHASE 1) ---
 
+class ExtractRequest(BaseModel):
+    text: str = Field(..., min_length=10, max_length=15000)
+
+@app.post("/api/extract-proof")
+async def extract_proof(req: ExtractRequest):
+    try:
+        import requests
+        # 1. Read key from .env file
+        google_key = None
+        env_paths = [
+            Path("/c/Users/johnk/AppData/Local/hermes/.env"),
+            Path("C:/Users/johnk/AppData/Local/hermes/.env"),
+            Path("/c/Users/johnk/.hermes/.env"),
+            DATA_DIR.parent / ".env",
+            DATA_DIR.parent.parent / ".env"
+        ]
+        for p in env_paths:
+            if p.exists():
+                for line in open(p, encoding="utf-8", errors="ignore"):
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, v = line.split('=', 1)
+                        if k.strip() == "GOOGLE_API_KEY":
+                            google_key = v.strip().strip("'").strip('"')
+                            break
+                if google_key:
+                    break
+                    
+        if not google_key:
+            google_key = os.environ.get("GOOGLE_API_KEY")
+            
+        if not google_key:
+            return JSONResponse(status_code=500, content={"success": False, "error": "Google API key not found in server environment."})
+            
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={google_key}"
+        
+        prompt = f"""
+Analyze the following unstructured raw text containing an AI chat transcript or proof of a connection between two entities.
+Extract ALL valid relationship connections mentioned in the text.
+
+Format the output strictly as a JSON object matching this schema (do NOT wrap in markdown codeblocks or quotes):
+{{
+  "claims": [
+    {{
+      "subject": "The main person or organization A (proper capitalization, e.g. Bonnie R. Cohen)",
+      "predicate": "The exact relationship predicate from this controlled list: FAMILY, FRIEND, EMPLOYMENT, CO_DIRECTOR, CO_OFFICER, CO_EXECUTIVE, MEMBERSHIP, ADVISORY, DONATION, LOBBYING, TRAVEL_MET, PUBLIC_OFFICE",
+      "object": "The secondary person or organization B (proper capitalization, e.g. Louis R. Cohen)",
+      "source_name": "The authoritative source publication, book, record, or site (e.g. U.S. Senate Confirmation Questionnaire)",
+      "source_url": "The source URL link if mentioned in text (or empty string if not found)",
+      "snippet": "A brief quote, sentence, or snippet from the text proving this connection"
+    }}
+  ]
+}}
+Ensure the returned JSON is valid and matches the fields exactly. Extract as many distinct public-record sourced connections as you can find in the chat history.
+
+Text to analyze:
+---
+{req.text}
+---
+"""
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return JSONResponse(status_code=500, content={"success": False, "error": f"Gemini API error: {response.text}"})
+            
+        data = response.json()
+        content_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        parsed = json.loads(content_text)
+        return {"success": True, "claims": parsed.get("claims", [])}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
 class SuggestionRequest(BaseModel):
     subject: str = Field(..., min_length=2, max_length=100)
     predicate: str = Field(..., min_length=2, max_length=50)
@@ -731,6 +808,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     border-radius: 6px; padding: 0.5rem 0.8rem; font-size: 0.9rem; outline: none; }
   .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #58a6ff; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem; }
+  
+  /* Tabs UI for suggest link modal */
+  .tabs { display: flex; border-bottom: 1px solid #30363d; margin-bottom: 1rem; }
+  .tab { padding: 0.5rem 1rem; cursor: pointer; color: #8b949e; border-bottom: 2px solid transparent; font-size: 0.9rem; font-weight: 600; }
+  .tab.active { color: #58a6ff; border-color: #58a6ff; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+  
+  /* Multi-claim cards for AI proof extraction results */
+  .claim-card { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; position: relative; text-align: left; }
+  .claim-card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; border-bottom: 1px solid #30363d; padding-bottom: 0.5rem; }
+  .claim-card-num { font-weight: 700; color: #58a6ff; font-size: 0.9rem; }
+  .claim-card-check { width: auto !important; margin-right: 6px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -796,57 +886,99 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div id="modal-overlay" class="modal-overlay" onclick="closeAllModals()"></div>
 
   <!-- Suggest Connection Modal -->
-  <div id="suggest-modal" class="modal">
+  <div id="suggest-modal" class="modal" style="max-width: 550px;">
     <span class="modal-close" onclick="closeAllModals()">✕</span>
     <div class="modal-title">➕ Suggest a New Connection</div>
-    <form id="suggest-form" onsubmit="submitSuggestion(event)">
-      <div class="form-group">
-        <label for="sug-subject">Person/Organization A (Subject)</label>
-        <input type="text" id="sug-subject" required placeholder="e.g. Donald Trump">
+    
+    <div class="tabs">
+      <div id="tab-ai" class="tab active" onclick="switchSuggestTab('ai')">🤖 Paste AI Proof (Recommended)</div>
+      <div id="tab-manual" class="tab" onclick="switchSuggestTab('manual')">📝 Manual Entry</div>
+    </div>
+    
+    <!-- Tab A: AI Extraction -->
+    <div id="content-ai" class="tab-content active">
+      <form id="suggest-ai-form" onsubmit="analyzeAIProof(event)">
+        <div class="form-group">
+          <label for="sug-ai-text">Paste Copilot, ChatGPT, or Claude conversation proof</label>
+          <textarea id="sug-ai-text" required rows="6" placeholder="Paste the full chat output or proof text here. e.g. 'Louis R. Cohen is married to Bonnie R. Cohen, as verified in her Senate questionnaire...'"></textarea>
+        </div>
+        <button type="submit" id="ai-analyze-btn" style="width:100%; background:#1f6feb;">⚡ Analyze Proof with AI</button>
+      </form>
+      
+      <!-- AI Parsed Results (Hidden by default, dynamically populated by JS after extraction) -->
+      <div id="ai-parsed-results" style="display:none; margin-top:1.5rem; border-top:1px dashed #30363d; padding-top:1rem;">
+        <div style="font-size:0.85rem; font-weight:600; color:#58a6ff; margin-bottom:0.8rem; text-align:left;">✓ AI Extracted Connections (Review & edit below):</div>
+        
+        <!-- List container where JavaScript will inject each claim card -->
+        <div id="ai-parsed-list" style="max-height: 250px; overflow-y: auto; padding-right: 5px; margin-bottom: 1rem;"></div>
+        
+        <!-- Consolidated submit section -->
+        <form id="suggest-form" onsubmit="submitSuggestion(event)">
+          <div class="form-group" style="text-align:left;">
+            <label for="sug-email">Your Email (Optional, covers all checked above)</label>
+            <input type="email" id="sug-email" placeholder="you@example.com">
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
+            <button type="submit" id="sug-submit-btn">Submit Approved Connections</button>
+          </div>
+        </form>
       </div>
-      <div class="form-group">
-        <label for="sug-predicate">Relationship (Predicate)</label>
-        <select id="sug-predicate" required>
-          <option value="" disabled selected>Select relationship type...</option>
-          <option value="FAMILY">Family / Spouse</option>
-          <option value="FRIEND">Friend / Social</option>
-          <option value="EMPLOYMENT">Employment</option>
-          <option value="CO_DIRECTOR">Co-Director (Board)</option>
-          <option value="CO_OFFICER">Co-Officer (Corporate)</option>
-          <option value="CO_EXECUTIVE">Co-Executive</option>
-          <option value="MEMBERSHIP">Shared Membership / Affiliation</option>
-          <option value="ADVISORY">Advisory / Trustee</option>
-          <option value="DONATION">Political Donation</option>
-          <option value="LOBBYING">Lobbying</option>
-          <option value="TRAVEL_MET">Travel or Documented Meeting</option>
-          <option value="PUBLIC_OFFICE">Held Public Office</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="sug-object">Person/Organization B (Object)</label>
-        <input type="text" id="sug-object" required placeholder="e.g. Bill Clinton">
-      </div>
-      <div class="form-group">
-        <label for="sug-source-name">Source Name</label>
-        <input type="text" id="sug-source-name" required placeholder="e.g. SEC DEF 14A, NY Times, LittleSis">
-      </div>
-      <div class="form-group">
-        <label for="sug-source-url">Source URL (Mandatory verification link)</label>
-        <input type="url" id="sug-source-url" required placeholder="https://example.com/source-doc">
-      </div>
-      <div class="form-group">
-        <label for="sug-snippet">Supporting Quote / Snippet (Required proof text)</label>
-        <textarea id="sug-snippet" required rows="3" placeholder="Paste the exact text or sentence from the source that proves this connection..."></textarea>
-      </div>
-      <div class="form-group">
-        <label for="sug-email">Your Email (Optional, used for notification only)</label>
-        <input type="email" id="sug-email" placeholder="you@example.com">
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
-        <button type="submit" id="sug-submit-btn">Submit Suggestion</button>
-      </div>
-    </form>
+    </div>
+    
+    <!-- Tab B: Manual Entry -->
+    <div id="content-manual" class="tab-content">
+      <form id="suggest-manual-form" onsubmit="submitManualSuggestion(event)">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="form-group">
+            <label for="sug-manual-subject">Person A (Subject)</label>
+            <input type="text" id="sug-manual-subject" required placeholder="e.g. Bonnie R. Cohen">
+          </div>
+          <div class="form-group">
+            <label for="sug-manual-object">Person B (Object)</label>
+            <input type="text" id="sug-manual-object" required placeholder="e.g. Louis R. Cohen">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-predicate">Relationship (Predicate)</label>
+          <select id="sug-manual-predicate" required>
+            <option value="" disabled selected>Select relationship type...</option>
+            <option value="FAMILY">Family / Spouse</option>
+            <option value="FRIEND">Friend / Social</option>
+            <option value="EMPLOYMENT">Employment</option>
+            <option value="CO_DIRECTOR">Co-Director (Board)</option>
+            <option value="CO_OFFICER">Co-Officer (Corporate)</option>
+            <option value="CO_EXECUTIVE">Co-Executive</option>
+            <option value="MEMBERSHIP">Shared Membership / Affiliation</option>
+            <option value="ADVISORY">Advisory / Trustee</option>
+            <option value="DONATION">Political Donation</option>
+            <option value="LOBBYING">Lobbying</option>
+            <option value="TRAVEL_MET">Travel or Documented Meeting</option>
+            <option value="PUBLIC_OFFICE">Held Public Office</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-source-name">Source Name</label>
+          <input type="text" id="sug-manual-source-name" required placeholder="e.g. Senate Confirmation Document">
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-source-url">Source URL (Verification Link)</label>
+          <input type="url" id="sug-manual-source-url" required placeholder="https://example.com/proof">
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-snippet">Supporting Snippet / Quote</label>
+          <textarea id="sug-manual-snippet" required rows="2" placeholder="Exact quote proving the relationship..."></textarea>
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-email">Your Email (Optional)</label>
+          <input type="email" id="sug-manual-email" placeholder="you@example.com">
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
+          <button type="submit" id="sug-manual-submit-btn">Submit Connection</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <!-- Dispute Connection Modal -->
@@ -1279,23 +1411,161 @@ function closeAllModals() {
   document.getElementById('modal-overlay').classList.remove('show');
   document.getElementById('suggest-modal').classList.remove('show');
   document.getElementById('dispute-modal').classList.remove('show');
+  
+  // Clean up any AI parsing state
+  document.getElementById('ai-parsed-results').style.display = 'none';
+  document.getElementById('suggest-ai-form').reset();
+  document.getElementById('suggest-form').reset();
+  document.getElementById('suggest-manual-form').reset();
+}
+
+function switchSuggestTab(tabName) {
+  // Tabs
+  document.getElementById('tab-ai').classList.toggle('active', tabName === 'ai');
+  document.getElementById('tab-manual').classList.toggle('active', tabName === 'manual');
+  
+  // Content
+  document.getElementById('content-ai').classList.toggle('active', tabName === 'ai');
+  document.getElementById('content-manual').classList.toggle('active', tabName === 'manual');
+}
+
+async function analyzeAIProof(event) {
+  event.preventDefault();
+  const btn = document.getElementById('ai-analyze-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '⚡ Analyzing proof with AI...';
+  btn.disabled = true;
+  
+  const text = document.getElementById('sug-ai-text').value;
+  try {
+    const res = await fetch('/api/extract-proof', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    const d = await res.json();
+    if (d.success && d.claims && d.claims.length > 0) {
+      const listContainer = document.getElementById('ai-parsed-list');
+      listContainer.innerHTML = ''; // reset
+      
+      window._extractedClaims = d.claims; // save to global variable
+      
+      d.claims.forEach((claim, idx) => {
+        const div = document.createElement('div');
+        div.className = 'claim-card';
+        
+        let html = '<div class="claim-card-header">';
+        html += '  <input type="checkbox" id="claim-check-' + idx + '" class="claim-card-check" checked>';
+        html += '  <span class="claim-card-num">Link #' + (idx + 1) + '</span>';
+        html += '</div>';
+        
+        html += '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">';
+        html += '  <div class="form-group"><label>Person A</label><input type="text" id="claim-sub-' + idx + '" value="' + escHtml(claim.subject || '') + '" required></div>';
+        html += '  <div class="form-group"><label>Person B</label><input type="text" id="claim-obj-' + idx + '" value="' + escHtml(claim.object || '') + '" required></div>';
+        html += '</div>';
+        
+        html += '<div class="form-group"><label>Relationship</label>';
+        html += '  <select id="claim-pred-' + idx + '" required>';
+        const preds = ['FAMILY', 'FRIEND', 'EMPLOYMENT', 'CO_DIRECTOR', 'CO_OFFICER', 'CO_EXECUTIVE', 'MEMBERSHIP', 'ADVISORY', 'DONATION', 'LOBBYING', 'TRAVEL_MET', 'PUBLIC_OFFICE'];
+        preds.forEach(p => {
+          html += '    <option value="' + p + '"' + (claim.predicate === p ? ' selected' : '') + '>' + p.replace(/_/g, ' ') + '</option>';
+        });
+        html += '  </select>';
+        html += '</div>';
+        
+        html += '<div class="form-group"><label>Source Name</label><input type="text" id="claim-src-' + idx + '" value="' + escHtml(claim.source_name || '') + '" required></div>';
+        html += '<div class="form-group"><label>Source URL</label><input type="url" id="claim-url-' + idx + '" value="' + escHtml(claim.source_url || '') + '"></div>';
+        html += '<div class="form-group"><label>Supporting Snippet</label><textarea id="claim-snip-' + idx + '" required rows="2">' + escHtml(claim.snippet || '') + '</textarea></div>';
+        
+        div.innerHTML = html;
+        listContainer.appendChild(div);
+      });
+      
+      // Reveal the review panel
+      document.getElementById('ai-parsed-results').style.display = 'block';
+    } else {
+      alert('AI Extraction Error: ' + (d.error || 'No connections could be found in the pasted text. Try entering details manually in Tab B.'));
+    }
+  } catch (e) {
+    alert('Network error analyzing proof: ' + e.message);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
 }
 
 async function submitSuggestion(event) {
   event.preventDefault();
   const btn = document.getElementById('sug-submit-btn');
   const oldText = btn.textContent;
-  btn.textContent = '\u23f3 Submitting...';
+  btn.textContent = '⏳ Submitting...';
+  btn.disabled = true;
+
+  const email = document.getElementById('sug-email').value || null;
+  const claims = window._extractedClaims || [];
+  const submissions = [];
+  
+  claims.forEach((_, idx) => {
+    const isChecked = document.getElementById('claim-check-' + idx).checked;
+    if (isChecked) {
+      submissions.push({
+        subject: document.getElementById('claim-sub-' + idx).value,
+        predicate: document.getElementById('claim-pred-' + idx).value,
+        object: document.getElementById('claim-obj-' + idx).value,
+        source_name: document.getElementById('claim-src-' + idx).value,
+        source_url: document.getElementById('claim-url-' + idx).value,
+        snippet: document.getElementById('claim-snip-' + idx).value,
+        email: email
+      });
+    }
+  });
+
+  if (submissions.length === 0) {
+    alert('Please check at least one connection to submit!');
+    btn.textContent = oldText;
+    btn.disabled = false;
+    return;
+  }
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let payload of submissions) {
+    try {
+      const res = await fetch('/api/suggest-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const d = await res.json();
+      if (d.success) successCount++;
+      else failCount++;
+    } catch (e) {
+      failCount++;
+    }
+  }
+
+  alert('Successfully submitted ' + successCount + ' connection' + (successCount !== 1 ? 's' : '') + ' for review!' + (failCount > 0 ? ' (' + failCount + ' failed)' : ''));
+  closeAllModals();
+  btn.textContent = oldText;
+  btn.disabled = false;
+}
+
+async function submitManualSuggestion(event) {
+  event.preventDefault();
+  const btn = document.getElementById('sug-manual-submit-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '⏳ Submitting...';
   btn.disabled = true;
 
   const payload = {
-    subject: document.getElementById('sug-subject').value,
-    predicate: document.getElementById('sug-predicate').value,
-    object: document.getElementById('sug-object').value,
-    source_name: document.getElementById('sug-source-name').value,
-    source_url: document.getElementById('sug-source-url').value,
-    snippet: document.getElementById('sug-snippet').value,
-    email: document.getElementById('sug-email').value || null
+    subject: document.getElementById('sug-manual-subject').value,
+    predicate: document.getElementById('sug-manual-predicate').value,
+    object: document.getElementById('sug-manual-object').value,
+    source_name: document.getElementById('sug-manual-source-name').value,
+    source_url: document.getElementById('sug-manual-source-url').value,
+    snippet: document.getElementById('sug-manual-snippet').value,
+    email: document.getElementById('sug-manual-email').value || null
   };
 
   try {
@@ -1307,7 +1577,6 @@ async function submitSuggestion(event) {
     const d = await res.json();
     if (d.success) {
       alert(d.message);
-      document.getElementById('suggest-form').reset();
       closeAllModals();
     } else {
       alert('Error: ' + d.error);
@@ -1324,7 +1593,7 @@ async function submitDispute(event) {
   event.preventDefault();
   const btn = document.getElementById('disp-submit-btn');
   const oldText = btn.textContent;
-  btn.textContent = '\u23f3 Submitting...';
+  btn.textContent = '⏳ Submitting...';
   btn.disabled = true;
 
   const payload = {
