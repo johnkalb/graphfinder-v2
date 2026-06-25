@@ -1,11 +1,12 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
-import os, pickle, json
+import os, pickle, json, sqlite3
 from pathlib import Path
 from typing import Optional
 import networkx as nx
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 import uvicorn
 
 app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
@@ -542,6 +543,130 @@ async def category_info(cat: str = Query(default="")):
 async def methodology():
     return {"text": _METHODOLOGY}
 
+# --- USER CONTRIBUTION & QUALITY CONTROL (MVP PHASE 1) ---
+
+class ExtractRequest(BaseModel):
+    text: str = Field(..., min_length=10, max_length=15000)
+
+@app.post("/api/extract-proof")
+async def extract_proof(req: ExtractRequest):
+    try:
+        import requests
+        # 1. Read key from .env file
+        google_key = None
+        env_paths = [
+            Path("/c/Users/johnk/AppData/Local/hermes/.env"),
+            Path("C:/Users/johnk/AppData/Local/hermes/.env"),
+            Path("/c/Users/johnk/.hermes/.env"),
+            DATA_DIR.parent / ".env",
+            DATA_DIR.parent.parent / ".env"
+        ]
+        for p in env_paths:
+            if p.exists():
+                for line in open(p, encoding="utf-8", errors="ignore"):
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, v = line.split('=', 1)
+                        if k.strip() == "GOOGLE_API_KEY":
+                            google_key = v.strip().strip("'").strip('"')
+                            break
+                if google_key:
+                    break
+                    
+        if not google_key:
+            google_key = os.environ.get("GOOGLE_API_KEY")
+            
+        if not google_key:
+            return JSONResponse(status_code=500, content={"success": False, "error": "Google API key not found in server environment."})
+            
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={google_key}"
+        
+        prompt = f"""
+Analyze the following unstructured raw text containing an AI chat transcript or proof of a connection between two entities.
+Extract the core relationship connection.
+
+Format the output strictly as a JSON object matching this schema (do NOT wrap in markdown codeblocks or quotes):
+{{
+  "subject": "The main person or organization A (proper capitalization, e.g. Bonnie R. Cohen)",
+  "predicate": "The exact relationship predicate from this controlled list: FAMILY, FRIEND, EMPLOYMENT, CO_DIRECTOR, CO_OFFICER, CO_EXECUTIVE, MEMBERSHIP, ADVISORY, DONATION, LOBBYING, TRAVEL_MET, PUBLIC_OFFICE",
+  "object": "The secondary person or organization B (proper capitalization, e.g. Louis R. Cohen)",
+  "source_name": "The authoritative source publication, book, record, or site (e.g. U.S. Senate Confirmation Questionnaire)",
+  "source_url": "The source URL link if mentioned in text (or empty string if not found)",
+  "snippet": "A brief quote, sentence, or snippet from the text proving this connection"
+}}
+Ensure the returned JSON is valid and matches the fields exactly. If multiple relationships are mentioned, extract the strongest or most specific one.
+
+Text to analyze:
+---
+{req.text}
+---
+"""
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return JSONResponse(status_code=500, content={"success": False, "error": f"Gemini API error: {response.text}"})
+            
+        data = response.json()
+        content_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        parsed = json.loads(content_text)
+        return {"success": True, "claim": parsed}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+class SuggestionRequest(BaseModel):
+    subject: str = Field(..., min_length=2, max_length=100)
+    predicate: str = Field(..., min_length=2, max_length=50)
+    object: str = Field(..., min_length=2, max_length=100)
+    source_name: str = Field(..., min_length=2, max_length=100)
+    source_url: str = Field(...)
+    snippet: str = Field(..., min_length=5, max_length=1000)
+    email: Optional[str] = None
+
+class DisputeRequest(BaseModel):
+    edge_key: str = Field(..., min_length=2, max_length=250)
+    reason: str = Field(..., min_length=5, max_length=1000)
+    source_url: Optional[str] = None
+    email: Optional[str] = None
+
+@app.post("/api/suggest-link")
+async def suggest_link(req: SuggestionRequest, request: Request):
+    try:
+        email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
+        db_path = DATA_DIR / "user_submissions.db"
+        conn = sqlite3.connect(str(db_path))
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO claims (subject, predicate, object, source_name, source_url, snippet, user_email)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (req.subject.strip(), req.predicate.strip(), req.object.strip(), req.source_name.strip(), req.source_url.strip(), req.snippet.strip(), email))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Thank you! Your connection suggestion has been submitted for review."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.post("/api/dispute-link")
+async def dispute_link(req: DisputeRequest, request: Request):
+    try:
+        email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
+        db_path = DATA_DIR / "user_submissions.db"
+        conn = sqlite3.connect(str(db_path))
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO disputes (edge_key, reason, source_url, user_email)
+            VALUES (?, ?, ?, ?)
+        """, (req.edge_key.strip(), req.reason.strip(), req.source_url.strip() if req.source_url else None, email))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Thank you! Your dispute/correction has been submitted for review."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(HTML_TEMPLATE)
@@ -661,6 +786,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .psi-section button:hover { background: #388bfd; }
   .psi-note { color: #8b949e; font-size: 0.8rem; margin-top: 0.5rem; }
   .psi-result { display: inline-block; margin-left: 1rem; font-weight: 600; color: #3fb950; }
+  
+  /* Modal system for User Submissions */
+  .modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+           background: #1c2128; border: 1px solid #30363d; border-radius: 8px;
+           padding: 1.5rem; max-width: 500px; width: 90%; z-index: 250; box-shadow: 0 8px 32px #00000088; }
+  .modal.show { display: block; }
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                   background: rgba(0, 0, 0, 0.6); z-index: 240; }
+  .modal-overlay.show { display: block; }
+  .modal-title { font-weight: 600; color: #e6edf3; margin-bottom: 1rem; font-size: 1.1rem; }
+  .modal-close { float: right; cursor: pointer; color: #8b949e; font-size: 1.2rem; }
+  .form-group { margin-bottom: 1rem; text-align: left; }
+  .form-group label { display: block; font-size: 0.85rem; color: #8b949e; margin-bottom: 0.3rem; }
+  .form-group input, .form-group select, .form-group textarea {
+    width: 100%; background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 6px; padding: 0.5rem 0.8rem; font-size: 0.9rem; outline: none; }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #58a6ff; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem; }
+  
+  /* Tabs UI for suggest link modal */
+  .tabs { display: flex; border-bottom: 1px solid #30363d; margin-bottom: 1rem; }
+  .tab { padding: 0.5rem 1rem; cursor: pointer; color: #8b949e; border-bottom: 2px solid transparent; font-size: 0.9rem; font-weight: 600; }
+  .tab.active { color: #58a6ff; border-color: #58a6ff; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
 </style>
 </head>
 <body>
@@ -694,7 +844,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="tgt-selected"></div>
   </div>
 
-  <button id="find-btn" onclick="findPath()" disabled>🔍 Find Path</button>
+  <div style="display: flex; gap: 10px; align-items: center; margin-top: 15px;">
+    <button id="find-btn" onclick="findPath()" disabled>🔍 Find Path</button>
+    <button id="suggest-btn" class="secondary-btn" style="margin-top: 0; padding: 0.7rem 1.5rem;" onclick="showSuggestModal()">➕ Suggest Link</button>
+  </div>
   <label style="display:block; margin-top:10px; font-size:0.82rem; color:#8b949e; cursor:pointer;">
     <input type="checkbox" id="include-deceased" onchange="if(state.src.selected&&state.tgt.selected) findPath();" style="vertical-align:middle; margin-right:6px;">
     Include deceased people as go-betweens (off by default — the dead can&rsquo;t make introductions, but may reveal historical connections)
@@ -717,6 +870,168 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div id="tooltip" class="tooltip" onclick="hideTooltip()">
     <span class="close" onclick="hideTooltip()">✕</span>
     <div id="tooltip-content"></div>
+  </div>
+
+  <!-- Modal Overlay -->
+  <div id="modal-overlay" class="modal-overlay" onclick="closeAllModals()"></div>
+
+  <!-- Suggest Connection Modal -->
+  <div id="suggest-modal" class="modal" style="max-width: 550px;">
+    <span class="modal-close" onclick="closeAllModals()">✕</span>
+    <div class="modal-title">➕ Suggest a New Connection</div>
+    
+    <div class="tabs">
+      <div id="tab-ai" class="tab active" onclick="switchSuggestTab('ai')">🤖 Paste AI Proof (Recommended)</div>
+      <div id="tab-manual" class="tab" onclick="switchSuggestTab('manual')">📝 Manual Entry</div>
+    </div>
+    
+    <!-- Tab A: AI Extraction -->
+    <div id="content-ai" class="tab-content active">
+      <form id="suggest-ai-form" onsubmit="analyzeAIProof(event)">
+        <div class="form-group">
+          <label for="sug-ai-text">Paste Copilot, ChatGPT, or Claude conversation proof</label>
+          <textarea id="sug-ai-text" required rows="6" placeholder="Paste the full chat output or proof text here. e.g. 'Louis R. Cohen is married to Bonnie R. Cohen, as verified in her Senate questionnaire...'"></textarea>
+        </div>
+        <button type="submit" id="ai-analyze-btn" style="width:100%; background:#1f6feb;">⚡ Analyze Proof with AI</button>
+      </form>
+      
+      <!-- AI Parsed Results (Hidden by default, shown after API extracts) -->
+      <div id="ai-parsed-results" style="display:none; margin-top:1.5rem; border-top:1px dashed #30363d; padding-top:1rem;">
+        <div style="font-size:0.85rem; font-weight:600; color:#58a6ff; margin-bottom:0.8rem;">✓ Successfully Extracted (Review & edit below if needed):</div>
+        <form id="suggest-form" onsubmit="submitSuggestion(event)">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label for="sug-subject">Person A (Subject)</label>
+              <input type="text" id="sug-subject" required>
+            </div>
+            <div class="form-group">
+              <label for="sug-object">Person B (Object)</label>
+              <input type="text" id="sug-object" required>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="sug-predicate">Relationship (Predicate)</label>
+            <select id="sug-predicate" required>
+              <option value="FAMILY">Family / Spouse</option>
+              <option value="FRIEND">Friend / Social</option>
+              <option value="EMPLOYMENT">Employment</option>
+              <option value="CO_DIRECTOR">Co-Director (Board)</option>
+              <option value="CO_OFFICER">Co-Officer (Corporate)</option>
+              <option value="CO_EXECUTIVE">Co-Executive</option>
+              <option value="MEMBERSHIP">Shared Membership / Affiliation</option>
+              <option value="ADVISORY">Advisory / Trustee</option>
+              <option value="DONATION">Political Donation</option>
+              <option value="LOBBYING">Lobbying</option>
+              <option value="TRAVEL_MET">Travel or Documented Meeting</option>
+              <option value="PUBLIC_OFFICE">Held Public Office</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="sug-source-name">Source Name</label>
+            <input type="text" id="sug-source-name" required>
+          </div>
+          <div class="form-group">
+            <label for="sug-source-url">Source URL (Verification Link)</label>
+            <input type="url" id="sug-source-url">
+          </div>
+          <div class="form-group">
+            <label for="sug-snippet">Supporting Snippet / Quote</label>
+            <textarea id="sug-snippet" required rows="2"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="sug-email">Your Email (Optional)</label>
+            <input type="email" id="sug-email" placeholder="you@example.com">
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
+            <button type="submit" id="sug-submit-btn">Submit Structured Connection</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    
+    <!-- Tab B: Manual Entry -->
+    <div id="content-manual" class="tab-content">
+      <form id="suggest-manual-form" onsubmit="submitManualSuggestion(event)">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="form-group">
+            <label for="sug-manual-subject">Person A (Subject)</label>
+            <input type="text" id="sug-manual-subject" required placeholder="e.g. Bonnie R. Cohen">
+          </div>
+          <div class="form-group">
+            <label for="sug-manual-object">Person B (Object)</label>
+            <input type="text" id="sug-manual-object" required placeholder="e.g. Louis R. Cohen">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-predicate">Relationship (Predicate)</label>
+          <select id="sug-manual-predicate" required>
+            <option value="" disabled selected>Select relationship type...</option>
+            <option value="FAMILY">Family / Spouse</option>
+            <option value="FRIEND">Friend / Social</option>
+            <option value="EMPLOYMENT">Employment</option>
+            <option value="CO_DIRECTOR">Co-Director (Board)</option>
+            <option value="CO_OFFICER">Co-Officer (Corporate)</option>
+            <option value="CO_EXECUTIVE">Co-Executive</option>
+            <option value="MEMBERSHIP">Shared Membership / Affiliation</option>
+            <option value="ADVISORY">Advisory / Trustee</option>
+            <option value="DONATION">Political Donation</option>
+            <option value="LOBBYING">Lobbying</option>
+            <option value="TRAVEL_MET">Travel or Documented Meeting</option>
+            <option value="PUBLIC_OFFICE">Held Public Office</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-source-name">Source Name</label>
+          <input type="text" id="sug-manual-source-name" required placeholder="e.g. Senate Confirmation Document">
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-source-url">Source URL (Verification Link)</label>
+          <input type="url" id="sug-manual-source-url" required placeholder="https://example.com/proof">
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-snippet">Supporting Snippet / Quote</label>
+          <textarea id="sug-manual-snippet" required rows="2" placeholder="Exact quote proving the relationship..."></textarea>
+        </div>
+        <div class="form-group">
+          <label for="sug-manual-email">Your Email (Optional)</label>
+          <input type="email" id="sug-manual-email" placeholder="you@example.com">
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
+          <button type="submit" id="sug-manual-submit-btn">Submit Connection</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Dispute Connection Modal -->
+  <div id="dispute-modal" class="modal">
+    <span class="modal-close" onclick="closeAllModals()">✕</span>
+    <div class="modal-title">⚠️ Dispute or Correct a Link</div>
+    <form id="dispute-form" onsubmit="submitDispute(event)">
+      <input type="hidden" id="disp-edge-key">
+      <div class="form-group">
+        <label>Disputing Link:</label>
+        <div id="disp-edge-display" style="font-weight:600; font-size:0.95rem; color:#58a6ff; padding: 0.3rem 0;"></div>
+      </div>
+      <div class="form-group">
+        <label for="disp-reason">Why is this connection incorrect or misleading?</label>
+        <textarea id="disp-reason" required rows="4" placeholder="Explain the error (e.g. namesakes conflated, outdated role, wrong citation)..."></textarea>
+      </div>
+      <div class="form-group">
+        <label for="disp-source-url">Corrective Source URL (Optional verification link)</label>
+        <input type="url" id="disp-source-url" placeholder="https://example.com/proof">
+      </div>
+      <div class="form-group">
+        <label for="disp-email">Your Email (Optional, used for notification only)</label>
+        <input type="email" id="disp-email" placeholder="you@example.com">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
+        <button type="submit" id="disp-submit-btn" style="background:#d1242f;">Submit Dispute</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -1000,6 +1315,14 @@ async function showRelTooltip(event, rtype, src, tgt) {
       } catch(e) {}
     }
 
+    // Append Dispute/Correction link at the bottom of the tooltip
+    if (src && tgt) {
+      const edgeKey = src + '|' + tgt + '|' + rtype;
+      html += '<div style="margin-top:12px;border-top:1px solid #30363d;padding-top:8px;text-align:right;">';
+      html += '  <span class="tip-method-link" onclick="event.stopPropagation(); showDisputeModal(\'' + escHtml(edgeKey) + '\')">⚠️ Dispute / Correct this link</span>';
+      html += '</div>';
+    }
+
     content.innerHTML = html;
     document.getElementById('tooltip').classList.add('show');
   } catch(e) { console.error(e); }
@@ -1086,6 +1409,197 @@ async function showMethodology() {
 
 function hideTooltip() {
   document.getElementById('tooltip').classList.remove('show');
+}
+
+/* Modal system handlers for Suggest & Dispute forms */
+function showSuggestModal() {
+  document.getElementById('modal-overlay').classList.add('show');
+  document.getElementById('suggest-modal').classList.add('show');
+}
+
+function showDisputeModal(edgeKey) {
+  document.getElementById('modal-overlay').classList.add('show');
+  document.getElementById('dispute-modal').classList.add('show');
+  document.getElementById('disp-edge-key').value = edgeKey;
+  
+  // Format edgeKey for display (e.g. "Donald Trump ↔ Bill Clinton (FAMILY)")
+  const parts = edgeKey.split('|');
+  if (parts.length === 3) {
+    document.getElementById('disp-edge-display').textContent = parts[0] + ' \u2194 ' + parts[1] + ' (' + parts[2].replace(/_/g, ' ') + ')';
+  } else {
+    document.getElementById('disp-edge-display').textContent = edgeKey;
+  }
+}
+
+function closeAllModals() {
+  document.getElementById('modal-overlay').classList.remove('show');
+  document.getElementById('suggest-modal').classList.remove('show');
+  document.getElementById('dispute-modal').classList.remove('show');
+  
+  // Clean up any AI parsing state
+  document.getElementById('ai-parsed-results').style.display = 'none';
+  document.getElementById('suggest-ai-form').reset();
+  document.getElementById('suggest-form').reset();
+  document.getElementById('suggest-manual-form').reset();
+}
+
+function switchSuggestTab(tabName) {
+  // Tabs
+  document.getElementById('tab-ai').classList.toggle('active', tabName === 'ai');
+  document.getElementById('tab-manual').classList.toggle('active', tabName === 'manual');
+  
+  // Content
+  document.getElementById('content-ai').classList.toggle('active', tabName === 'ai');
+  document.getElementById('content-manual').classList.toggle('active', tabName === 'manual');
+}
+
+async function analyzeAIProof(event) {
+  event.preventDefault();
+  const btn = document.getElementById('ai-analyze-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '⚡ Analyzing proof with AI...';
+  btn.disabled = true;
+  
+  const text = document.getElementById('sug-ai-text').value;
+  try {
+    const res = await fetch('/api/extract-proof', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    const d = await res.json();
+    if (d.success && d.claim) {
+      // Populates the structured review form
+      document.getElementById('sug-subject').value = d.claim.subject || '';
+      document.getElementById('sug-object').value = d.claim.object || '';
+      document.getElementById('sug-predicate').value = d.claim.predicate || 'FAMILY';
+      document.getElementById('sug-source-name').value = d.claim.source_name || '';
+      document.getElementById('sug-source-url').value = d.claim.source_url || '';
+      document.getElementById('sug-snippet').value = d.claim.snippet || '';
+      
+      // Reveal the review panel
+      document.getElementById('ai-parsed-results').style.display = 'block';
+    } else {
+      alert('AI Extraction Error: ' + (d.error || 'Failed to analyze text. Please enter the details manually in Tab B.'));
+    }
+  } catch (e) {
+    alert('Network error analyzing proof: ' + e.message);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
+}
+
+async function submitSuggestion(event) {
+  event.preventDefault();
+  const btn = document.getElementById('sug-submit-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '⏳ Submitting...';
+  btn.disabled = true;
+
+  const payload = {
+    subject: document.getElementById('sug-subject').value,
+    predicate: document.getElementById('sug-predicate').value,
+    object: document.getElementById('sug-object').value,
+    source_name: document.getElementById('sug-source-name').value,
+    source_url: document.getElementById('sug-source-url').value,
+    snippet: document.getElementById('sug-snippet').value,
+    email: document.getElementById('sug-email').value || null
+  };
+
+  try {
+    const res = await fetch('/api/suggest-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.success) {
+      alert(d.message);
+      closeAllModals();
+    } else {
+      alert('Error: ' + d.error);
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
+}
+
+async function submitManualSuggestion(event) {
+  event.preventDefault();
+  const btn = document.getElementById('sug-manual-submit-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '⏳ Submitting...';
+  btn.disabled = true;
+
+  const payload = {
+    subject: document.getElementById('sug-manual-subject').value,
+    predicate: document.getElementById('sug-manual-predicate').value,
+    object: document.getElementById('sug-manual-object').value,
+    source_name: document.getElementById('sug-manual-source-name').value,
+    source_url: document.getElementById('sug-manual-source-url').value,
+    snippet: document.getElementById('sug-manual-snippet').value,
+    email: document.getElementById('sug-manual-email').value || null
+  };
+
+  try {
+    const res = await fetch('/api/suggest-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.success) {
+      alert(d.message);
+      closeAllModals();
+    } else {
+      alert('Error: ' + d.error);
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
+}
+
+async function submitDispute(event) {
+  event.preventDefault();
+  const btn = document.getElementById('disp-submit-btn');
+  const oldText = btn.textContent;
+  btn.textContent = '⏳ Submitting...';
+  btn.disabled = true;
+
+  const payload = {
+    edge_key: document.getElementById('disp-edge-key').value,
+    reason: document.getElementById('disp-reason').value,
+    source_url: document.getElementById('disp-source-url').value || null,
+    email: document.getElementById('disp-email').value || null
+  };
+
+  try {
+    const res = await fetch('/api/dispute-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.success) {
+      alert(d.message);
+      document.getElementById('dispute-form').reset();
+      closeAllModals();
+    } else {
+      alert('Error: ' + d.error);
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = false;
+  }
 }
 
 function escHtml(s) {
