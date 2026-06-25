@@ -227,6 +227,16 @@ def _get_label(node):
         return _canonical_map[node].get("canonical", node)
     return node
 
+_node_sci_map = None
+def _get_node_sci(name: str) -> int:
+    global _node_sci_map
+    if _node_sci_map is None:
+        _node_sci_map = {}
+        if _search_index:
+            for entry in _search_index:
+                _node_sci_map[entry["canonical"].lower()] = entry.get("sci", 1)
+    return _node_sci_map.get(name.lower(), 1)
+
 def _find_entry(query):
     _load_search()
     q = query.lower().strip()
@@ -333,9 +343,10 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5, include_deceased=False):
             step_objects = []
             for j in range(len(path)):
                 _dd = deceased.get(path[j].lower()) if deceased else None
-                step_objects.append({"node": path[j], "label": _get_label(path[j]),
+                lbl = _get_label(path[j])
+                step_objects.append({"node": path[j], "label": lbl,
                                      "relation": None, "prob": None, "cats": None,
-                                     "deceased": _dd})
+                                     "deceased": _dd, "sci": _get_node_sci(lbl)})
             for j in range(len(path) - 1):
                 ed = _graph.get_edge_data(path[j], path[j + 1]) or {}
                 p = ed.get("prob", 0.5)
@@ -772,46 +783,6 @@ async def dispute_link(req: DisputeRequest, request: Request):
         return {"success": True, "message": "Thank you! Your dispute/correction has been submitted for review."}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
-
-@app.get("/api/key-debug")
-async def key_debug():
-    # 1. Read key from .env file
-    google_key = None
-    env_paths = [
-        Path("/c/Users/johnk/AppData/Local/hermes/.env"),
-        Path("C:/Users/johnk/AppData/Local/hermes/.env"),
-        Path("/c/Users/johnk/.hermes/.env"),
-        DATA_DIR.parent / ".env",
-        DATA_DIR.parent.parent / ".env"
-    ]
-    for p in env_paths:
-        if p.exists():
-            for line in open(p, encoding="utf-8", errors="ignore"):
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    k, v = line.split('=', 1)
-                    if k.strip() == "GOOGLE_API_KEY":
-                        google_key = v.strip().strip("'").strip('"')
-                        break
-            if google_key:
-                break
-                
-    source = "File"
-    if not google_key:
-        google_key = os.environ.get("GOOGLE_API_KEY")
-        source = "Environment"
-        
-    if not google_key:
-        return {"success": False, "error": "No key found anywhere."}
-        
-    return {
-        "success": True,
-        "source": source,
-        "length": len(google_key),
-        "starts_with": google_key[:10] + "...",
-        "ends_with": "..." + google_key[-5:] if len(google_key) > 5 else "...",
-        "ascii_codes": [ord(c) for c in google_key]
-    }
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -1252,12 +1223,13 @@ let searchTimeout = null;
     dd.innerHTML = items.map((item, i) => {
       let aliasHtml = '';
       const displayName = item.name || item.canonical;
+      const sciBadge = item.sci ? ' <span style="font-size:0.75rem; color:#58a6ff; background:#1f6feb22; padding:1px 5px; border-radius:10px; margin-left:5px; font-weight:600;" title="Social Capital Index (percentile rank)">' + item.sci + '</span>' : '';
       if (item.aliases && item.aliases.length > 0)
         aliasHtml = '<span class="alias">also: ' + escHtml(item.aliases.join(', ')) + '</span>';
       return '<div class="dropdown-item" data-index="' + i + '"'
         + ' onmousedown="selectItem(\'' + prefix + '\', ' + i + ')"'
         + ' onmouseover="highlightIdx(\'' + prefix + '\', ' + i + ')">'
-        + '<span class="name">' + escHtml(displayName) + '</span>'
+        + '<span class="name">' + escHtml(displayName) + sciBadge + '</span>'
         + '<span class="sub">' + (item.count > 1 ? '×' + item.count : '') + '</span>'
         + aliasHtml
         + '</div>';
@@ -1381,8 +1353,11 @@ async function findPath() {
             }
           }
           let nodeHtml = escHtml(step.label);
+          if (step.sci) {
+            nodeHtml += ' <span title="Social Capital Index: ' + step.sci + ' (percentile rank)" style="font-size:0.72rem; color:#58a6ff; background:#1f6feb22; border:1px solid #1f6feb44; border-radius:10px; padding:1px 5px; margin-left:3px; font-weight:600;">' + step.sci + '</span>';
+          }
           if (step.deceased) {
-            nodeHtml += ' <span title="Deceased ' + escHtml(step.deceased) + ' \u2014 cannot make an introduction" style="color:#8b949e;font-size:0.8em;">\u271d</span>';
+            nodeHtml += ' <span title="Deceased ' + escHtml(step.deceased) + ' \u2014 cannot make an introduction" style="color:#8b949e;font-size:0.8em;margin-left:3px;">\u271d</span>';
           }
           html += '<span class="step-node">' + nodeHtml + '</span>';
         });
