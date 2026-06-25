@@ -105,7 +105,11 @@ METHODOLOGY = (
     "tunable parameter \u2014 a motivated, system-guided search (where you stay involved at every step and each "
     "person need only make one easy introduction) plausibly does better than the passive 37%. The \u201cbest path\u201d "
     "shown is the one with the highest combined probability, which is not always the shortest. Alternate paths "
-    "are ranked by probability so you can apply your own private knowledge."
+    "are ranked by probability so you can apply your own private knowledge.\n\n"
+    "Each person also receives a Social Capital Index (SCI) from 1 to 100. This is a percentile score derived from "
+    "PageRank centrality on the full social network, weighted by link probabilities. SCI is not a moral judgment and "
+    "does not mean importance in every domain; it is simply a structural measure of how strongly a person sits inside "
+    "the network of other well-connected people. A high SCI suggests elite embeddedness and brokerage potential."
 )
 
 _DEFAULT_P = CATEGORY_PROB["OTHER"]
