@@ -464,6 +464,107 @@ async def get_evidence(src: str = Query(...), tgt: str = Query(...), rel: str = 
         return {"evidence": [{"source": srcinfo[0], "snippet": "", "doc": "", "page": "", "url": srcinfo[1]}]}
     return {"evidence": []}
 
+def _get_google_key():
+    google_key = None
+    env_paths = [
+        Path("/c/Users/johnk/AppData/Local/hermes/.env"),
+        Path("C:/Users/johnk/AppData/Local/hermes/.env"),
+        Path("/c/Users/johnk/.hermes/.env"),
+        DATA_DIR.parent / ".env",
+        DATA_DIR.parent.parent / ".env"
+    ]
+    for p in env_paths:
+        if p.exists():
+            for line in open(p, encoding="utf-8", errors="ignore"):
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    if k.strip() == "GOOGLE_API_KEY":
+                        google_key = v.strip().strip("'").strip('"')
+                        break
+            if google_key:
+                break
+                
+    if not google_key:
+        google_key = os.environ.get("GOOGLE_API_KEY")
+    return google_key
+
+def _generate_path_narrative(path_obj):
+    """Generate a highly professional 1-paragraph narrative summary of the best path using Gemini 2.5 Flash."""
+    try:
+        google_key = _get_google_key()
+        if not google_key:
+            return None
+            
+        import requests
+        
+        # Build path context representation
+        steps = path_obj["path"]
+        path_chain_desc = []
+        evidence_context = []
+        ev_idx = _load_evidence()
+        
+        for j in range(len(steps)):
+            label = steps[j]["label"]
+            path_chain_desc.append(label)
+            
+            if j > 0:
+                prev = steps[j-1]
+                relation = prev.get("relation")
+                prev_label = steps[j-1]["label"]
+                
+                # Fetch snippets
+                key = f"{prev_label.lower()}|{label.lower()}|{relation}"
+                items = ev_idx.get(key, [])
+                snippets = []
+                for item in items:
+                    snip = item.get("snippet", "").strip()
+                    src = item.get("source", "").strip()
+                    if snip:
+                        snippets.append(f"Source: {src} - '{snip}'")
+                
+                ev_str = "; ".join(snippets) if snippets else f"Extracted {relation} connection."
+                evidence_context.append(f"- {prev_label} is connected to {label} via '{relation}' ({ev_str})")
+                
+        chain_str = " \u2192 ".join(path_chain_desc)
+        evidence_str = "\n".join(evidence_context)
+        
+        prompt = f"""
+Write a highly professional, objective 1-paragraph narrative summary explaining this relationship path.
+This is for a political and business power network research intelligence tool.
+
+Path: {chain_str}
+Length: {path_obj['length']} hops
+Viability success rate: {path_obj.get('guided_probability', 0) * 100:.1f}% using Build My Path
+
+Citable source evidence for the connections:
+{evidence_str}
+
+Instructions:
+1. Explain who connects to whom and WHY, referencing the specific public records (e.g. board memberships, Senate questionnaires, tax filings, Spouses, etc.) from the evidence.
+2. Keep the summary strictly to **1 paragraph (max 4-5 sentences)**.
+3. Be highly objective, factual, and cautious. Avoid sensationalizing or implying any misconduct or conspiratorial insinuation. If there is a family relationship (like marriage), frame it as a standard social/family tie.
+4. Conclude with a practical note on the viability of this route (e.g. 'This represents a high-probability warm route because...').
+5. Output ONLY the raw paragraph text. Do not wrap in markdown quotes or codeblocks.
+"""
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={google_key}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "text/plain"} # get raw text response
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=25)
+        if response.status_code != 200:
+            return None
+            
+        data = response.json()
+        content_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return content_text
+    except Exception as e:
+        print("Error generating narrative:", e)
+        return None
+
 import hashlib
 _psi_names = None
 def _load_psi_names():
@@ -519,7 +620,12 @@ async def path(src_name: str = Query(default=""), tgt_name: str = Query(default=
                include_deceased: bool = Query(default=False)):
     if not src_name or not tgt_name:
         return {"error": "Both src_name and tgt_name required"}
-    return _find_path(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+    res = _find_path(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+    
+    # Generate AI Narrative Briefing for the best path (if found)
+    if "paths" in res and len(res["paths"]) > 0:
+        res["narrative"] = _generate_path_narrative(res["paths"][0])
+    return res
 
 @app.get("/api/relation-info")
 async def relation_info(rtype: str = Query(default="")):
@@ -583,22 +689,18 @@ async def extract_proof(req: ExtractRequest):
         
         prompt = f"""
 Analyze the following unstructured raw text containing an AI chat transcript or proof of a connection between two entities.
-Extract ALL valid relationship connections mentioned in the text.
+Extract the core relationship connection.
 
 Format the output strictly as a JSON object matching this schema (do NOT wrap in markdown codeblocks or quotes):
 {{
-  "claims": [
-    {{
-      "subject": "The main person or organization A (proper capitalization, e.g. Bonnie R. Cohen)",
-      "predicate": "The exact relationship predicate from this controlled list: FAMILY, FRIEND, EMPLOYMENT, CO_DIRECTOR, CO_OFFICER, CO_EXECUTIVE, MEMBERSHIP, ADVISORY, DONATION, LOBBYING, TRAVEL_MET, PUBLIC_OFFICE",
-      "object": "The secondary person or organization B (proper capitalization, e.g. Louis R. Cohen)",
-      "source_name": "The authoritative source publication, book, record, or site (e.g. U.S. Senate Confirmation Questionnaire)",
-      "source_url": "The source URL link if mentioned in text (or empty string if not found)",
-      "snippet": "A brief quote, sentence, or snippet from the text proving this connection"
-    }}
-  ]
+  "subject": "The main person or organization A (proper capitalization, e.g. Bonnie R. Cohen)",
+  "predicate": "The exact relationship predicate from this controlled list: FAMILY, FRIEND, EMPLOYMENT, CO_DIRECTOR, CO_OFFICER, CO_EXECUTIVE, MEMBERSHIP, ADVISORY, DONATION, LOBBYING, TRAVEL_MET, PUBLIC_OFFICE",
+  "object": "The secondary person or organization B (proper capitalization, e.g. Louis R. Cohen)",
+  "source_name": "The authoritative source publication, book, record, or site (e.g. U.S. Senate Confirmation Questionnaire)",
+  "source_url": "The source URL link if mentioned in text (or empty string if not found)",
+  "snippet": "A brief quote, sentence, or snippet from the text proving this connection"
 }}
-Ensure the returned JSON is valid and matches the fields exactly. Extract as many distinct public-record sourced connections as you can find in the chat history.
+Ensure the returned JSON is valid and matches the fields exactly. If multiple relationships are mentioned, extract the strongest or most specific one.
 
 Text to analyze:
 ---
@@ -618,7 +720,7 @@ Text to analyze:
         data = response.json()
         content_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         parsed = json.loads(content_text)
-        return {"success": True, "claims": parsed.get("claims", [])}
+        return {"success": True, "claim": parsed}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
@@ -670,6 +772,46 @@ async def dispute_link(req: DisputeRequest, request: Request):
         return {"success": True, "message": "Thank you! Your dispute/correction has been submitted for review."}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.get("/api/key-debug")
+async def key_debug():
+    # 1. Read key from .env file
+    google_key = None
+    env_paths = [
+        Path("/c/Users/johnk/AppData/Local/hermes/.env"),
+        Path("C:/Users/johnk/AppData/Local/hermes/.env"),
+        Path("/c/Users/johnk/.hermes/.env"),
+        DATA_DIR.parent / ".env",
+        DATA_DIR.parent.parent / ".env"
+    ]
+    for p in env_paths:
+        if p.exists():
+            for line in open(p, encoding="utf-8", errors="ignore"):
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    if k.strip() == "GOOGLE_API_KEY":
+                        google_key = v.strip().strip("'").strip('"')
+                        break
+            if google_key:
+                break
+                
+    source = "File"
+    if not google_key:
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        source = "Environment"
+        
+    if not google_key:
+        return {"success": False, "error": "No key found anywhere."}
+        
+    return {
+        "success": True,
+        "source": source,
+        "length": len(google_key),
+        "starts_with": google_key[:10] + "...",
+        "ends_with": "..." + google_key[-5:] if len(google_key) > 5 else "...",
+        "ascii_codes": [ord(c) for c in google_key]
+    }
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -815,12 +957,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .tab.active { color: #58a6ff; border-color: #58a6ff; }
   .tab-content { display: none; }
   .tab-content.active { display: block; }
-  
-  /* Multi-claim cards for AI proof extraction results */
-  .claim-card { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; position: relative; text-align: left; }
-  .claim-card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; border-bottom: 1px solid #30363d; padding-bottom: 0.5rem; }
-  .claim-card-num { font-weight: 700; color: #58a6ff; font-size: 0.9rem; }
-  .claim-card-check { width: auto !important; margin-right: 6px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -905,22 +1041,56 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <button type="submit" id="ai-analyze-btn" style="width:100%; background:#1f6feb;">⚡ Analyze Proof with AI</button>
       </form>
       
-      <!-- AI Parsed Results (Hidden by default, dynamically populated by JS after extraction) -->
+      <!-- AI Parsed Results (Hidden by default, shown after API extracts) -->
       <div id="ai-parsed-results" style="display:none; margin-top:1.5rem; border-top:1px dashed #30363d; padding-top:1rem;">
-        <div style="font-size:0.85rem; font-weight:600; color:#58a6ff; margin-bottom:0.8rem; text-align:left;">✓ AI Extracted Connections (Review & edit below):</div>
-        
-        <!-- List container where JavaScript will inject each claim card -->
-        <div id="ai-parsed-list" style="max-height: 250px; overflow-y: auto; padding-right: 5px; margin-bottom: 1rem;"></div>
-        
-        <!-- Consolidated submit section -->
+        <div style="font-size:0.85rem; font-weight:600; color:#58a6ff; margin-bottom:0.8rem;">✓ Successfully Extracted (Review & edit below if needed):</div>
         <form id="suggest-form" onsubmit="submitSuggestion(event)">
-          <div class="form-group" style="text-align:left;">
-            <label for="sug-email">Your Email (Optional, covers all checked above)</label>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label for="sug-subject">Person A (Subject)</label>
+              <input type="text" id="sug-subject" required>
+            </div>
+            <div class="form-group">
+              <label for="sug-object">Person B (Object)</label>
+              <input type="text" id="sug-object" required>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="sug-predicate">Relationship (Predicate)</label>
+            <select id="sug-predicate" required>
+              <option value="FAMILY">Family / Spouse</option>
+              <option value="FRIEND">Friend / Social</option>
+              <option value="EMPLOYMENT">Employment</option>
+              <option value="CO_DIRECTOR">Co-Director (Board)</option>
+              <option value="CO_OFFICER">Co-Officer (Corporate)</option>
+              <option value="CO_EXECUTIVE">Co-Executive</option>
+              <option value="MEMBERSHIP">Shared Membership / Affiliation</option>
+              <option value="ADVISORY">Advisory / Trustee</option>
+              <option value="DONATION">Political Donation</option>
+              <option value="LOBBYING">Lobbying</option>
+              <option value="TRAVEL_MET">Travel or Documented Meeting</option>
+              <option value="PUBLIC_OFFICE">Held Public Office</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="sug-source-name">Source Name</label>
+            <input type="text" id="sug-source-name" required>
+          </div>
+          <div class="form-group">
+            <label for="sug-source-url">Source URL (Verification Link)</label>
+            <input type="url" id="sug-source-url">
+          </div>
+          <div class="form-group">
+            <label for="sug-snippet">Supporting Snippet / Quote</label>
+            <textarea id="sug-snippet" required rows="2"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="sug-email">Your Email (Optional)</label>
             <input type="email" id="sug-email" placeholder="you@example.com">
           </div>
           <div class="modal-actions">
             <button type="button" class="secondary-btn" style="margin-top:0;" onclick="closeAllModals()">Cancel</button>
-            <button type="submit" id="sug-submit-btn">Submit Approved Connections</button>
+            <button type="submit" id="sug-submit-btn">Submit Structured Connection</button>
           </div>
         </form>
       </div>
@@ -1166,6 +1336,14 @@ async function findPath() {
       }
       html += '</div>';
     } else {
+      if (data.narrative) {
+        html += '<div class="narrative-briefing" style="background:#161b22; border:1px solid #30363d; border-left:4px solid #58a6ff; border-radius:8px; padding:1.2rem; margin-bottom:1.5rem; text-align:left;">';
+        html += '  <div style="font-weight:700; color:#58a6ff; font-size:0.95rem; margin-bottom:0.6rem; display:flex; align-items:center; gap:6px;">';
+        html += '    <span>📋 Executive Summary (AI GraphRAG Briefing)</span>';
+        html += '  </div>';
+        html += '  <div style="font-size:0.9rem; color:#c9d1d9; line-height:1.6; font-style:normal;">' + escHtml(data.narrative) + '</div>';
+        html += '</div>';
+      }
       data.paths.forEach((p, idx) => {
         const bandColors = {Strong:'#3fb950', Plausible:'#d29922', Weak:'#db6d28', Tenuous:'#8b949e'};
         const bc = bandColors[p.band] || '#8b949e';
@@ -1444,47 +1622,19 @@ async function analyzeAIProof(event) {
       body: JSON.stringify({ text })
     });
     const d = await res.json();
-    if (d.success && d.claims && d.claims.length > 0) {
-      const listContainer = document.getElementById('ai-parsed-list');
-      listContainer.innerHTML = ''; // reset
-      
-      window._extractedClaims = d.claims; // save to global variable
-      
-      d.claims.forEach((claim, idx) => {
-        const div = document.createElement('div');
-        div.className = 'claim-card';
-        
-        let html = '<div class="claim-card-header">';
-        html += '  <input type="checkbox" id="claim-check-' + idx + '" class="claim-card-check" checked>';
-        html += '  <span class="claim-card-num">Link #' + (idx + 1) + '</span>';
-        html += '</div>';
-        
-        html += '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">';
-        html += '  <div class="form-group"><label>Person A</label><input type="text" id="claim-sub-' + idx + '" value="' + escHtml(claim.subject || '') + '" required></div>';
-        html += '  <div class="form-group"><label>Person B</label><input type="text" id="claim-obj-' + idx + '" value="' + escHtml(claim.object || '') + '" required></div>';
-        html += '</div>';
-        
-        html += '<div class="form-group"><label>Relationship</label>';
-        html += '  <select id="claim-pred-' + idx + '" required>';
-        const preds = ['FAMILY', 'FRIEND', 'EMPLOYMENT', 'CO_DIRECTOR', 'CO_OFFICER', 'CO_EXECUTIVE', 'MEMBERSHIP', 'ADVISORY', 'DONATION', 'LOBBYING', 'TRAVEL_MET', 'PUBLIC_OFFICE'];
-        preds.forEach(p => {
-          html += '    <option value="' + p + '"' + (claim.predicate === p ? ' selected' : '') + '>' + p.replace(/_/g, ' ') + '</option>';
-        });
-        html += '  </select>';
-        html += '</div>';
-        
-        html += '<div class="form-group"><label>Source Name</label><input type="text" id="claim-src-' + idx + '" value="' + escHtml(claim.source_name || '') + '" required></div>';
-        html += '<div class="form-group"><label>Source URL</label><input type="url" id="claim-url-' + idx + '" value="' + escHtml(claim.source_url || '') + '"></div>';
-        html += '<div class="form-group"><label>Supporting Snippet</label><textarea id="claim-snip-' + idx + '" required rows="2">' + escHtml(claim.snippet || '') + '</textarea></div>';
-        
-        div.innerHTML = html;
-        listContainer.appendChild(div);
-      });
+    if (d.success && d.claim) {
+      // Populates the structured review form
+      document.getElementById('sug-subject').value = d.claim.subject || '';
+      document.getElementById('sug-object').value = d.claim.object || '';
+      document.getElementById('sug-predicate').value = d.claim.predicate || 'FAMILY';
+      document.getElementById('sug-source-name').value = d.claim.source_name || '';
+      document.getElementById('sug-source-url').value = d.claim.source_url || '';
+      document.getElementById('sug-snippet').value = d.claim.snippet || '';
       
       // Reveal the review panel
       document.getElementById('ai-parsed-results').style.display = 'block';
     } else {
-      alert('AI Extraction Error: ' + (d.error || 'No connections could be found in the pasted text. Try entering details manually in Tab B.'));
+      alert('AI Extraction Error: ' + (d.error || 'Failed to analyze text. Please enter the details manually in Tab B.'));
     }
   } catch (e) {
     alert('Network error analyzing proof: ' + e.message);
@@ -1501,54 +1651,35 @@ async function submitSuggestion(event) {
   btn.textContent = '⏳ Submitting...';
   btn.disabled = true;
 
-  const email = document.getElementById('sug-email').value || null;
-  const claims = window._extractedClaims || [];
-  const submissions = [];
-  
-  claims.forEach((_, idx) => {
-    const isChecked = document.getElementById('claim-check-' + idx).checked;
-    if (isChecked) {
-      submissions.push({
-        subject: document.getElementById('claim-sub-' + idx).value,
-        predicate: document.getElementById('claim-pred-' + idx).value,
-        object: document.getElementById('claim-obj-' + idx).value,
-        source_name: document.getElementById('claim-src-' + idx).value,
-        source_url: document.getElementById('claim-url-' + idx).value,
-        snippet: document.getElementById('claim-snip-' + idx).value,
-        email: email
-      });
-    }
-  });
+  const payload = {
+    subject: document.getElementById('sug-subject').value,
+    predicate: document.getElementById('sug-predicate').value,
+    object: document.getElementById('sug-object').value,
+    source_name: document.getElementById('sug-source-name').value,
+    source_url: document.getElementById('sug-source-url').value,
+    snippet: document.getElementById('sug-snippet').value,
+    email: document.getElementById('sug-email').value || null
+  };
 
-  if (submissions.length === 0) {
-    alert('Please check at least one connection to submit!');
+  try {
+    const res = await fetch('/api/suggest-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.success) {
+      alert(d.message);
+      closeAllModals();
+    } else {
+      alert('Error: ' + d.error);
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  } finally {
     btn.textContent = oldText;
     btn.disabled = false;
-    return;
   }
-
-  let successCount = 0;
-  let failCount = 0;
-
-  for (let payload of submissions) {
-    try {
-      const res = await fetch('/api/suggest-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const d = await res.json();
-      if (d.success) successCount++;
-      else failCount++;
-    } catch (e) {
-      failCount++;
-    }
-  }
-
-  alert('Successfully submitted ' + successCount + ' connection' + (successCount !== 1 ? 's' : '') + ' for review!' + (failCount > 0 ? ' (' + failCount + ' failed)' : ''));
-  closeAllModals();
-  btn.textContent = oldText;
-  btn.disabled = false;
 }
 
 async function submitManualSuggestion(event) {
