@@ -1,0 +1,26 @@
+institution_name,source_type,source_url,format,update_frequency,notes,scrape_status
+CalPERS,public_pension,https://www.calpers.ca.gov/,html,periodic,Priority allocator; public private-equity and venture disclosures,seeded
+CalSTRS,public_pension,https://www.calstrs.com/,html,periodic,Priority allocator; public alternative-investment disclosures,seeded
+New York State Common Retirement Fund,public_pension,https://www.osc.ny.gov/common-retirement-fund,html,periodic,Priority allocator; likely strong PE/VC disclosure target,pending
+NYSTRS,public_pension,https://www.nystrs.org/,html,periodic,Teachers retirement system; public investment reporting,seeded
+Teacher Retirement System of Texas,public_pension,https://www.trs.texas.gov/,html,periodic,Priority allocator; public board and investment materials,seeded
+Washington State Investment Board,public_pension,https://www.sib.wa.gov/,html,periodic,Priority allocator; public investment reports,pending
+Oregon Public Employees Retirement Fund,public_pension,https://www.oregon.gov/treasury/invested-for-oregon/Pages/Oregon-Public-Employees-Retirement-Fund.aspx,html,periodic,Priority allocator,pending
+Pennsylvania Public School Employees' Retirement System,public_pension,https://www.psers.pa.gov/,html,periodic,Priority allocator,pending
+Florida State Board of Administration,public_pension,https://www.sbafla.com/,html,periodic,Priority allocator; public investment reports,seeded
+Virginia Retirement System,public_pension,https://www.varetire.org/,html,periodic,Priority allocator,pending
+MassPRIM,public_pension,https://www.mapension.com/,html,periodic,Massachusetts pension reserves investment management,pending
+Wisconsin Investment Board,public_pension,https://www.swib.state.wi.us/,html,periodic,Priority allocator,pending
+North Carolina Retirement Systems,public_pension,https://www.myncretirement.com/,html,periodic,Priority allocator,pending
+Illinois Teachers' Retirement System,public_pension,https://www.trsil.org/,html,periodic,Priority allocator,pending
+Maryland State Retirement and Pension System,public_pension,https://sra.maryland.gov/,html,periodic,Priority allocator,pending
+Regents of the University of California,public_endowment,https://www.ucop.edu/investment-office/,html,periodic,Public university allocator target,pending
+University of Texas/Texas system investment offices,public_endowment,https://www.utsystem.edu/offices/investments,html,periodic,Public university allocator target,pending
+University of Michigan endowment reporting,public_endowment,https://finance.umich.edu/treasury/endowment,html,periodic,Public university allocator target,pending
+Public university investment boards,public_endowment,,mixed,periodic,General target class for public regents and investment committee packets,pending
+Ford Foundation,foundation,https://www.fordfoundation.org/,html,periodic,Foundation allocator target,pending
+Robert Wood Johnson Foundation,foundation,https://www.rwjf.org/,html,periodic,Foundation allocator target,pending
+MacArthur Foundation,foundation,https://www.macfound.org/,html,periodic,Foundation allocator target,pending
+Gates Foundation,foundation,https://www.gatesfoundation.org/,html,periodic,Only ingest explicit public manager relationships,pending
+Wellcome Trust,foundation,https://wellcome.org/,html,periodic,Large quasi-public allocator target,pending
+Public fund-close news corpus,news_disclosure,,mixed,ongoing,Use only where named institutional LPs are explicit,pending
