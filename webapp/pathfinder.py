@@ -1362,13 +1362,13 @@ async function findPath() {
           html += '<span class="step-node">' + nodeHtml + '</span>';
         });
         html += '</div>';
-        // Build My Path: best path only, when it has at least one intermediary
-        if (idx === 0 && p.length >= 2 && p.guided_probability != null) {
+        // Build My Path: available for any path that has at least one intermediary
+        if (p.length >= 2 && p.guided_probability != null) {
           const passPct = (p.probability*100);
           const guidPct = (p.guided_probability*100);
           const passStr = passPct >= 1 ? passPct.toFixed(0)+'%' : passPct.toFixed(1)+'%';
           const guidStr = guidPct >= 1 ? guidPct.toFixed(0)+'%' : guidPct.toFixed(1)+'%';
-          // Hero metric: the uplift multiplier (more motivating + honest than a raw %)
+
           const mult = (p.probability > 0) ? (p.guided_probability / p.probability) : 1;
           const multStr = mult >= 10 ? mult.toFixed(0) : mult.toFixed(1);
           const bid = 'bmp' + Math.random().toString(36).slice(2);
