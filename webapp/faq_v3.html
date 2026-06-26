@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>sixdegrees.net FAQ</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2rem 1rem 4rem;
+  }
+  h1 { color: #58a6ff; margin-bottom: 0.35rem; }
+  .sub { color: #8b949e; margin-bottom: 1.5rem; }
+  .topbar {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 1.5rem;
+  }
+  .btn {
+    display: inline-block;
+    background: #1f6feb;
+    color: white;
+    text-decoration: none;
+    padding: 0.65rem 1rem;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  .btn.secondary { background: #30363d; }
+  .section {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  h2 {
+    color: #c9d1d9;
+    margin-top: 0;
+    margin-bottom: 0.75rem;
+    font-size: 1.2rem;
+  }
+  details {
+    border-top: 1px solid #30363d;
+    padding: 0.7rem 0;
+  }
+  details:first-of-type { border-top: none; padding-top: 0; }
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: #e6edf3;
+    list-style: none;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: '▸';
+    color: #58a6ff;
+    display: inline-block;
+    margin-right: 0.5rem;
+  }
+  details[open] summary::before { content: '▾'; }
+  .answer {
+    margin-left: 1.35rem;
+    margin-top: 0.45rem;
+    color: #adbac7;
+  }
+  .note {
+    color: #8b949e;
+    font-size: 0.95rem;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <a class="btn secondary" href="/">← Back to Pathfinder</a>
+      <a class="btn secondary" href="https://docs.google.com/forms/d/e/1FAIpQLSfOR_ydz782hR27PzVrQ_xhqjl0k_ek_49c8RSuFTfp7ciP_A/viewform?usp=sf_link" target="_blank" rel="noopener">💬 Give Feedback</a>
+    </div>
+
+    <h1>📘 sixdegrees.net FAQ</h1>
+    <p class="sub">How to use the site, what the data means, how to contribute, and what not to infer.</p>
+
+    <div class="section">
+      <h2>1. What can I do with this site?</h2>
+      <details open><summary>What is sixdegrees.net for?</summary><div class="answer">You can use sixdegrees.net to learn how two or more people are connected based on public sources. You can also use it to estimate how you might establish a connection to anyone of interest in the graph. It is both a navigation tool for outreach and a research tool for exploring how power, institutions, finance, politics, nonprofits, and social circles overlap.</div></details>
+      <details><summary>What kinds of questions can this site help me answer?</summary><div class="answer">It can help answer questions like: How are these two people connected? Is there a plausible introduction path between them? Which route looks strongest? Which institutions, firms, or families connect clusters of people? Who appears to be structurally central in this network?</div></details>
+      <details><summary>What is this site best at?</summary><div class="answer">The site is best at providing a sourced map of connections between people and organizations based on public information, and ranking possible introduction paths by how plausible they are in real life.</div></details>
+      <details><summary>What is this site not designed to do?</summary><div class="answer">The site is not designed to provide complete biographies, definitive social histories, or a final judgment about any person or relationship. It is designed to provide a map that helps people navigate. It is also not designed to imply friendship, loyalty, wrongdoing, or influence merely because two people appear in the same graph.</div></details>
+      <details><summary>Can I actually use this site to try to reach someone?</summary><div class="answer">Yes. That is one of its intended uses. But it is most useful as a planning tool rather than a guarantee. It helps you identify candidate paths, compare their strengths, and decide which route is worth trying.</div></details>
+    </div>
+
+    <div class="section">
+      <h2>2. What information is available here?</h2>
+      <details><summary>What kinds of people and organizations are in the graph?</summary><div class="answer">The graph includes public officials, business leaders, nonprofit leaders, advisers, lawyers, donors, trustees, financiers, academics, media figures, and other people who appear in the underlying public-source datasets. It also includes organizations such as companies, nonprofits, foundations, universities, government bodies, and investment firms.</div></details>
+      <details><summary>What kinds of relationships are in the graph?</summary><div class="answer">The graph includes many different kinds of public-source relationships, including family and spouse relationships, employment and co-employment, board and officer overlap, advisory and trustee roles, education and alumni ties, memberships and affiliations, political and charitable donations, lobbying relationships, public office relationships, documented meetings or travel links, and certain document-presence or news co-mention links. Not all relationship types are equally strong, and the site treats them differently.</div></details>
+      <details><summary>What public sources feed this network?</summary><div class="answer">Current sources include SEC filings, IRS nonprofit filings, Wikidata and Wikipedia-derived structured data, LittleSis, GDELT news data, and selected released public documents and curated datasets. Different parts of the graph are denser or thinner depending on how much reliable public data is available in that domain.</div></details>
+      <details><summary>Why are some sectors denser than others?</summary><div class="answer">Public data is uneven. Politics, public companies, major nonprofits, and highly reported figures often generate much more public-source structure than smaller private networks. As a result, some parts of the graph are much richer than others.</div></details>
+      <details><summary>Why might someone important be missing?</summary><div class="answer">A person may be missing because they do not yet appear in the source datasets, because their identity was too ambiguous to resolve safely, or because their known links are still too sparse or isolated to survive current graph filtering rules.</div></details>
+    </div>
+
+    <div class="section">
+      <h2>3. How do I use the core pathfinder?</h2>
+      <details><summary>How do I search for a connection between two people?</summary><div class="answer">Start typing one person’s name and select the person of interest from the dropdown list. If your desired person is not on the list, they are not currently in the database. You may consider adding the person or a missing connection by using the Suggest Link button. Follow the same procedure for the second person and, when finished, click the Find Path button.</div></details>
+      <details><summary>What does a path mean?</summary><div class="answer">A path is a chain of relationships between the first person and the second person. The path is built from relationships identified in public sources. A path means there is a route through the graph; it does not necessarily mean every person in the chain knows every other person well personally.</div></details>
+      <details><summary>How is the best path chosen?</summary><div class="answer">The system considers possible chains of connections between two people and assigns a probability that each step in the chain would work as a real introduction. It estimates both whether the next contact would take the call and whether the chain would continue. The best path is the one with the highest overall estimated probability of resulting in a successful connection, which is not always the shortest path.</div></details>
+      <details><summary>What does it mean when no path is found?</summary><div class="answer">It means the current graph does not contain a usable route between the two selected entities under the current settings. That may mean no connection exists in the database, or that existing connections are too sparse, too isolated, or filtered out.</div></details>
+      <details><summary>Why isn’t the shortest path always the best path?</summary><div class="answer">A shorter path is often better, but not always. The system weighs both path length and the quality of the relationships in the chain. A slightly longer chain of strong relationships can sometimes outrank a shorter chain built from weaker links.</div></details>
+    </div>
+
+    <div class="section">
+      <h2>4. How should I interpret the scores and labels?</h2>
+      <details><summary>What do Strong / Plausible / Weak / Tenuous mean?</summary><div class="answer">These are qualitative labels for the estimated viability of a path. Strong means the route looks unusually workable given the available links. Plausible means it may work and is worth considering. Weak means the path exists but relies on more fragile or less personal links. Tenuous means the route is real in the data but likely too fragile or too long to work reliably in practice.</div></details>
+      <details><summary>What do the percentages represent?</summary><div class="answer">The percentages are model-based estimates of how likely a chain is to work as an introduction route. They are not certainties. They are best understood as comparative guidance: which route looks more workable than another route.</div></details>
+      <details><summary>Why do long paths usually get much weaker?</summary><div class="answer">Each additional person in the chain creates another point of failure. Even if each individual relationship looks decent, longer chains usually break because intermediaries may not respond, may not know the next person well enough, or may simply fail to follow through.</div></details>
+      <details><summary>Should I take the probability numbers literally?</summary><div class="answer">They should be taken seriously as a structured model, but not literally as guaranteed odds. The most useful way to read them is comparatively: this route appears stronger than that one, or this chain is probably too long to be practical.</div></details>
+    </div>
+
+    <div class="section">
+      <h2>5. What do the major features do?</h2>
+      <details><summary>What does Build My Path do?</summary><div class="answer">The base path assumes that you contact Person A and rely on that person to contact the next person, and so on until the chain reaches Person B. Each step is dependent on someone else taking action on your behalf. Build My Path puts you in control. At each step you get the current contact to introduce you to the next person, and then you follow up with that next person directly, increasing the chance that the chain continues.</div></details>
+      <details><summary>What does the multiplier mean?</summary><div class="answer">With your active involvement at each step of the path, the system assumes that it is more likely each contact will actually take action on your behalf. The multiplier is an estimate of how much your odds may improve using Build My Path rather than passively relying on others to keep the message moving.</div></details>
+      <details><summary>What is the Executive Summary?</summary><div class="answer">The Executive Summary is an AI-generated briefing based on the best path and its supporting evidence. It is designed to explain, in plain English, why the system thinks the path matters and how the route is structured. It is a summary, not original evidence, so users should still read the underlying relationship types and sources.</div></details>
+      <details><summary>What is SCI?</summary><div class="answer">SCI is the Social Capital Index. It is designed to show how structurally central a person is in the network. People with high SCI scores are connected to many other people who also have high SCI scores. SCI is based on network centrality, not a moral judgment or a claim that someone is “better” than another person.</div></details>
+      <details><summary>What does Check My Contacts do?</summary><div class="answer">Check My Contacts helps you find out who in your existing network is also in the database and might therefore be a good candidate for Person A as you look for a path. Practically, it sends to your browser a compact copy of graph names and runs a matching process locally on your machine. It reports any matches it finds. Your personal contacts data does not leave your machine in plain text.</div></details>
+    </div>
+
+    <div class="section">
+      <h2>6. How should I interpret relationships responsibly?</h2>
+      <details><summary>Does a connection mean two people know each other personally?</summary><div class="answer">No. A connection does not necessarily mean two people know each other personally. Based on public sources, they have a relationship of the type specified, but that does not by itself tell you how close, active, or personal the relationship is.</div></details>
+      <details><summary>Does appearing in the same document or source imply closeness?</summary><div class="answer">No. Some links are strong and personal; others are administrative, documentary, institutional, or incidental. Users should pay attention to the relationship type and the source before inferring anything more.</div></details>
+      <details><summary>Does presence in the graph imply wrongdoing?</summary><div class="answer">No. Presence in the graph does not imply wrongdoing. It simply means there is a public-source basis for including that person, organization, or relationship in the network. Presence in a document, flight log, contact book, or co-mention chain does not by itself imply misconduct, intent, or guilt.</div></details>
+      <details><summary>What should I not infer from a path?</summary><div class="answer">You should not infer that all people in the path know one another equally well, that they are allies, or that they have done anything improper. A path is a structured route through available public-source relationships, not proof of private closeness or shared intent.</div></details>
+    </div>
+
+    <div class="section">
+      <h2>7. How do I add, dispute, or improve data?</h2>
+      <details><summary>How do I suggest a missing link?</summary><div class="answer">Suggesting a missing link is straightforward, but it does require a specific public source for the link. If you already have the source, you can add it directly. If you do not have the source, it is often easiest to use your preferred chat model to research the connection and identify the source. In that case, you can paste the entire AI chat into the system and let the site extract one or more proposed links for review. Click the Suggest Link button to get started.</div></details>
+      <details><summary>Why is Paste AI Proof available?</summary><div class="answer">It lowers friction. Instead of forcing users to manually structure every claim, the site lets them paste a researched AI conversation and then extracts candidate links for review. This makes it much easier to contribute multiple sourced links at once.</div></details>
+      <details><summary>Does the site automatically trust pasted AI output?</summary><div class="answer">No. AI output is treated as a proposed structured claim, not as truth by itself. The value still comes from the public sources and citations inside the submission.</div></details>
+      <details><summary>How do I dispute or correct a link?</summary><div class="answer">Click on a relationship label in a displayed path to open the detail popup for that specific link. From there, choose the Dispute / Correct this link option and provide the reason, and if possible a corrective public source. This helps improve the quality of the graph over time.</div></details>
+      <details><summary>Will my submission go live immediately?</summary><div class="answer">Not necessarily. The intended model is open input but conservative publication. The system should be easy for users to contribute to, but more cautious about what is surfaced publicly without review.</div></details>
+    </div>
+
+    <div class="section">
+      <h2>8. What are the current limitations?</h2>
+      <details><summary>What are the biggest current limitations?</summary><div class="answer">The value of the graph increases as more people, organizations, and public-source links are added. There is still considerable room to grow. Some sectors are much denser than others because public data is uneven. Some valid people or links may still be missing. Some relationships may be too weak, too isolated, or too ambiguous to survive the current filtering and ranking rules.</div></details>
+      <details><summary>What kinds of real-world dynamics are not fully captured?</summary><div class="answer">The model does not know private trust, current personal warmth, grudges, informal access, social chemistry, or whether someone is currently willing to help. Those things matter in real life, so users should combine the tool’s output with their own judgment.</div></details>
+      <details><summary>How should I think about the site overall?</summary><div class="answer">The best way to think about the site is as a research and navigation tool. It helps you see possible routes, compare them, inspect sources, and think more clearly about how social and institutional networks are structured. It is most powerful when used thoughtfully and cautiously.</div></details>
+    </div>
+
+    <p class="note">If something looks wrong, incomplete, or misleading, please use the feedback and dispute features. The graph improves as users contribute better sourced information.</p>
+  </div>
+</body>
+</html>
