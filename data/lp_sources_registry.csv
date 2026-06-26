@@ -1,6 +1,6 @@
 institution_name,source_type,source_url,format,update_frequency,notes,scrape_status
 CalPERS,public_pension,https://www.calpers.ca.gov/,html+pdf,periodic,Priority allocator; annual investment report and public private-equity disclosures,annual_report_ingested
-CalSTRS,public_pension,https://www.calstrs.com/,html,periodic,Priority allocator; public alternative-investment disclosures,seeded
+CalSTRS,public_pension,https://www.calstrs.com/,html+pdf,periodic,Priority allocator; public alternative-investment disclosures and private-equity performance report,private_equity_report_ingested
 New York State Common Retirement Fund,public_pension,https://www.osc.ny.gov/common-retirement-fund,html,periodic,Priority allocator; likely strong PE/VC disclosure target,pending
 NYSTRS,public_pension,https://www.nystrs.org/,html,periodic,Teachers retirement system; public investment reporting,seeded
 Teacher Retirement System of Texas,public_pension,https://www.trs.texas.gov/,html,periodic,Priority allocator; public board and investment materials,seeded
