@@ -1226,7 +1226,7 @@ let searchTimeout = null;
       const sciBadge = item.sci ? ' <span style="font-size:0.75rem; color:#58a6ff; background:#1f6feb22; padding:1px 5px; border-radius:10px; margin-left:5px; font-weight:600;" title="Social Capital Index (percentile rank)">' + item.sci + '</span>' : '';
       if (item.aliases && item.aliases.length > 0)
         aliasHtml = '<span class="alias">also: ' + escHtml(item.aliases.join(', ')) + '</span>';
-      return '<div class="dropdown-item" data-index="' + i + '"'
+      return '<div class="dropdown-item" data-index="' + i + '" data-name="' + escHtml(displayName) + '"'
         + ' onmousedown="selectItem(\'' + prefix + '\', ' + i + ')"'
         + ' onmouseover="highlightIdx(\'' + prefix + '\', ' + i + ')">'
         + '<span class="name">' + escHtml(displayName) + sciBadge + '</span>'
@@ -1254,7 +1254,7 @@ window.selectItem = function(prefix, idx) {
   const dd = document.getElementById(prefix + '-dropdown');
   const items = dd.querySelectorAll('.dropdown-item');
   if (idx < 0 || idx >= items.length) return;
-  const name = items[idx].querySelector('.name').textContent;
+  const name = items[idx].getAttribute('data-name') || items[idx].querySelector('.name').childNodes[0].textContent.trim();
   state[prefix].selected = name;
   document.getElementById(prefix + '-input').value = name;
   dd.classList.remove('show');
