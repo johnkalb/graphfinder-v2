@@ -809,7 +809,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
          flex-direction: column; align-items: center; padding: 2rem 1rem; }
   .container { max-width: 700px; width: 100%; }
   h1 { font-size: 1.8rem; margin-bottom: 0.5rem; color: #58a6ff; }
-  p.sub { color: #8b949e; margin-bottom: 2rem; font-size: 0.95rem; line-height: 1.5; }
+  p.sub { color: #8b949e; margin-bottom: 1rem; font-size: 0.95rem; line-height: 1.5; }
+  .hero-actions { display:flex; gap:10px; flex-wrap:wrap; margin-bottom: 1.25rem; }
+  .hero-actions .secondary-btn { margin-top: 0; }
   .search-pair { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
                   padding: 1.5rem; margin-bottom: 1.5rem; position: relative; }
   .search-pair h2 { font-size: 1rem; color: #c9d1d9; margin-bottom: 0.5rem; }
@@ -941,7 +943,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>🔗 Network Pathfinder</h1>
-  <p class="sub">Explore <strong>800,000+ relationships</strong> across SEC filings, Epstein documents, GDELT news, IRS foundations, Wikidata, and LittleSis. Find hidden paths between any two people or organizations.</p>
+  <p class="sub">Explore <strong>800,000+ relationships</strong> across SEC filings, Epstein documents, GDELT news, IRS foundations, Wikidata, and LittleSis. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
+  <div class="hero-actions">
+    <button class="secondary-btn" onclick="window.location.href='/faq'">📘 FAQ / Start Here</button>
+  </div>
 
   <div class="instructions">
     <strong>How to use:</strong><br>
@@ -989,7 +994,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <div class="footer-meta" style="margin-top: 2rem; border-top: 1px solid #30363d; padding-top: 1.5rem; text-align: center;">
     <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
-      <button class="secondary-btn" onclick="window.location.href='/faq'">📘 FAQ</button>
       <button class="secondary-btn" onclick="window.open('https://docs.google.com/forms/d/e/1FAIpQLSfOR_ydz782hR27PzVrQ_xhqjl0k_ek_49c8RSuFTfp7ciP_A/viewform?usp=sf_link', '_blank')">💬 Give Feedback</button>
     </div>
     <p style="font-size: 0.8rem; color: #8b949e; margin-top: 1rem;">sixdegrees.net &bull; built for research and discovery</p>
