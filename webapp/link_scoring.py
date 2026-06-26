@@ -46,6 +46,8 @@ CATEGORY_PROB = {
     "WEAK_SOCIAL": 0.20,
     "SAME_ORG_OVERLAP": 0.18,
     "SAME_SCHOOL_OVERLAP": 0.12,
+    "CO_INVENTOR": 0.68,
+    "PATENT_ASSIGNED_TO": 0.55,
     "OTHER": 0.05,
 }
 
@@ -81,6 +83,8 @@ CATEGORY_DESC = {
     "WEAK_SOCIAL": ("Weak Social Tie", "Mentor, neighbor, acquaintance, or roommate. A weak-to-moderate informal tie."),
     "SAME_ORG_OVERLAP": ("Same Workplace (overlapping years)", "Both worked at the same organization during overlapping years (Wikidata employment dates). A weak-to-moderate signal — colleagues at a large employer may never have met, but overlapping tenure raises the odds."),
     "SAME_SCHOOL_OVERLAP": ("Same School (overlapping years)", "Both attended the same institution during overlapping years (Wikidata education dates). A weak signal — large schools dilute the chance of acquaintance, but contemporaneous enrollment is suggestive."),
+    "CO_INVENTOR": ("Co-Inventor", "Both people are named as inventors on the same patent. This is usually a meaningful professional collaboration and stronger than a generic co-mention."),
+    "PATENT_ASSIGNED_TO": ("Patent Assigned To", "An inventor is listed on a patent assigned to the organization. This often indicates a real professional or institutional relationship, but does not necessarily prove ordinary employment."),
     "OTHER": ("Other", "An uncategorized relationship. Treated as very weak evidence."),
 }
 
