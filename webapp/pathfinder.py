@@ -788,6 +788,14 @@ async def dispute_link(req: DisputeRequest, request: Request):
 async def index():
     return HTMLResponse(HTML_TEMPLATE)
 
+@app.get("/faq", response_class=HTMLResponse)
+async def faq_page():
+    faq_path = Path(__file__).with_name("faq_v3.html")
+    try:
+        return HTMLResponse(faq_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return HTMLResponse(f"<h1>FAQ unavailable</h1><pre>{str(e)}</pre>", status_code=500)
+
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -980,7 +988,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <div class="footer-meta" style="margin-top: 2rem; border-top: 1px solid #30363d; padding-top: 1.5rem; text-align: center;">
-    <button class="secondary-btn" onclick="window.open('https://docs.google.com/forms/d/e/1FAIpQLSfOR_ydz782hR27PzVrQ_xhqjl0k_ek_49c8RSuFTfp7ciP_A/viewform?usp=sf_link', '_blank')">💬 Give Feedback</button>
+    <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+      <button class="secondary-btn" onclick="window.location.href='/faq'">📘 FAQ</button>
+      <button class="secondary-btn" onclick="window.open('https://docs.google.com/forms/d/e/1FAIpQLSfOR_ydz782hR27PzVrQ_xhqjl0k_ek_49c8RSuFTfp7ciP_A/viewform?usp=sf_link', '_blank')">💬 Give Feedback</button>
+    </div>
     <p style="font-size: 0.8rem; color: #8b949e; margin-top: 1rem;">sixdegrees.net &bull; built for research and discovery</p>
   </div>
   
