@@ -11,6 +11,10 @@ def categorize(rt):
         return "SAME_ORG_OVERLAP"
     if r == "SAME_SCHOOL_OVERLAP":
         return "SAME_SCHOOL_OVERLAP"
+    if r == "CO_INVENTOR":
+        return "CO_INVENTOR"
+    if r == "PATENT_ASSIGNED_TO":
+        return "PATENT_ASSIGNED_TO"
     # SEC co-directorship (all DIRECTOR(...) title variants + board roles)
     if r.startswith("DIRECTOR") or r in (
         "CO_DIRECTOR", "INDEPENDENT_DIRECTOR", "NON-EXECUTIVE_DIRECTOR",
