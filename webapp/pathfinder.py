@@ -123,7 +123,16 @@ def _load_search():
     spath = DATA_DIR / "search_index.json"
     if _search_index is None and spath.exists():
         with open(spath, "r", encoding="utf-8") as f:
-            _search_index = json.load(f)
+            loaded = json.load(f)
+        # Drop known unresolved-ID placeholder entries once, here, rather
+        # than checking on every _find_entry() call: with ~1.8M entries,
+        # an extra per-entry regex check on every search request roughly
+        # doubled an already too-slow linear scan (measured: 3.92s -> 7.53s
+        # for a single query) -- the scan itself being >2s is a pre-existing
+        # issue from the index's daily growth, unrelated to this filter,
+        # but there's no reason to also pay the filtering cost on every
+        # request when it only needs to happen once per process lifetime.
+        _search_index = [e for e in loaded if not _is_placeholder_entity(e.get("canonical", ""))]
     cpath = DATA_DIR / "canonical_map.json"
     if _canonical_map is None and cpath.exists():
         with open(cpath, "r", encoding="utf-8") as f:
@@ -211,10 +220,16 @@ async def startup():
             shard_files = sorted(manifest_dir.glob("contact_psi_manifest_*.json.gz"))
             if not shard_files:
                 raise ValueError("no manifest shards found")
+            # Cache-busting signal only (client uses this to decide whether
+            # its cached shard downloads are stale) -- name + size + mtime
+            # is enough to detect a rebuilt manifest without reading and
+            # hashing the full ~650MB of shard content on every process
+            # startup, which measurably slowed cold start (confirmed: ~9s
+            # added per boot) and risks tripping health-check timeouts.
             digest = hashlib.sha256()
             for shard_path in shard_files:
-                digest.update(shard_path.name.encode())
-                digest.update(hashlib.sha256(shard_path.read_bytes()).digest())
+                stat = shard_path.stat()
+                digest.update(f"{shard_path.name}:{stat.st_size}:{int(stat.st_mtime)}".encode())
             contact_psi_app.configure(secret, version, None, {
                 "key_version": version,
                 "sharded": True,
@@ -394,6 +409,35 @@ def _get_node_sci(name: str) -> int:
                 _node_sci_map[entry["canonical"].lower()] = entry.get("sci", 1)
     return _node_sci_map.get(name.lower(), 1)
 
+# Confirmed, unambiguous unresolved-ID placeholder patterns leaking out of
+# ingestion pipelines (whose source scripts aren't in this repo to fix at
+# the root -- see the entity-type-system follow-up for the real fix).
+# "FEC Campaign Committee C0000093" is the literal fallback string used
+# when a committee's real name failed to resolve, and some of these have
+# very high degree (e.g. C0000093 = 7136), so the degree-based score boost
+# below pushes known-junk entries to the top of search results. Narrowly
+# scoped to patterns confirmed 100% junk by inspection (unlike e.g. a
+# trailing long digit token, which also matches real "LLC ... EIN" entity
+# names and would wrongly hide legitimate results).
+_PLACEHOLDER_ENTITY_PATTERNS = [
+    re.compile(r"^FEC Campaign Committee( C\d+)?$"),   # unresolved FEC committee name;
+                                                          # confirmed a further-degraded form
+                                                          # exists too -- "FEC Campaign
+                                                          # Committee " with a trailing space
+                                                          # and no ID at all (empty committee_id
+                                                          # in the same template), degree 39606:
+                                                          # every unresolvable-even-by-ID
+                                                          # committee bucketed into one node.
+    re.compile(r"^Q\d{5,}$"),                            # unresolved Wikidata QID
+    re.compile(r"^A\d{8,}$"),                            # unresolved SEC/IARD-style ID
+]
+
+
+def _is_placeholder_entity(canonical: str) -> bool:
+    stripped = canonical.strip()
+    return any(p.match(stripped) for p in _PLACEHOLDER_ENTITY_PATTERNS)
+
+
 def _find_entry(query):
     _load_search()
     q = query.lower().strip()
@@ -410,6 +454,8 @@ def _find_entry(query):
         return []
     for entry in _search_index:
         canon = entry["canonical"]
+        # No placeholder check here -- _search_index is already filtered
+        # once at load time in _load_search().
         canon_lower = canon.lower()
         parts = canon_lower.split()
         # Also search aliases
