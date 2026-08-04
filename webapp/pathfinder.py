@@ -1,6 +1,7 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
 import os, pickle, json, sqlite3, hashlib, re, html
+import logging
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ except ImportError:
     from webapp.tester_operations import send_email
 
 app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
+logger = logging.getLogger("pathfinder")
 DATA_DIR = Path(__file__).parent / "data"
 
 @app.middleware("http")
@@ -265,8 +267,9 @@ async def meminfo():
             for line in f:
                 if line.startswith("MemTotal") or line.startswith("MemAvailable"):
                     info[line.split(":")[0]] = line.split(":")[1].strip()
-    except Exception as e:
-        info["error"] = str(e)
+    except Exception:
+        logger.exception("meminfo failed")
+        info["error"] = "failed to read memory info (see server logs)"
     return info
 
 @app.get("/loadgraph")
@@ -286,9 +289,9 @@ async def loadgraph():
         _load_graph()
         steps.append(f"after load: {mem()}")
         steps.append(f"nodes: {len(_graph.nodes())}, edges: {len(_graph.edges())}")
-    except Exception as e:
-        import traceback
-        steps.append(f"ERROR: {traceback.format_exc()[:500]}")
+    except Exception:
+        logger.exception("loadgraph failed")
+        steps.append("ERROR: graph load failed (see server logs)")
     return {"steps": steps}
 
 @app.get("/health")
@@ -297,12 +300,13 @@ async def health():
 
 @app.get("/debug")
 async def debug():
-    import os, traceback
+    import os
     err = None
     try:
         _load_search()
-    except Exception as e:
-        err = traceback.format_exc()
+    except Exception:
+        logger.exception("debug: _load_search failed")
+        err = "search index load failed (see server logs)"
     info = {"data_dir": str(DATA_DIR), "exists": DATA_DIR.exists(), "files": {}}
     if err:
         info["load_error"] = err
@@ -607,9 +611,9 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5, include_deceased=False):
                 "deceased_excluded": len(excluded_deceased), "include_deceased": include_deceased}
     except nx.NodeNotFound:
         return {"paths": [], "src_found": src_node is not None, "tgt_found": tgt_node is not None}
-    except Exception as e:
-        import traceback
-        return {"error": "pathfind_failed", "detail": traceback.format_exc()[:600]}
+    except Exception:
+        logger.exception("pathfind failed for %r -> %r", src_name, tgt_name)
+        return {"error": "pathfind_failed", "detail": "path search failed (see server logs)"}
 
 def _resolve_name(name):
     name_lower = name.strip().lower()
@@ -925,30 +929,7 @@ class ExtractRequest(BaseModel):
 async def extract_proof(req: ExtractRequest):
     try:
         import requests
-        # 1. Read key from .env file
-        google_key = None
-        env_paths = [
-            Path("/c/Users/johnk/AppData/Local/hermes/.env"),
-            Path("C:/Users/johnk/AppData/Local/hermes/.env"),
-            Path("/c/Users/johnk/.hermes/.env"),
-            DATA_DIR.parent / ".env",
-            DATA_DIR.parent.parent / ".env"
-        ]
-        for p in env_paths:
-            if p.exists():
-                for line in open(p, encoding="utf-8", errors="ignore"):
-                    line = line.strip()
-                    if line and not line.startswith('#') and '=' in line:
-                        k, v = line.split('=', 1)
-                        if k.strip() == "GOOGLE_API_KEY":
-                            google_key = v.strip().strip("'").strip('"')
-                            break
-                if google_key:
-                    break
-                    
-        if not google_key:
-            google_key = os.environ.get("GOOGLE_API_KEY")
-            
+        google_key = _get_google_key()
         if not google_key:
             return JSONResponse(status_code=500, content={"success": False, "error": "Google API key not found in server environment."})
             
@@ -982,14 +963,16 @@ Text to analyze:
         
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         if response.status_code != 200:
-            return JSONResponse(status_code=500, content={"success": False, "error": f"Gemini API error: {response.text}"})
-            
+            logger.error("Gemini API error in extract-proof: %s", response.text)
+            return JSONResponse(status_code=500, content={"success": False, "error": "AI extraction service error (see server logs)"})
+
         data = response.json()
         content_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         parsed = json.loads(content_text)
         return {"success": True, "claim": parsed}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("extract-proof failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "extraction failed (see server logs)"})
 
 class TesterInviteRequest(BaseModel):
     invitee_email: str = Field(..., min_length=3, max_length=255)
@@ -1198,8 +1181,9 @@ async def trigger_legal_review(req: LegalTriggerRequest):
             return {"success": True, "status": "change_detected", "change": change}
 
         return {"success": True, "status": "no_change"}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    except Exception:
+        logger.exception("legal trigger-review failed for %r", req.source_url)
+        return JSONResponse(status_code=500, content={"error": "legal review check failed (see server logs)"})
 
 class SuggestionRequest(BaseModel):
     subject: str = Field(..., min_length=2, max_length=100)
@@ -1247,8 +1231,9 @@ async def suggest_link(req: SuggestionRequest, request: Request):
         conn.commit()
         conn.close()
         return {"success": True, "message": "Thank you! Your connection suggestion has been submitted for review."}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("suggest-link failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
 
 @app.post("/api/dispute-link")
 async def dispute_link(req: DisputeRequest, request: Request):
@@ -1278,8 +1263,9 @@ async def dispute_link(req: DisputeRequest, request: Request):
         conn.commit()
         conn.close()
         return {"success": True, "message": "Thank you! Your dispute/correction has been submitted for review."}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("dispute-link failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
 
 @app.get("/api/service/queue")
 async def get_service_queue(status: Optional[str] = "new", limit: int = 25, sort: str = "created_at"):
@@ -1300,8 +1286,9 @@ async def get_service_queue(status: Optional[str] = "new", limit: int = 25, sort
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
         return {"success": True, "queue": rows}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("service/queue failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "failed to load queue (see server logs)"})
 
 @app.post("/api/service/items/{item_id}/review")
 async def review_service_item(item_id: int, req: ReviewRequest, request: Request):
@@ -1399,8 +1386,9 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
                 send_email(submitter_email, email_subject, html_body)
                 
         return {"success": True, "message": f"Item {item_id} reviewed successfully. Status: {req.status}"}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("service item review failed for item_id=%s", item_id)
+        return JSONResponse(status_code=500, content={"success": False, "error": "review failed (see server logs)"})
 
 @app.post("/api/service/items/{item_id}/resolve")
 async def resolve_service_item(item_id: int, req: ResolveRequest, request: Request):
@@ -1437,8 +1425,9 @@ async def resolve_service_item(item_id: int, req: ResolveRequest, request: Reque
             send_email(submitter_email, email_subject, html_body)
             
         return {"success": True, "message": f"Item {item_id} resolved successfully."}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("service item resolve failed for item_id=%s", item_id)
+        return JSONResponse(status_code=500, content={"success": False, "error": "resolve failed (see server logs)"})
 
 @app.post("/api/service/notify/{item_id}")
 async def notify_service_item(item_id: int):
@@ -1472,8 +1461,9 @@ async def notify_service_item(item_id: int):
             return {"success": True, "message": f"Notification sent successfully to {submitter_email}"}
         else:
             return JSONResponse(status_code=500, content={"success": False, "error": res["error"]})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("service item notify failed for item_id=%s", item_id)
+        return JSONResponse(status_code=500, content={"success": False, "error": "notification failed (see server logs)"})
 
 @app.get("/api/service/metrics")
 async def get_service_metrics():
@@ -1556,8 +1546,9 @@ async def get_service_metrics():
                 "testers": tester_metrics
             }
         }
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    except Exception:
+        logger.exception("service/metrics failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "failed to load metrics (see server logs)"})
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -1568,8 +1559,9 @@ async def faq_page():
     faq_path = Path(__file__).with_name("faq_v3.html")
     try:
         return HTMLResponse(faq_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        return HTMLResponse(f"<h1>FAQ unavailable</h1><pre>{str(e)}</pre>", status_code=500)
+    except Exception:
+        logger.exception("faq page failed to load")
+        return HTMLResponse("<h1>FAQ unavailable</h1>", status_code=500)
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
