@@ -1687,8 +1687,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <div id="results" class="results"></div>
   
-  <div class="psi-section">
-    <button id="psi-btn" onclick="document.getElementById('psi-file').click()">🔒 Check My Contacts</button>
+  <div class="psi-section" id="psi-section" style="display:none;">
+    <button id="psi-btn">🔒 Check My Contacts</button>
     <span id="psi-result" style="display:none;"></span>
     <p class="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
     <input type="file" id="psi-file" accept=".vcf,.csv,.txt" style="display:none" onchange="doOPRF(this)">
@@ -2566,9 +2566,67 @@ function contactPsiLshBandTokens(name) {
   return tokens;
 }
 
+// Three input paths, chosen once at page load by initContactCheckUI():
+//   - Android Chrome/Edge (Contact Picker API present): native picker,
+//     no file/export step at all.
+//   - iOS (Safari and all other iOS browsers, which are WebKit and never
+//     expose the Contact Picker API): the file-upload flow below. iOS's
+//     Contacts app already exports a .vcf via its own Share sheet, so
+//     this isn't extra friction there the way it is on Android, where the
+//     Contacts app treats the underlying file as protected and forces a
+//     separate export step first.
+//   - Everything else (desktop browsers): feature hidden entirely --
+//     see initContactCheckUI().
+function initContactCheckUI() {
+  const section = document.getElementById('psi-section');
+  const btn = document.getElementById('psi-btn');
+  const hasContactPicker = 'contacts' in navigator && 'ContactsManager' in window;
+  // iPadOS 13+ reports itself as "MacIntel" with no "iPad" in the UA string,
+  // so UA-string matching alone misses it -- the standard workaround is
+  // touch-point detection on an otherwise-Mac platform.
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  if (hasContactPicker) {
+    section.style.display = '';
+    btn.onclick = pickContactsNative;
+  } else if (isIOS) {
+    section.style.display = '';
+    btn.onclick = () => document.getElementById('psi-file').click();
+  }
+  // Neither: leave psi-section hidden (desktop browsers, and any mobile
+  // browser with neither the Contact Picker API nor iOS's own export path).
+}
+
 async function doOPRF(input) {
   const file = input.files[0];
   if (!file) return;
+  const names = (await file.text()).split(/\r?\n/).map(line => line.trim())
+    .filter(line => line && !/^(BEGIN|END|VERSION|EMAIL|TEL):/.test(line))
+    .map(line => line.includes(':') ? line.slice(line.indexOf(':') + 1).trim() : line)
+    .filter(name => name.length > 3);
+  await checkContacts(names, 'No contacts found in file');
+}
+
+async function pickContactsNative() {
+  let contacts;
+  try {
+    contacts = await navigator.contacts.select(['name'], { multiple: true });
+  } catch (error) {
+    if (error && error.name === 'AbortError') return; // user cancelled the picker -- not an error
+    const result = document.getElementById('psi-result');
+    result.style.display = 'inline-block';
+    result.style.color = '#f85149';
+    result.textContent = 'Error: ' + error.message;
+    return;
+  }
+  // Each contact's `name` property is itself an array (a contact can have
+  // more than one name value); flatten and take every non-empty one.
+  const names = contacts.flatMap(c => (c.name || []).filter(n => n && n.trim().length > 3));
+  await checkContacts(names, 'No named contacts selected');
+}
+
+async function checkContacts(names, emptyMessage) {
   const btn = document.getElementById('psi-btn');
   const result = document.getElementById('psi-result');
   btn.disabled = true;
@@ -2581,11 +2639,7 @@ async function doOPRF(input) {
     if (!metaResponse.ok) throw new Error('Contact matching is temporarily unavailable');
     const meta = await metaResponse.json();
 
-    const names = (await file.text()).split(/\r?\n/).map(line => line.trim())
-      .filter(line => line && !/^(BEGIN|END|VERSION|EMAIL|TEL):/.test(line))
-      .map(line => line.includes(':') ? line.slice(line.indexOf(':') + 1).trim() : line)
-      .filter(name => name.length > 3);
-    if (!names.length) throw new Error('No contacts found in file');
+    if (!names.length) throw new Error(emptyMessage);
 
     const sha512 = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-512', bytes));
     const sha256 = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -2713,6 +2767,8 @@ async function doOPRF(input) {
     result.style.color = '#f85149';
   } finally { btn.disabled = false; }
 }
+
+initContactCheckUI();
 </script>
 </body>
 </html>
