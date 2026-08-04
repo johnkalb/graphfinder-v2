@@ -22,3 +22,8 @@ services:
     value: sixdegrees.net
   - key: PYTHONPATH
     value: /app
+  - key: CONTACT_PSI_SERVER_SECRET
+    type: SECRET
+    value: change-this-set-via-dashboard
+  - key: CONTACT_PSI_KEY_VERSION
+    value: "1"
