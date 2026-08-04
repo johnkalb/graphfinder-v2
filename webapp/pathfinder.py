@@ -1,6 +1,6 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
-import os, pickle, json, sqlite3, hashlib, re
+import os, pickle, json, sqlite3, hashlib, re, html
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
@@ -83,7 +83,10 @@ try:
         list_attention_queue as td_list_attention_queue,
         record_invitation as td_record_invitation,
         record_usage_event as td_record_usage_event,
+        classify_feedback as td_classify_feedback,
+        CASE_OPEN_CATEGORIES as TD_CASE_OPEN_CATEGORIES,
     )
+    from bineval_diagnostic import generate_feedback_diagnosis_prompt
 except ImportError:
     from webapp.database import init_db as init_submission_db, init_ops_db, init_legal_compliance_db, DB_PATH as SUBMISSIONS_DB_PATH
     from webapp.test_department import (
@@ -93,7 +96,10 @@ except ImportError:
         list_attention_queue as td_list_attention_queue,
         record_invitation as td_record_invitation,
         record_usage_event as td_record_usage_event,
+        classify_feedback as td_classify_feedback,
+        CASE_OPEN_CATEGORIES as TD_CASE_OPEN_CATEGORIES,
     )
+    from webapp.bineval_diagnostic import generate_feedback_diagnosis_prompt
 
 _graph: Optional[nx.Graph] = None
 _search_index = None
@@ -779,6 +785,33 @@ Instructions:
         print("Error generating narrative:", e)
         return None
 
+def _get_feedback_diagnosis(category: str, feedback_text: str) -> Optional[str]:
+    """Automated first-pass triage of a high-priority tester report via
+    Gemini -- "repair" scoped deliberately to diagnosis only, not automated
+    changes to data or services (see specifications discussion). Returns
+    None (never raises) if no API key is configured or the call fails;
+    callers must treat that as "no diagnosis available", not an error."""
+    try:
+        google_key = _get_google_key()
+        if not google_key:
+            return None
+        import requests
+        prompt = generate_feedback_diagnosis_prompt(category, feedback_text)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={google_key}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "text/plain"},
+        }
+        response = requests.post(url, json=payload, headers=headers, timeout=25)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as e:
+        print("Error generating feedback diagnosis:", e)
+        return None
+
 class OPRFEvalRequest(BaseModel):
     """Opaque protocol request: deliberately contains no plaintext field."""
     model_config = ConfigDict(extra="forbid")
@@ -1047,6 +1080,36 @@ async def td_invite_bcc(req: TesterInviteRequest):
         "message_id": msg_id
     }
 
+def _notify_operator_of_new_case(category: str, tester_email: str, feedback_text: str, feedback_id: int) -> dict:
+    """Email the operator (not the submitter) when new feedback opens a
+    case -- previously nothing alerted the operator at all; the queue had
+    to be polled manually via /api/test-department/summary. Includes an
+    automated first-pass diagnosis (Gemini) when a key is configured --
+    "repair" is scoped to diagnosis only, never automated changes to data
+    or services; the operator still decides and takes any actual fix."""
+    operator_email = os.environ.get("OPERATOR_EMAIL")
+    if not operator_email:
+        return {"success": False, "error": "OPERATOR_EMAIL not configured"}
+    subject = f"[sixdegrees] New {category} report from {tester_email}"
+    snippet = feedback_text.strip()[:500]
+    diagnosis = _get_feedback_diagnosis(category, feedback_text)
+    diagnosis_html = (
+        f"<p><strong>Automated diagnosis:</strong><br>{html.escape(diagnosis).replace(chr(10), '<br>')}</p>"
+        if diagnosis else "<p><em>Automated diagnosis unavailable (no API key configured, or the call failed).</em></p>"
+    )
+    diagnosis_text = f"\n\nAutomated diagnosis:\n{diagnosis}" if diagnosis else "\n\n(Automated diagnosis unavailable.)"
+    html_body = (
+        f"<p>New tester feedback opened a <strong>{html.escape(category)}</strong> case "
+        f"(feedback #{feedback_id}).</p>"
+        f"<p><strong>From:</strong> {html.escape(tester_email)}</p>"
+        f"<p><strong>Feedback:</strong> {html.escape(snippet)}</p>"
+        f"{diagnosis_html}"
+        f"<p>View the queue: /api/test-department/summary</p>"
+    )
+    text = f"New {category} case from {tester_email} (feedback #{feedback_id}):\n\n{snippet}{diagnosis_text}\n\nView the queue: /api/test-department/summary"
+    return send_email(operator_email, subject, html_body, text)
+
+
 @app.post("/api/test-department/feedback")
 async def td_feedback(req: TesterFeedbackRequest):
     feedback_id = td_add_feedback(
@@ -1059,7 +1122,17 @@ async def td_feedback(req: TesterFeedbackRequest):
         category=req.category,
         raw_payload=req.raw_payload,
     )
-    return {"success": True, "feedback_id": feedback_id}
+    category = req.category or td_classify_feedback(req.feedback_text)
+    operator_notified = False
+    if category in TD_CASE_OPEN_CATEGORIES:
+        try:
+            result = _notify_operator_of_new_case(category, req.tester_email, req.feedback_text, feedback_id)
+            operator_notified = bool(result.get("success"))
+        except Exception as e:
+            # A notification failure must never fail the feedback submission
+            # itself -- the feedback is already durably stored either way.
+            print(f"[operator-notify] Error sending operator alert: {e}")
+    return {"success": True, "feedback_id": feedback_id, "category": category, "operator_notified": operator_notified}
 
 @app.post("/api/test-department/note")
 async def td_note(req: TesterNoteRequest):

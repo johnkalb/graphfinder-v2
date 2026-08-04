@@ -27,3 +27,5 @@ services:
     value: change-this-set-via-dashboard
   - key: CONTACT_PSI_KEY_VERSION
     value: "1"
+  - key: OPERATOR_EMAIL
+    value: change-this-set-via-dashboard

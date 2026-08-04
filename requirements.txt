@@ -6,3 +6,4 @@ python-multipart>=0.0.9
 gunicorn>=22.0.0
 pysodium>=0.7.18
 cryptography>=42.0.0
+python-dotenv>=1.0.0
