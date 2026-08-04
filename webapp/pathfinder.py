@@ -1,16 +1,67 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
-import os, pickle, json, sqlite3
+import os, pickle, json, sqlite3, hashlib, re
 from pathlib import Path
 from typing import Optional
+from datetime import datetime, timezone
 import networkx as nx
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
-import uvicorn
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from pydantic import BaseModel, Field, ConfigDict
+import base64
+import pysodium
+try:
+    from contact_psi import app as contact_psi_app
+    from contact_psi import oprf as contact_psi_oprf
+    from contact_psi import manifest as contact_psi_manifest
+except ImportError:
+    from webapp.contact_psi import app as contact_psi_app
+    from webapp.contact_psi import oprf as contact_psi_oprf
+    from webapp.contact_psi import manifest as contact_psi_manifest
+try:
+    from tester_operations import send_email
+except ImportError:
+    from webapp.tester_operations import send_email
 
 app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 DATA_DIR = Path(__file__).parent / "data"
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    import time, uuid
+    start_time = time.time()
+    
+    session_id = request.cookies.get("session_id")
+    is_new_session = False
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        is_new_session = True
+        
+    request.state.session_id = session_id
+    response = await call_next(request)
+    
+    if is_new_session:
+        response.set_cookie(
+            key="session_id",
+            value=session_id,
+            httponly=True,
+            samesite="lax",
+            max_age=3600 * 24 * 30  # 30 days
+        )
+        
+    process_time = (time.time() - start_time) * 1000
+    _log_performance_metrics(request.url.path, process_time, response.status_code)
+    
+    # Log anonymous user behavior event (excluding health/debug/metrics paths)
+    path = request.url.path
+    if path not in ["/health", "/metrics", "/meminfo", "/debug", "/loadgraph"]:
+        _log_anonymous_event(session_id, "request", {
+            "method": request.method,
+            "path": path,
+            "query_params": dict(request.query_params)
+        })
+        
+    return response
 
 try:
     from link_scoring import (CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC,
@@ -22,6 +73,27 @@ except ImportError:
                                      METHODOLOGY as _METHODOLOGY, path_probability as _path_probability,
                                      path_probability_guided as _path_probability_guided,
                                      FORWARD_PROB as _FORWARD_PROB)
+
+try:
+    from database import init_db as init_submission_db, init_ops_db, init_legal_compliance_db, DB_PATH as SUBMISSIONS_DB_PATH
+    from test_department import (
+        add_feedback as td_add_feedback,
+        add_note as td_add_note,
+        get_tester_snapshot as td_get_tester_snapshot,
+        list_attention_queue as td_list_attention_queue,
+        record_invitation as td_record_invitation,
+        record_usage_event as td_record_usage_event,
+    )
+except ImportError:
+    from webapp.database import init_db as init_submission_db, init_ops_db, init_legal_compliance_db, DB_PATH as SUBMISSIONS_DB_PATH
+    from webapp.test_department import (
+        add_feedback as td_add_feedback,
+        add_note as td_add_note,
+        get_tester_snapshot as td_get_tester_snapshot,
+        list_attention_queue as td_list_attention_queue,
+        record_invitation as td_record_invitation,
+        record_usage_event as td_record_usage_event,
+    )
 
 _graph: Optional[nx.Graph] = None
 _search_index = None
@@ -120,7 +192,42 @@ def load_data():
 @app.on_event("startup")
 async def startup():
     """Load only the search index at startup; graph loads lazily on first path request."""
+    init_submission_db(str(DATA_DIR / "test_department.db"))
+    init_ops_db(str(DATA_DIR / "ops_metrics.db"))
+    init_legal_compliance_db(str(DATA_DIR / "legal_compliance.db"))
     _load_search()
+    # Configure the encrypted, prefix-sharded manifest only when production
+    # secrets and the generated shard directory are present. Never log or
+    # return the server secret. The server never loads shard contents into
+    # memory -- lookups happen entirely client-side after it fetches only
+    # the shard(s) it needs; the server's role is limited to the blind OPRF
+    # evaluation and serving static shard files.
+    secret_b64 = os.environ.get("CONTACT_PSI_SERVER_SECRET")
+    manifest_dir = DATA_DIR / "contact_psi_manifest"
+    if secret_b64 and manifest_dir.is_dir():
+        try:
+            secret = base64.b64decode(secret_b64, validate=True)
+            version = int(os.environ.get("CONTACT_PSI_KEY_VERSION", "1"))
+            shard_files = sorted(manifest_dir.glob("contact_psi_manifest_*.json.gz"))
+            if not shard_files:
+                raise ValueError("no manifest shards found")
+            digest = hashlib.sha256()
+            for shard_path in shard_files:
+                digest.update(shard_path.name.encode())
+                digest.update(hashlib.sha256(shard_path.read_bytes()).digest())
+            contact_psi_app.configure(secret, version, None, {
+                "key_version": version,
+                "sharded": True,
+                "shard_hex_chars": contact_psi_manifest.SHARD_HEX_CHARS,
+                "manifest_shard_url_template": "/api/contacts/manifest-shard/{shard}",
+                "num_shards": len(shard_files),
+                "manifest_digest": digest.hexdigest(),
+                "built_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            # An unavailable/malformed optional artifact should not prevent
+            # the graph search application from starting.
+            pass
 
 @app.get("/meminfo")
 async def meminfo():
@@ -185,6 +292,56 @@ async def debug():
     info["search_index_loaded"] = len(_search_index) if _search_index else 0
     info["graph_loaded"] = len(_graph.nodes()) if (_graph is not None and hasattr(_graph, "nodes")) else 0
     return info
+
+
+def _test_department_db_path() -> str:
+    return str(DATA_DIR / "test_department.db")
+
+
+def _request_user_email(request: Optional[Request]) -> Optional[str]:
+    if request is None:
+        return None
+    email = request.headers.get("Cf-Access-Authenticated-User-Email")
+    if email:
+        return email.strip().lower()
+    return None
+
+
+def _log_tester_usage(request: Optional[Request], event_type: str, metadata: Optional[dict] = None):
+    email = _request_user_email(request)
+    if not email:
+        return None
+    return td_record_usage_event(
+        _test_department_db_path(),
+        tester_email=email,
+        event_type=event_type,
+        metadata=metadata,
+    )
+
+def _log_performance_metrics(route: str, latency_ms: float, status_code: int):
+    db_path = DATA_DIR / "ops_metrics.db"
+    if not db_path.exists():
+        init_ops_db(str(db_path))
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO request_logs (route, latency_ms, status_code) VALUES (?, ?, ?)",
+                 (route, latency_ms, status_code))
+    conn.commit()
+    conn.close()
+
+def _log_anonymous_event(session_id: str, event_type: str, metadata: dict):
+    db_path = DATA_DIR / "ops_metrics.db"
+    if not db_path.exists():
+        init_ops_db(str(db_path))
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO anonymous_events (session_id, event_type, metadata) VALUES (?, ?, ?)",
+            (session_id, event_type, json.dumps(metadata))
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 RELATION_INFO = {
   'COMMUNICATED_WITH': {'title': 'Communication', 'desc': 'Communication between parties — calls, messages, or correspondence identified in documents or records.'},
@@ -576,63 +733,83 @@ Instructions:
         print("Error generating narrative:", e)
         return None
 
-import hashlib
-_psi_names = None
-def _load_psi_names():
-    global _psi_names
-    if _psi_names is None:
-        p = DATA_DIR / "psi_names.json"
-        if p.exists():
-            with open(p) as f:
-                _psi_names = json.load(f)
-    return _psi_names
+class OPRFEvalRequest(BaseModel):
+    """Opaque protocol request: deliberately contains no plaintext field."""
+    model_config = ConfigDict(extra="forbid")
+    key_version: int = Field(..., ge=1)
+    points: list[str]
 
-@app.get("/api/names")
-async def get_names():
-    """Return compacted graph names for client-side matching."""
-    p = DATA_DIR / "compact_names.json.gz"
-    if p.exists():
-        from fastapi.responses import Response
-        with open(p, 'rb') as f:
-            return Response(content=f.read(), media_type='application/gzip')
-    return {"error": "no names file"}
+class OPRFEvalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key_version: int
+    points: list[str]
 
-@app.post("/api/psi")
-async def psi_match(request: Request):
-    """Private Set Intersection: match user's salted hashes against graph names."""
-    body = await request.json()
-    salt = body.get("salt", "")
-    hashes = body.get("hashes", [])
-    if not salt or not hashes:
-        return {"matches": 0, "total": 0}
-    
-    names = _load_psi_names()
-    if not names:
-        return {"matches": 0, "total": 0}
-    
-    # Compute graph hashes with the same salt
-    user_set = set(hashes)
-    match_count = 0
-    for name in names:
-        h = hashlib.sha256((name + salt).encode()).hexdigest()
-        if h in user_set:
-            match_count += 1
-    
-    return {"matches": match_count, "total": len(hashes)}
+@app.post("/api/contacts/oprf-eval", response_model=OPRFEvalResponse)
+async def contacts_oprf_eval(body: OPRFEvalRequest, request: Request):
+    """Evaluate blinded Ristretto points without receiving contact names."""
+    configured_version = contact_psi_app._key_version
+    if configured_version is None:
+        configured_version = int(os.environ.get("CONTACT_PSI_KEY_VERSION", "1"))
+    if body.key_version != configured_version:
+        return JSONResponse(status_code=409, content={"detail": "unknown key version"})
+    if len(body.points) > contact_psi_app.REQUEST_MAX_POINTS:
+        return JSONResponse(status_code=400, content={"detail": "too many points in one request"})
+    user = _request_user_email(request) or "anonymous"
+    if not contact_psi_app.consume_quota(user, len(body.points)):
+        return JSONResponse(status_code=429, headers={"Retry-After": "86400"}, content={"detail": "daily OPRF point quota exceeded"})
+    points = []
+    try:
+        for encoded in body.points:
+            point = base64.b64decode(encoded, validate=True)
+            if len(point) != 32 or not pysodium.crypto_core_ristretto255_is_valid_point(point):
+                raise ValueError("invalid point")
+            points.append(point)
+        evaluated = contact_psi_app.evaluate(points, body.key_version)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    return OPRFEvalResponse(key_version=body.key_version, points=[base64.b64encode(p).decode("ascii") for p in evaluated])
+
+@app.get("/api/contacts/manifest-meta")
+async def contacts_manifest_meta():
+    meta = contact_psi_app.current_manifest_meta()
+    if not meta:
+        return JSONResponse(status_code=503, content={"detail": "contact manifest unavailable"})
+    return meta
+
+@app.get("/api/contacts/manifest-shard/{shard}")
+async def contacts_manifest_shard(shard: str):
+    # Strict validation before any filesystem access: `shard` must be
+    # exactly the configured number of lowercase hex characters. This is
+    # the only thing standing between a path parameter and a filesystem
+    # path, so it must reject anything else outright (traversal, wrong
+    # length, uppercase, etc.) rather than trying to sanitize it.
+    expected_len = contact_psi_app.current_manifest_meta().get("shard_hex_chars", contact_psi_manifest.SHARD_HEX_CHARS)
+    if not re.fullmatch(r"[0-9a-f]{%d}" % expected_len, shard):
+        return JSONResponse(status_code=400, content={"detail": "invalid shard id"})
+    path = DATA_DIR / "contact_psi_manifest" / contact_psi_manifest.shard_filename(shard)
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"detail": "contact manifest shard unavailable"})
+    return FileResponse(path, media_type="application/gzip", headers={"Cache-Control": "public, max-age=86400"})
 
 @app.get("/api/search")
-async def search(q: str = Query(default="")):
+async def search(request: Request, q: str = Query(default="")):
     if not q or len(q.strip()) < 2:
         return []
+    _log_tester_usage(request, "search", {"query": q.strip()})
     return _find_entry(q.strip())
 
 @app.get("/api/path")
-async def path(src_name: str = Query(default=""), tgt_name: str = Query(default=""),
+async def path(request: Request, src_name: str = Query(default=""), tgt_name: str = Query(default=""),
                include_deceased: bool = Query(default=False)):
     if not src_name or not tgt_name:
         return {"error": "Both src_name and tgt_name required"}
     res = _find_path(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
-    
+    _log_tester_usage(
+        request,
+        "path_found" if "paths" in res and len(res.get("paths", [])) > 0 else "path_not_found",
+        {"src_name": src_name.strip(), "tgt_name": tgt_name.strip(), "include_deceased": include_deceased},
+    )
+
     # Generate AI Narrative Briefing for the best path (if found)
     if "paths" in res and len(res["paths"]) > 0:
         res["narrative"] = _generate_path_narrative(res["paths"][0])
@@ -735,6 +912,176 @@ Text to analyze:
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
+class TesterInviteRequest(BaseModel):
+    invitee_email: str = Field(..., min_length=3, max_length=255)
+    invitee_name: Optional[str] = Field(default=None, max_length=255)
+    inviter_email: Optional[str] = Field(default=None, max_length=255)
+    inviter_name: Optional[str] = Field(default=None, max_length=255)
+    subject: Optional[str] = Field(default=None, max_length=500)
+    body: Optional[str] = Field(default=None, max_length=20000)
+    sent_at: Optional[str] = None
+
+class TesterFeedbackRequest(BaseModel):
+    tester_email: str = Field(..., min_length=3, max_length=255)
+    feedback_text: str = Field(..., min_length=3, max_length=20000)
+    source: str = Field(default="forwarded_email", max_length=50)
+    subject: Optional[str] = Field(default=None, max_length=500)
+    received_at: Optional[str] = None
+    category: Optional[str] = Field(default=None, max_length=50)
+    raw_payload: Optional[str] = Field(default=None, max_length=50000)
+
+class TesterNoteRequest(BaseModel):
+    tester_email: str = Field(..., min_length=3, max_length=255)
+    note_text: str = Field(..., min_length=3, max_length=20000)
+    author_email: Optional[str] = Field(default=None, max_length=255)
+    source: str = Field(default="conversation_note", max_length=50)
+    noted_at: Optional[str] = None
+
+class LegalTriggerRequest(BaseModel):
+    source_url: str
+    
+def _get_pipeline_db_path() -> str:
+    path = r"C:\Users\johnk\data\pipeline_cache.db"
+    if os.path.exists(path):
+        return path
+    local_path = os.path.join(os.path.dirname(__file__), "data", "pipeline_cache.db")
+    if os.path.exists(local_path):
+        return local_path
+    parent_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "pipeline_cache.db")
+    return parent_path
+
+class ReviewRequest(BaseModel):
+    reviewed_by: Optional[str] = None
+    status: str = Field(..., description="approved, rejected, needs_review, resolved, archived")
+    note: Optional[str] = None
+
+class ResolveRequest(BaseModel):
+    resolved_by: Optional[str] = None
+    resolution_note: Optional[str] = None
+
+@app.post("/api/test-department/invite-bcc")
+async def td_invite_bcc(req: TesterInviteRequest):
+    db_path = _test_department_db_path()
+    event_id = td_record_invitation(
+        db_path,
+        invitee_email=req.invitee_email,
+        invitee_name=req.invitee_name,
+        inviter_email=req.inviter_email,
+        inviter_name=req.inviter_name,
+        subject=req.subject,
+        body=req.body,
+        sent_at=req.sent_at,
+    )
+    
+    # SMTP Email Integration (SPEC 1)
+    # Use top-level send_email import
+    subject = req.subject or "Invitation to test sixdegrees.net"
+    html_content = req.body or f"<p>You have been invited to test sixdegrees.net by {req.inviter_name or 'a team member'}.</p>"
+    text_content = f"You have been invited to test sixdegrees.net by {req.inviter_name or 'a team member'}."
+    
+    res = send_email(req.invitee_email, subject, html_content, text_content)
+    delivery_status = "sent" if res["success"] else "failed"
+    msg_id = res.get("message_id")
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE testers SET invite_delivery_status = ?, invite_message_id = ? WHERE email = ?",
+            (delivery_status, msg_id, req.invitee_email.strip().lower())
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[invite-bcc] Error updating testers delivery status: {e}")
+        
+    return {
+        "success": True, 
+        "event_id": event_id, 
+        "delivery_status": delivery_status, 
+        "message_id": msg_id
+    }
+
+@app.post("/api/test-department/feedback")
+async def td_feedback(req: TesterFeedbackRequest):
+    feedback_id = td_add_feedback(
+        _test_department_db_path(),
+        tester_email=req.tester_email,
+        feedback_text=req.feedback_text,
+        source=req.source,
+        subject=req.subject,
+        received_at=req.received_at,
+        category=req.category,
+        raw_payload=req.raw_payload,
+    )
+    return {"success": True, "feedback_id": feedback_id}
+
+@app.post("/api/test-department/note")
+async def td_note(req: TesterNoteRequest):
+    note_id = td_add_note(
+        _test_department_db_path(),
+        tester_email=req.tester_email,
+        note_text=req.note_text,
+        author_email=req.author_email,
+        source=req.source,
+        noted_at=req.noted_at,
+    )
+    return {"success": True, "note_id": note_id}
+
+@app.get("/api/test-department/testers/{tester_email}")
+async def td_tester_snapshot(tester_email: str):
+    try:
+        return td_get_tester_snapshot(_test_department_db_path(), tester_email)
+    except KeyError:
+        return JSONResponse(status_code=404, content={"error": "tester not found"})
+
+@app.get("/api/test-department/summary")
+async def td_summary():
+    items = td_list_attention_queue(_test_department_db_path())
+    counts = {}
+    for item in items:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return {"counts": counts, "total": len(items), "queue": items[:25]}
+
+@app.post("/api/legal/trigger-review")
+async def trigger_legal_review(req: LegalTriggerRequest):
+    # 1. Fetch live ToS (placeholder for logic)
+    import requests
+    try:
+        r = requests.get(req.source_url, timeout=10)
+        r.raise_for_status()
+        raw_text = r.text
+        
+        # 2. Check for changes
+        from webapp.legal_compliance import check_for_changes, register_obligation
+        legal_db_path = DATA_DIR / "legal_compliance.db"
+        test_dept_db_path = DATA_DIR / "test_department.db"
+        
+        change = check_for_changes(str(legal_db_path), req.source_url, raw_text)
+        if change:
+            # Save the current terms hash so future calls detect real changes
+            register_obligation(str(legal_db_path), req.source_url, raw_text, {})
+            # Also log as a legal_review item in service_items (Phase 1/2)
+            try:
+                conn = sqlite3.connect(str(test_dept_db_path))
+                conn.execute("""
+                    INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
+                    VALUES ('legal_review', 'needs_review', 'high', ?, ?, 'legal@sixdegrees.net', ?)
+                """, (
+                    f"Legal Compliance: Terms changed for {req.source_url}",
+                    f"Obligation changes detected: {json.dumps(change)}",
+                    json.dumps({"source_url": req.source_url, "change": change})
+                ))
+                conn.commit()
+                conn.close()
+            except Exception as le:
+                print(f"[legal] Error logging service item: {le}")
+                
+            return {"success": True, "status": "change_detected", "change": change}
+
+        return {"success": True, "status": "no_change"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 class SuggestionRequest(BaseModel):
     subject: str = Field(..., min_length=2, max_length=100)
     predicate: str = Field(..., min_length=2, max_length=50)
@@ -754,13 +1101,30 @@ class DisputeRequest(BaseModel):
 async def suggest_link(req: SuggestionRequest, request: Request):
     try:
         email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
-        db_path = DATA_DIR / "user_submissions.db"
-        conn = sqlite3.connect(str(db_path))
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
         c = conn.cursor()
+        
+        # 1. Legacy insert
         c.execute("""
             INSERT INTO claims (subject, predicate, object, source_name, source_url, snippet, user_email)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (req.subject.strip(), req.predicate.strip(), req.object.strip(), req.source_name.strip(), req.source_url.strip(), req.snippet.strip(), email))
+        
+        # 2. Unified service_items insert
+        meta = json.dumps({
+            "subject": req.subject.strip(),
+            "predicate": req.predicate.strip(),
+            "object": req.object.strip(),
+            "source_name": req.source_name.strip(),
+            "source_url": req.source_url.strip(),
+            "snippet": req.snippet.strip()
+        })
+        c.execute("""
+            INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
+            VALUES ('suggestion', 'new', 'normal', ?, ?, ?, ?)
+        """, (f"Suggestion: {req.subject.strip()} {req.predicate.strip()} {req.object.strip()}", req.snippet.strip(), email, meta))
+        
         conn.commit()
         conn.close()
         return {"success": True, "message": "Thank you! Your connection suggestion has been submitted for review."}
@@ -771,16 +1135,308 @@ async def suggest_link(req: SuggestionRequest, request: Request):
 async def dispute_link(req: DisputeRequest, request: Request):
     try:
         email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
-        db_path = DATA_DIR / "user_submissions.db"
-        conn = sqlite3.connect(str(db_path))
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
         c = conn.cursor()
+        
+        # 1. Legacy insert
         c.execute("""
             INSERT INTO disputes (edge_key, reason, source_url, user_email)
             VALUES (?, ?, ?, ?)
         """, (req.edge_key.strip(), req.reason.strip(), req.source_url.strip() if req.source_url else None, email))
+        
+        # 2. Unified service_items insert
+        meta = json.dumps({
+            "edge_key": req.edge_key.strip(),
+            "reason": req.reason.strip(),
+            "source_url": req.source_url.strip() if req.source_url else None
+        })
+        c.execute("""
+            INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, edge_key, metadata)
+            VALUES ('dispute', 'new', 'normal', ?, ?, ?, ?, ?)
+        """, (f"Dispute: {req.edge_key.strip()}", req.reason.strip(), email, req.edge_key.strip(), meta))
+        
         conn.commit()
         conn.close()
         return {"success": True, "message": "Thank you! Your dispute/correction has been submitted for review."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.get("/api/service/queue")
+async def get_service_queue(status: Optional[str] = "new", limit: int = 25, sort: str = "created_at"):
+    try:
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        if sort not in {"created_at", "priority", "id"}:
+            sort = "created_at"
+            
+        if status:
+            c.execute(f"SELECT * FROM service_items WHERE status = ? ORDER BY {sort} DESC LIMIT ?", (status, limit))
+        else:
+            c.execute(f"SELECT * FROM service_items ORDER BY {sort} DESC LIMIT ?", (limit,))
+            
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return {"success": True, "queue": rows}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.post("/api/service/items/{item_id}/review")
+async def review_service_item(item_id: int, req: ReviewRequest, request: Request):
+    try:
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        item = c.execute("SELECT * FROM service_items WHERE id = ?", (item_id,)).fetchone()
+        if not item:
+            conn.close()
+            return JSONResponse(status_code=404, content={"success": False, "error": "Service item not found"})
+            
+        reviewer = req.reviewed_by or request.headers.get("Cf-Access-Authenticated-User-Email") or "admin"
+        now_str = datetime.now(timezone.utc).isoformat()
+        
+        c.execute("""
+            UPDATE service_items
+            SET status = ?, reviewed_by = ?, reviewed_at = ?, resolution_note = ?
+            WHERE id = ?
+        """, (req.status, reviewer, now_str, req.note, item_id))
+        
+        conn.commit()
+        conn.close()
+        
+        # If approved and it is a suggestion: perform Phase 3 Auto-Edge creation!
+        item_type = item["item_type"]
+        submitter_email = item["submitter_email"]
+        
+        if req.status == "approved" and item_type == "suggestion":
+            meta = json.loads(item["metadata"])
+            subject = meta.get("subject")
+            predicate = meta.get("predicate")
+            obj = meta.get("object")
+            source_name = meta.get("source_name")
+            source_url = meta.get("source_url")
+            snippet = meta.get("snippet")
+            
+            # Check if subject and object exist in graph
+            subject_canonical = _resolve_name(subject)
+            obj_canonical = _resolve_name(obj)
+            
+            graph_has_nodes = False
+            if subject_canonical and obj_canonical:
+                graph_has_nodes = True
+                try:
+                    prod_db_path = _get_pipeline_db_path()
+                    os.makedirs(os.path.dirname(os.path.abspath(prod_db_path)), exist_ok=True)
+                    prod_conn = sqlite3.connect(prod_db_path)
+                    prod_cur = prod_conn.cursor()
+                    try:
+                        prod_cur.execute("ALTER TABLE relationships ADD COLUMN evidence TEXT")
+                    except sqlite3.OperationalError:
+                        pass
+                        
+                    evidence_json = json.dumps([{
+                        "source": source_name,
+                        "url": source_url,
+                        "snippet": snippet
+                    }])
+                    
+                    tgt_type = 'PERSON' if predicate in {'FAMILY', 'COMMUNICATED_WITH', 'ASSOCIATED_WITH', 'TRANSACTED_WITH'} else 'ORG'
+                    
+                    prod_cur.execute("""
+                        INSERT OR IGNORE INTO relationships 
+                        (source_id, source_name, source_type, target_id, target_name, target_type, relation_type, source_data, evidence)
+                        VALUES (NULL, ?, 'PERSON', NULL, ?, ?, ?, 'USER_SUGGESTION', ?)
+                    """, (subject_canonical, obj_canonical, tgt_type, predicate, evidence_json))
+                    prod_conn.commit()
+                    prod_conn.close()
+                except Exception as ex:
+                    print(f"[review] Error writing auto-edge to pipeline_cache: {ex}")
+            
+            # Send notification
+            # Use top-level send_email import
+            email_subject = "Your connection suggestion has been approved"
+            html_body = f"<p>Your suggestion to add the link between <strong>{subject}</strong> and <strong>{obj}</strong> has been approved.</p>"
+            if graph_has_nodes:
+                html_body += "<p>It has been successfully added to the graph.</p>"
+            else:
+                html_body += "<p>However, one or both of the entities were not found in the active graph, so it was queued for a future index rebuild.</p>"
+            
+            if submitter_email:
+                send_email(submitter_email, email_subject, html_body)
+                
+        elif req.status == "rejected" and item_type == "suggestion":
+            meta = json.loads(item["metadata"])
+            subject = meta.get("subject")
+            obj = meta.get("object")
+            # Use top-level send_email import
+            email_subject = "Your connection suggestion has been reviewed"
+            html_body = f"<p>Your suggestion to add the link between <strong>{subject}</strong> and <strong>{obj}</strong> has been rejected.</p>"
+            if submitter_email:
+                send_email(submitter_email, email_subject, html_body)
+                
+        return {"success": True, "message": f"Item {item_id} reviewed successfully. Status: {req.status}"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.post("/api/service/items/{item_id}/resolve")
+async def resolve_service_item(item_id: int, req: ResolveRequest, request: Request):
+    try:
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        item = c.execute("SELECT * FROM service_items WHERE id = ?", (item_id,)).fetchone()
+        if not item:
+            conn.close()
+            return JSONResponse(status_code=404, content={"success": False, "error": "Service item not found"})
+            
+        resolver = req.resolved_by or request.headers.get("Cf-Access-Authenticated-User-Email") or "admin"
+        now_str = datetime.now(timezone.utc).isoformat()
+        
+        c.execute("""
+            UPDATE service_items
+            SET status = 'resolved', reviewed_by = ?, reviewed_at = ?, resolution_note = ?
+            WHERE id = ?
+        """, (resolver, now_str, req.resolution_note, item_id))
+        
+        conn.commit()
+        conn.close()
+        
+        submitter_email = item["submitter_email"]
+        if submitter_email:
+            # Use top-level send_email import
+            email_subject = f"Service Item Resolved: {item['subject']}"
+            html_body = f"<p>Your service item regarding <strong>{item['subject']}</strong> has been resolved.</p>"
+            if req.resolution_note:
+                html_body += f"<p>Resolution note: {req.resolution_note}</p>"
+            send_email(submitter_email, email_subject, html_body)
+            
+        return {"success": True, "message": f"Item {item_id} resolved successfully."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.post("/api/service/notify/{item_id}")
+async def notify_service_item(item_id: int):
+    try:
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        item = c.execute("SELECT * FROM service_items WHERE id = ?", (item_id,)).fetchone()
+        if not item:
+            conn.close()
+            return JSONResponse(status_code=404, content={"success": False, "error": "Service item not found"})
+            
+        submitter_email = item["submitter_email"]
+        if not submitter_email:
+            conn.close()
+            return JSONResponse(status_code=400, content={"success": False, "error": "Item has no submitter email"})
+            
+        # Use top-level send_email import
+        email_subject = f"Notification regarding service item: {item['subject']}"
+        html_body = f"<p>This is a notification regarding your service item <strong>{item['subject']}</strong>.</p>"
+        html_body += f"<p>Current status: <strong>{item['status']}</strong></p>"
+        if item["resolution_note"]:
+            html_body += f"<p>Resolution note: {item['resolution_note']}</p>"
+            
+        res = send_email(submitter_email, email_subject, html_body)
+        conn.close()
+        
+        if res["success"]:
+            return {"success": True, "message": f"Notification sent successfully to {submitter_email}"}
+        else:
+            return JSONResponse(status_code=500, content={"success": False, "error": res["error"]})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.get("/api/service/metrics")
+async def get_service_metrics():
+    try:
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        # Calculate approval rate (approved suggestions / total suggestions)
+        c.execute("SELECT COUNT(*) FROM service_items WHERE item_type = 'suggestion' AND status = 'approved'")
+        approved_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM service_items WHERE item_type = 'suggestion'")
+        total_suggestions = c.fetchone()[0]
+        
+        approval_rate = (approved_count / total_suggestions) if total_suggestions > 0 else 0.0
+        
+        # Calculate avg resolution time in seconds
+        c.execute("SELECT created_at, reviewed_at FROM service_items WHERE reviewed_at IS NOT NULL")
+        times = []
+        for row in c.fetchall():
+            try:
+                created = datetime.fromisoformat(row["created_at"])
+                reviewed = datetime.fromisoformat(row["reviewed_at"])
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if reviewed.tzinfo is None:
+                    reviewed = reviewed.replace(tzinfo=timezone.utc)
+                times.append((reviewed - created).total_seconds())
+            except Exception:
+                pass
+                
+        avg_res_time = (sum(times) / len(times)) if times else 0.0
+        
+        # Calculate per-tester metrics
+        c.execute("SELECT id, email, name FROM testers")
+        testers = [dict(r) for r in c.fetchall()]
+        
+        tester_metrics = []
+        for t in testers:
+            email = t["email"]
+            c.execute("SELECT COUNT(*) FROM service_items WHERE submitter_email = ?", (email,))
+            sub_count = c.fetchone()[0]
+            
+            c.execute("SELECT COUNT(*) FROM service_items WHERE submitter_email = ? AND item_type = 'suggestion' AND status = 'approved'", (email,))
+            t_approved = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM service_items WHERE submitter_email = ? AND item_type = 'suggestion'", (email,))
+            t_total_sug = c.fetchone()[0]
+            t_app_rate = (t_approved / t_total_sug) if t_total_sug > 0 else 0.0
+            
+            churn_signal = False
+            if sub_count >= 3:
+                c.execute("SELECT MAX(event_at) FROM tester_events WHERE tester_id = ?", (t["id"],))
+                last_event_at = c.fetchone()[0]
+                if last_event_at:
+                    try:
+                        last_dt = datetime.fromisoformat(last_event_at)
+                        if last_dt.tzinfo is None:
+                            last_dt = last_dt.replace(tzinfo=timezone.utc)
+                        current_dt = datetime.now(timezone.utc)
+                        if (current_dt - last_dt).days >= 7:
+                            churn_signal = True
+                    except Exception:
+                        pass
+                        
+            tester_metrics.append({
+                "email": email,
+                "name": t["name"],
+                "submission_count": sub_count,
+                "approval_rate": t_app_rate,
+                "churn_signal": churn_signal
+            })
+            
+        conn.close()
+        return {
+            "success": True,
+            "metrics": {
+                "approval_rate": approval_rate,
+                "avg_resolution_time_seconds": avg_res_time,
+                "testers": tester_metrics
+            }
+        }
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
@@ -989,7 +1645,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <button id="psi-btn" onclick="document.getElementById('psi-file').click()">🔒 Check My Contacts</button>
     <span id="psi-result" style="display:none;"></span>
     <p class="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
-    <input type="file" id="psi-file" accept=".vcf,.csv,.txt" style="display:none" onchange="doPSI(this)">
+    <input type="file" id="psi-file" accept=".vcf,.csv,.txt" style="display:none" onchange="doOPRF(this)">
   </div>
 
   <div class="footer-meta" style="margin-top: 2rem; border-top: 1px solid #30363d; padding-top: 1.5rem; text-align: center;">
@@ -1751,125 +2407,265 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-async function doPSI(input) {
+/* The contact file is parsed locally.  The only values sent below are
+   blinded Ristretto points; plaintext names never enter a fetch body.
+   Tier derivation (normalizeExact/phoneticKey/lshBandTokens) is a
+   byte-for-byte port of webapp/contact_psi/keys.py -- verified against
+   the real Python module and the pinned test vectors before landing here
+   (see specifications/contact-check-psi-test-vectors.json). */
+
+const CONTACT_PSI_SUFFIXES = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v']);
+const CONTACT_PSI_SOUNDEX = {};
+for (const c of 'bfpv') CONTACT_PSI_SOUNDEX[c] = '1';
+for (const c of 'cgjkqsxz') CONTACT_PSI_SOUNDEX[c] = '2';
+for (const c of 'dt') CONTACT_PSI_SOUNDEX[c] = '3';
+CONTACT_PSI_SOUNDEX['l'] = '4';
+for (const c of 'mn') CONTACT_PSI_SOUNDEX[c] = '5';
+CONTACT_PSI_SOUNDEX['r'] = '6';
+for (const c of 'aeiouy') CONTACT_PSI_SOUNDEX[c] = '0';
+
+function contactPsiNormalizeExact(name) {
+  let text = String(name).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  text = text.replace(/[-'.,]/g, ' ').replace(/[^a-z0-9\s]/g, '');
+  const tokens = text.split(/\s+/).filter(Boolean);
+  if (tokens.length && CONTACT_PSI_SUFFIXES.has(tokens[tokens.length - 1])) tokens.pop();
+  return tokens.sort().join(' ');
+}
+
+function contactPsiSoundexToken(token) {
+  const letters = [...token].filter(c => c >= 'a' && c <= 'z');
+  if (!letters.length) return '0000';
+  const digits = [];
+  let last = null;
+  for (const c of letters) {
+    if (c === 'h' || c === 'w') continue;
+    const cls = CONTACT_PSI_SOUNDEX[c];
+    if (cls !== last) {
+      digits.push(cls);
+      if (digits.length === 4) break;
+    }
+    last = cls;
+  }
+  while (digits.length < 4) digits.push('0');
+  return digits.join('');
+}
+
+function contactPsiPhoneticKey(name) {
+  const normalized = contactPsiNormalizeExact(name);
+  if (!normalized) return '';
+  return normalized.split(' ').map(contactPsiSoundexToken).sort().join('|');
+}
+
+function contactPsiTrigrams(name) {
+  const padded = ' ' + contactPsiNormalizeExact(name) + ' ';
+  const set = new Set();
+  for (let i = 0; i <= padded.length - 3; i++) set.add(padded.slice(i, i + 3));
+  return set;
+}
+
+function contactPsiJaccard(a, b) {
+  if (!a.size && !b.size) return 1;
+  let intersection = 0;
+  for (const g of a) if (b.has(g)) intersection++;
+  const union = a.size + b.size - intersection;
+  return union ? intersection / union : 0;
+}
+
+function contactPsiFnv1a32(value) {
+  let h = 0x811C9DC5;
+  for (const byte of new TextEncoder().encode(value)) {
+    h ^= byte;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+const CONTACT_PSI_MERSENNE_PRIME = (1n << 61n) - 1n;
+// Pinned coefficient table (first 24 of the 32 in
+// specifications/contact-check-psi-test-vectors.json) -- must never be
+// regenerated, only copied verbatim, or phonetic/possible-tier matches
+// silently stop working against the manifest built with the Python table.
+const CONTACT_PSI_MINHASH_COEFFICIENTS = [
+  [1979489632114620755n, 1509789760387149117n], [1918805637228309363n, 833186062390129979n],
+  [495730073182853211n, 595723440359463397n], [90324890263903832n, 445813994702288431n],
+  [2257285402276830348n, 1119254023105354110n], [1021786013160126921n, 1265193707630753218n],
+  [212068324108876953n, 504007361524737770n], [414280352786679535n, 803222919456732142n],
+  [1768409434185088727n, 1986075548297811767n], [1742620678125402464n, 2257046664463391349n],
+  [1415753637546083748n, 593533786031525589n], [1196761435141869264n, 2265235534276433043n],
+  [395539926857611198n, 457238027093643287n], [1503513604051188411n, 1643417863877736261n],
+  [1816084546320001784n, 1408403254850552953n], [1707502431300134009n, 1007438581320924473n],
+  [2225548798102152013n, 1814493586781104521n], [567344556111402844n, 1649644300899723705n],
+  [463722948478937003n, 762157748086021223n], [1390024454749409324n, 597300290928022787n],
+  [535273311151590049n, 445969734299799432n], [1794290647980509285n, 1609987668421870033n],
+  [1379461383878485334n, 176252640438661704n], [1433166327964526570n, 1929046851930636275n],
+];
+
+function contactPsiMinhashSignature(trigramSet) {
+  if (!trigramSet.size) return new Array(24).fill(0n);
+  const hashes = [...trigramSet].map(g => BigInt(contactPsiFnv1a32(g)));
+  return CONTACT_PSI_MINHASH_COEFFICIENTS.map(([a, b]) => {
+    let m = null;
+    for (const x of hashes) {
+      const v = (a * x + b) % CONTACT_PSI_MERSENNE_PRIME;
+      if (m === null || v < m) m = v;
+    }
+    return m;
+  });
+}
+
+function contactPsiLshBandTokens(name) {
+  const signature = contactPsiMinhashSignature(contactPsiTrigrams(name));
+  const tokens = [];
+  for (let i = 0; i < 3; i++) tokens.push(`${i}:` + signature.slice(i * 8, (i + 1) * 8).join(','));
+  return tokens;
+}
+
+async function doOPRF(input) {
   const file = input.files[0];
   if (!file) return;
   const btn = document.getElementById('psi-btn');
   const result = document.getElementById('psi-result');
-  btn.textContent = '⏳ Loading graph names...';
   btn.disabled = true;
-  result.style.display = 'none';
-  
+  result.style.display = 'inline-block';
+  result.style.color = '';
+  result.textContent = '';
   try {
-    // Download compact graph names
-    let graphNames = window._graphNames;
-    if (!graphNames) {
-      const res = await fetch('/api/names');
-      const buf = await res.arrayBuffer();
-      const decompressed = new DecompressionStream('gzip');
-      const ds = new Response(buf).body.pipeThrough(decompressed);
-      const reader = ds.getReader();
-      let data = '';
-      while (true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        data += new TextDecoder().decode(value);
-      }
-      graphNames = JSON.parse(data);
-      window._graphNames = graphNames;
+    const { RistrettoPoint } = await import('https://cdn.jsdelivr.net/npm/@noble/curves@1.9.7/esm/ed25519.js');
+    const metaResponse = await fetch('/api/contacts/manifest-meta');
+    if (!metaResponse.ok) throw new Error('Contact matching is temporarily unavailable');
+    const meta = await metaResponse.json();
+
+    const names = (await file.text()).split(/\r?\n/).map(line => line.trim())
+      .filter(line => line && !/^(BEGIN|END|VERSION|EMAIL|TEL):/.test(line))
+      .map(line => line.includes(':') ? line.slice(line.indexOf(':') + 1).trim() : line)
+      .filter(name => name.length > 3);
+    if (!names.length) throw new Error('No contacts found in file');
+
+    const sha512 = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-512', bytes));
+    const sha256 = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    const textBytes = (s) => new TextEncoder().encode(s);
+    const concatBytes = (...arrs) => { const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0)); let o = 0; for (const a of arrs) { out.set(a, o); o += a.length; } return out; };
+    const toB64 = bytes => btoa(String.fromCharCode(...bytes));
+    const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+    const bytesToHexPrefix = (bytes, n) => Array.from(bytes.slice(0, n)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const leBytesToBigInt = (bytes) => { let x = 0n; for (let i = bytes.length - 1; i >= 0; i--) x = (x << 8n) | BigInt(bytes[i]); return x; };
+    const randomScalar = () => RistrettoPoint.Fn.create(leBytesToBigInt(crypto.getRandomValues(new Uint8Array(32))));
+    const pointFor = async (namespace, item) => RistrettoPoint.hashToCurve(await sha512(concatBytes(textBytes(namespace), new Uint8Array([0]), textBytes(item))));
+
+    // Build every (contact, tier, item) query, keeping a back-reference to
+    // the contact for possible-tier re-verification.
+    const queries = [];
+    for (const name of names) {
+      const exact = contactPsiNormalizeExact(name);
+      if (exact) queries.push({ name, tier: 'exact', item: exact });
+      const phonetic = contactPsiPhoneticKey(name);
+      if (phonetic) queries.push({ name, tier: 'phonetic', item: phonetic });
+      for (const token of contactPsiLshBandTokens(name)) queries.push({ name, tier: 'possible', item: token });
     }
-    const graphKeys = Object.keys(graphNames);
-    
-    btn.textContent = '⏳ Matching...';
-    
-    // Read contacts file
-    const text = await file.text();
-    const lines = text.split('\n');
-    const contacts = [];
-    
-    for (let line of lines) {
-      line = line.trim();
-      if (!line) continue;
-      if (line.startsWith('BEGIN:') || line.startsWith('END:') || line.startsWith('VERSION:')) continue;
-      if (line.startsWith('FN:') || line.startsWith('N:')) {
-        let name = line.includes(':') ? line.split(':')[1].trim() : line;
-        if (line.startsWith('N:') && name.includes(';')) {
-          const parts = name.split(';');
-          name = (parts[1] + ' ' + parts[0]).trim();
-        }
-        if (name.length > 3) contacts.push(name);
-      } else if (line.includes(',') && !line.startsWith('EMAIL') && !line.startsWith('TEL')) {
-        const cells = line.split(',');
-        if (cells.length >= 2) {
-          const name = (cells[0] + ' ' + cells[1]).trim();
-          if (name.length > 3) contacts.push(name);
-        }
-      }
+
+    for (const q of queries) {
+      q.blindScalar = randomScalar();
+      q.blindedPoint = (await pointFor(q.tier, q.item)).multiply(q.blindScalar);
     }
-    
-    if (contacts.length === 0) {
-      result.textContent = 'No contacts found in file';
-      result.style.color = '#f85149';
-      result.style.display = 'inline-block';
-      btn.textContent = '🔒 Check My Contacts';
-      btn.disabled = false;
-      return;
+
+    const evaluatedPoints = [];
+    for (let offset = 0; offset < queries.length; offset += 3000) {
+      const chunk = queries.slice(offset, offset + 3000);
+      const response = await fetch('/api/contacts/oprf-eval', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key_version: meta.key_version, points: chunk.map(q => toB64(q.blindedPoint.toRawBytes())) }),
+      });
+      if (!response.ok) throw new Error((await response.json()).detail || 'OPRF evaluation failed');
+      evaluatedPoints.push(...(await response.json()).points);
     }
-    
-    // Fuzzy match each contact against graph names
-    const matches = [];
-    for (let contact of contacts) {
-      const c = contact.toLowerCase().trim();
-      // Generate variants
-      const variants = [c];
-      // First + last only
-      const parts = c.split(/\s+/);
-      if (parts.length > 2) {
-        variants.push(parts[0] + ' ' + parts[parts.length - 1]);
-        variants.push(parts[parts.length - 1] + ' ' + parts[0]);
-      }
-      // Last, First
-      if (parts.length >= 2) {
-        variants.push(parts[parts.length - 1] + ' ' + parts[0]);
-      }
-      
-      for (let variant of variants) {
-        // Exact match
-        if (graphNames[variant]) {
-          matches.push(contact + ' → ' + graphNames[variant]);
-          break;
+
+    // Unblind and derive the AES key for every query first, so the set of
+    // manifest shards actually needed is known before fetching anything.
+    const kvBytes = new Uint8Array(4);
+    new DataView(kvBytes.buffer).setUint32(0, meta.key_version, false);
+    for (let i = 0; i < queries.length; i++) {
+      const q = queries[i];
+      const responsePoint = RistrettoPoint.fromHex(fromB64(evaluatedPoints[i]));
+      const rInv = RistrettoPoint.Fn.inv(q.blindScalar);
+      const unblinded = responsePoint.multiply(rInv);
+      q.aesKeyBytes = await sha256(concatBytes(textBytes('contact-psi-v1'), kvBytes, unblinded.toRawBytes()));
+      q.prefix = bytesToHexPrefix(q.aesKeyBytes, 4);
+      q.shardId = q.prefix.slice(0, meta.shard_hex_chars || 2);
+    }
+
+    // Fetch only the manifest shard(s) that cover the prefixes actually
+    // derived above -- not the whole corpus. The server never learns
+    // which shard(s) are requested correspond to which contact; it only
+    // sees the same blinded-point traffic from the OPRF step, plus which
+    // (of up to 256) shard files were requested, which reveals at most a
+    // few bits of a derived key's hash prefix -- not the item itself.
+    const shardUrlTemplate = meta.manifest_shard_url_template || '/api/contacts/manifest-shard/{shard}';
+    const neededShardIds = [...new Set(queries.map(q => q.shardId))];
+    const buckets = {};
+    await Promise.all(neededShardIds.map(async (shardId) => {
+      const shardResponse = await fetch(shardUrlTemplate.replace('{shard}', shardId));
+      if (!shardResponse.ok) return; // shard has no entries for this prefix range -- not an error
+      const shardBuf = await shardResponse.arrayBuffer();
+      const decompressed = new Response(new Response(shardBuf).body.pipeThrough(new DecompressionStream('gzip')));
+      const shardManifest = JSON.parse(await decompressed.text());
+      Object.assign(buckets, shardManifest.buckets || {});
+    }));
+
+    const tierRank = { exact: 0, phonetic: 1, possible: 2 };
+    const bestByContact = {};
+    for (const q of queries) {
+      const aesKeyBytes = q.aesKeyBytes;
+      const entries = buckets[q.prefix] || [];
+      if (!entries.length) continue;
+      const cryptoKey = await crypto.subtle.importKey('raw', aesKeyBytes, 'AES-GCM', false, ['decrypt']);
+      for (const entry of entries) {
+        let payload;
+        try {
+          const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(entry.nonce) }, cryptoKey, fromB64(entry.ct));
+          payload = JSON.parse(new TextDecoder().decode(pt));
+        } catch (e) {
+          continue; // wrong key for this bucket (prefix collision) -- expected, not an error
         }
-        // Prefix match (first 4 chars of last name)
-        const vparts = variant.split(/\s+/);
-        if (vparts.length >= 2 && vparts[vparts.length - 1].length >= 4) {
-          const prefix = vparts[vparts.length - 1].substring(0, 4).toLowerCase();
-          for (let key of graphKeys) {
-            if (key.includes(prefix) && (key.includes(vparts[0].substring(0, 3).toLowerCase()) || key.includes(vparts[vparts.length - 1].substring(0, 3).toLowerCase()))) {
-              matches.push(contact + ' → ' + graphNames[key]);
-              break;
-            }
+        for (const m of payload.matches || []) {
+          // Both phonetic and possible tiers are many-to-one (many
+          // distinct real names can share one Soundex code or LSH band --
+          // e.g. "Katharine Lee" and "Jude Law" both soundex to
+          // "2030|4000", confirmed against the real ~1.46M-person corpus,
+          // not a hypothetical edge case). A bundle is server-ranked by
+          // degree/notability, not by resemblance to this query, so the
+          // top-ranked entry in a bucket can be a totally unrelated,
+          // high-degree name. Re-verify string similarity locally for
+          // both tiers before ever displaying a match; exact tier needs
+          // no such check since its OPRF item IS the normalized string.
+          let similarity = 1;
+          if (q.tier !== 'exact') {
+            similarity = contactPsiJaccard(contactPsiTrigrams(q.name), contactPsiTrigrams(m.name));
+            if (similarity < 0.5) continue; // phonetic/band collision, not a real resemblance
+          }
+          const rank = tierRank[q.tier];
+          const current = bestByContact[q.name];
+          if (!current || rank < current.rank || (rank === current.rank && similarity > current.similarity)) {
+            bestByContact[q.name] = { rank, similarity, tier: q.tier, name: m.name, id: m.id };
           }
         }
       }
     }
-    
-    // Show results
-    if (matches.length === 0) {
-      result.textContent = 'No contacts found in the database';
-      result.style.color = '#8b949e';
+
+    const tierLabel = { exact: 'Definite', phonetic: 'Likely', possible: 'Possible' };
+    const matchedContacts = Object.keys(bestByContact);
+    if (!matchedContacts.length) {
+      result.textContent = `Checked ${names.length} contact${names.length === 1 ? '' : 's'} privately \u2014 no matches found`;
     } else {
-      result.innerHTML = '<strong>' + matches.length + ' contact' + (matches.length !== 1 ? 's' : '') + ' found:</strong><br>' +
-        matches.map(m => '<span style="display:block;font-size:0.85rem;color:#8b949e;margin-top:0.3rem;">✓ ' + escHtml(m) + '</span>').join('');
+      const rows = matchedContacts.map(contact => {
+        const m = bestByContact[contact];
+        return `<div>${escHtml(contact)} \u2192 <strong>${escHtml(m.name)}</strong> <span style="color:#8b949e">(${tierLabel[m.tier]})</span></div>`;
+      }).join('');
+      result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>${rows}`;
     }
-    result.style.display = 'inline-block';
-  } catch(e) {
-    result.textContent = 'Error: ' + e.message;
+  } catch (error) {
+    result.textContent = 'Error: ' + error.message;
     result.style.color = '#f85149';
-    result.style.display = 'inline-block';
-  }
-  
-  btn.textContent = '🔒 Check My Contacts';
-  btn.disabled = false;
+  } finally { btn.disabled = false; }
 }
 </script>
 </body>
