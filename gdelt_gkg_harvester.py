@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from collections import defaultdict
 from src.config import DB_PATH
 from src.data.db_manager import DBManager
+from fused_name_filter import is_fused_name
 
 CAMEO_FOAF = {"01": ("MENTIONED_WITH", "was mentioned in connection with"),
     "03": ("MENTIONED_WITH", "was mentioned in connection with"),
@@ -48,7 +49,7 @@ def scan_gkg_file(url, known_nodes, db):
                 if not persons:
                     continue
                 person_list = [p.strip() for p in row[11].split(';') if p.strip()]
-                matched = [p for p in person_list if p.lower() in known_nodes]
+                matched = [p for p in person_list if p.lower() in known_nodes and not is_fused_name(p)]
                 if len(matched) >= 2:
                     for p1 in matched:
                         for p2 in matched:
