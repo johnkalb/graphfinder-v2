@@ -128,9 +128,10 @@ def _load_deceased():
 def _load_search():
     """Load just the search index — fast, independent of graph."""
     global _search_index, _canonical_map, _labels
-    spath = DATA_DIR / "search_index.json"
+    spath = DATA_DIR / "search_index.json.gz"
     if _search_index is None and spath.exists():
-        with open(spath, "r", encoding="utf-8") as f:
+        import gzip
+        with gzip.open(spath, "rt", encoding="utf-8") as f:
             loaded = json.load(f)
         # Drop known unresolved-ID placeholder entries once, here, rather
         # than checking on every _find_entry() call: with ~1.8M entries,

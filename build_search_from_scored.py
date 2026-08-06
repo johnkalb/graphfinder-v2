@@ -9,7 +9,7 @@ import networkx as nx
 from collections import Counter
 
 SCORED = "webapp/data/graph_scored.json.gz"
-OUT = "webapp/data/search_index.json"
+OUT = "webapp/data/search_index.json.gz"
 
 print("Loading scored graph...")
 with gzip.open(SCORED, "rt", encoding="utf-8") as f:
@@ -52,7 +52,7 @@ for i, name in enumerate(nodes):
 # Sort by canonical for stable output
 index.sort(key=lambda e: e["canonical"].lower())
 
-with open(OUT, "w", encoding="utf-8") as f:
+with gzip.open(OUT, "wt", encoding="utf-8") as f:
     json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
 
 print(f"Wrote {len(index)} search entries to {OUT} ({os.path.getsize(OUT)/1024/1024:.1f} MB)")
