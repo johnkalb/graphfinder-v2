@@ -1,0 +1,13 @@
+.git
+/data/
+.venv
+venv/
+.codegraph
+.hermes
+__pycache__
+*.pyc
+.hypothesis
+.pytest_cache
+*.gexf
+/tests/
+uspto_*_report.json

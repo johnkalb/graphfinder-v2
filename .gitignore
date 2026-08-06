@@ -37,3 +37,4 @@ compact_names.json
 webapp/data/graph.pkl
 webapp/data/canonical_map.json
 webapp/data/labels.json
+.codegraph/
