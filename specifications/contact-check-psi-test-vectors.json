@@ -1,0 +1,833 @@
+{
+  "test_secret_derivation": {
+    "seed_preimage_utf8": "contact-psi-TEST-secret-v1",
+    "seed_sha512_hex": "0bb82ee86896667d6643f4720e7ba1abfb6f804452dd06b11697de24cfc12759cca1cdb02d41865c1090e6442bfcd02c41ee68e073e9b9d311e34d1a71260425",
+    "secret_scalar_b64": "grNfg+/fG256QKTTryS8vTxWOgcxSnPaUJGnHqpEqgQ=",
+    "NOTE": "test-only secret; production uses a real random scalar, never a seed-derived one"
+  },
+  "key_version": 1,
+  "minhash_coefficients": [
+    [
+      1979489632114620755,
+      1509789760387149117
+    ],
+    [
+      1918805637228309363,
+      833186062390129979
+    ],
+    [
+      495730073182853211,
+      595723440359463397
+    ],
+    [
+      90324890263903832,
+      445813994702288431
+    ],
+    [
+      2257285402276830348,
+      1119254023105354110
+    ],
+    [
+      1021786013160126921,
+      1265193707630753218
+    ],
+    [
+      212068324108876953,
+      504007361524737770
+    ],
+    [
+      414280352786679535,
+      803222919456732142
+    ],
+    [
+      1768409434185088727,
+      1986075548297811767
+    ],
+    [
+      1742620678125402464,
+      2257046664463391349
+    ],
+    [
+      1415753637546083748,
+      593533786031525589
+    ],
+    [
+      1196761435141869264,
+      2265235534276433043
+    ],
+    [
+      395539926857611198,
+      457238027093643287
+    ],
+    [
+      1503513604051188411,
+      1643417863877736261
+    ],
+    [
+      1816084546320001784,
+      1408403254850552953
+    ],
+    [
+      1707502431300134009,
+      1007438581320924473
+    ],
+    [
+      2225548798102152013,
+      1814493586781104521
+    ],
+    [
+      567344556111402844,
+      1649644300899723705
+    ],
+    [
+      463722948478937003,
+      762157748086021223
+    ],
+    [
+      1390024454749409324,
+      597300290928022787
+    ],
+    [
+      535273311151590049,
+      445969734299799432
+    ],
+    [
+      1794290647980509285,
+      1609987668421870033
+    ],
+    [
+      1379461383878485334,
+      176252640438661704
+    ],
+    [
+      1433166327964526570,
+      1929046851930636275
+    ],
+    [
+      1079066032773371540,
+      1482811487008790911
+    ],
+    [
+      272359009063176401,
+      307189749562611427
+    ],
+    [
+      802406842664134071,
+      895266475138573569
+    ],
+    [
+      993843574814203135,
+      424729575475090894
+    ],
+    [
+      1630875757507514403,
+      1523534392560322564
+    ],
+    [
+      2003581921769767963,
+      460751848290301596
+    ],
+    [
+      657865912588432896,
+      1279658912092487520
+    ],
+    [
+      2067991725699937825,
+      1862262960166710096
+    ]
+  ],
+  "h1_vectors": [
+    {
+      "namespace": "exact",
+      "item": "john smith",
+      "point_b64": "zvROxgfjDmmjFY/we6Pio1z4zv7thpFz6a2DOyEpVxw="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2503",
+      "point_b64": "UlzoW41iDw+jlkFKtWX8FkFVV2v10OK77CnF7GFl3wo="
+    },
+    {
+      "namespace": "exact",
+      "item": "john smith",
+      "point_b64": "zvROxgfjDmmjFY/we6Pio1z4zv7thpFz6a2DOyEpVxw="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2503",
+      "point_b64": "UlzoW41iDw+jlkFKtWX8FkFVV2v10OK77CnF7GFl3wo="
+    },
+    {
+      "namespace": "exact",
+      "item": "jon smyth",
+      "point_b64": "sjLPsPQPlskfweu3QC9rWFjKRB/Nu2uJ5/ENwIl8nAU="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2503",
+      "point_b64": "UlzoW41iDw+jlkFKtWX8FkFVV2v10OK77CnF7GFl3wo="
+    },
+    {
+      "namespace": "exact",
+      "item": "kalb robert",
+      "point_b64": "xrGeAgcxNMarvY/4QFAiS93P77EOYlLjwS7/Mdiw8xU="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2041|6010",
+      "point_b64": "ptSTkK3c2wczdwgpsXRFNV1Ym2W/S8EBRbO18fvb00Q="
+    },
+    {
+      "namespace": "exact",
+      "item": "kalb robert",
+      "point_b64": "xrGeAgcxNMarvY/4QFAiS93P77EOYlLjwS7/Mdiw8xU="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2041|6010",
+      "point_b64": "ptSTkK3c2wczdwgpsXRFNV1Ym2W/S8EBRbO18fvb00Q="
+    },
+    {
+      "namespace": "exact",
+      "item": "katherine lee",
+      "point_b64": "PELRKub0aEHCsBVTwGIgsyVYDOd4qMsnQKvqA4LHcT0="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2030|4000",
+      "point_b64": "FJp7+clU96byt7sreBokBeC2wFmdYRbVtNg6WTxuZGw="
+    },
+    {
+      "namespace": "exact",
+      "item": "catherine lee",
+      "point_b64": "dJ7cCO6S9cDfeyZlLt6A3hQ7My/V0QPIp3NViIHNLRk="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2030|4000",
+      "point_b64": "FJp7+clU96byt7sreBokBeC2wFmdYRbVtNg6WTxuZGw="
+    },
+    {
+      "namespace": "exact",
+      "item": "donald j trump",
+      "point_b64": "ZqRkz8bCVrnRegWB+DWdvXyMWiRtbviz76o06K1Dvmg="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2000|3050|3605",
+      "point_b64": "GqctlvRSpI624VVK+gRr5I4p8SvUgoWQlq8VPF5RxUc="
+    },
+    {
+      "namespace": "exact",
+      "item": "donald trump",
+      "point_b64": "IiIJajeXxNDYGHbT3IaxjxmuGWqQo2vCtmh/jIxcyT8="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "3050|3605",
+      "point_b64": "oiI1DVQRgr6uIhDZHnbFzYSyNy7XaXY41zsIbxxPtU8="
+    },
+    {
+      "namespace": "exact",
+      "item": "cohen steven",
+      "point_b64": "GJV3gJapnrTF/uO6V59ZT9aunJKszxVTo0MYYCnAeRI="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2301",
+      "point_b64": "gDXncDfIcb/QooB1mjJZo7+/xKXC1B2nMhSRoRjyTCk="
+    },
+    {
+      "namespace": "exact",
+      "item": "cohen stephen",
+      "point_b64": "fGdvbzLpNuBKy3JwmHuhczOae6sW+yo5jYYkRvWQl3U="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2301",
+      "point_b64": "gDXncDfIcb/QooB1mjJZo7+/xKXC1B2nMhSRoRjyTCk="
+    },
+    {
+      "namespace": "exact",
+      "item": "epstein jeffrey",
+      "point_b64": "5h0pm8fWj7zZZ2sDM7UXwAPEy805wHV8PCWKCwI1/hE="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "0123|2016",
+      "point_b64": "pBMs13c7vjmxiAprevaDmUDKRh1pHnP4c/+aEduL7EI="
+    },
+    {
+      "namespace": "exact",
+      "item": "brien smith",
+      "point_b64": "+qFz1P1hObXMCB0Vsxlxm6+fWSP9SEKlev7ukEgzBWA="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "1605|2503",
+      "point_b64": "VgA5o86swfulM7KyyzQxZJq1ZoBy0Bb8gb2V839VfyY="
+    },
+    {
+      "namespace": "exact",
+      "item": "ghislaine maxwell",
+      "point_b64": "jP2EZqTMSVMWcwFUtRB8zC9b/eztKVedAd/tVjBJ9U8="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2024|5020",
+      "point_b64": "bJT2UHH+BpJ5f0NNzG0chHTiOaPtO8scYX/NnH6NhUY="
+    },
+    {
+      "namespace": "exact",
+      "item": "elizabeth warren",
+      "point_b64": "zgvUASnb4FskodyU8Exa+neZOfT+sGK1iZ9TE5+/Wi8="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "0402|0605",
+      "point_b64": "gEOoYi+3Tj2+NHS3bVXLDu3BamQqEbPs9gqQNpGX5Fk="
+    },
+    {
+      "namespace": "exact",
+      "item": "diaz raquel",
+      "point_b64": "ci3teudo8NCUhYVf9Y7gR0v1vcmOja2m3JJRl9ZlPjM="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "3020|6020",
+      "point_b64": "tH8G1KXLIy2hVdBHIjV40mFqveUbLs2rF3BbJgBo7X8="
+    },
+    {
+      "namespace": "exact",
+      "item": "brzezinski zbigniew",
+      "point_b64": "gtjYyyZxjtcrt0KBjskG0kuD5R+ncfwhwXADaxmjj1w="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "1620|2102",
+      "point_b64": "IFKp3qjwrS3hpjua/F5aipPyozbDX8u+zeE+GOPzO08="
+    },
+    {
+      "namespace": "exact",
+      "item": "ng xavier",
+      "point_b64": "Ju2+lG52tqTfqOkowNmde39A1gv8S6TXK8wsZe/y+xM="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2010|5200",
+      "point_b64": "Iif26NfA7TM+NQjGMaQJZbsKkHZpBh5JJyTHKwkwZTw="
+    },
+    {
+      "namespace": "exact",
+      "item": "wu zhang",
+      "point_b64": "yBBmLQLmi0HlPAV8iPPFptrsgi/U15BhR5dOGIa1ADQ="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "0000|2052",
+      "point_b64": "mDG4dcx2qbSuVVvttHeXj27QrcQz8spL2WQnWeJB2AA="
+    }
+  ],
+  "full_eval_vectors": [
+    {
+      "namespace": "exact",
+      "item": "john smith",
+      "aes_key_b64": "mlqca3YGeDbp/+suIkUw9QvI0LhVv3Z4ihtMz4kdEHo="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2503",
+      "aes_key_b64": "YibPBFbamLkMVdZwkeeh8ljzI+PoVjKS/sdk+135nXk="
+    },
+    {
+      "namespace": "exact",
+      "item": "john smith",
+      "aes_key_b64": "mlqca3YGeDbp/+suIkUw9QvI0LhVv3Z4ihtMz4kdEHo="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2503",
+      "aes_key_b64": "YibPBFbamLkMVdZwkeeh8ljzI+PoVjKS/sdk+135nXk="
+    },
+    {
+      "namespace": "exact",
+      "item": "jon smyth",
+      "aes_key_b64": "aGSl94ILZ4oJf7cIp6sr3X4NO0F934Viuz2U11dmA5Q="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2503",
+      "aes_key_b64": "YibPBFbamLkMVdZwkeeh8ljzI+PoVjKS/sdk+135nXk="
+    },
+    {
+      "namespace": "exact",
+      "item": "kalb robert",
+      "aes_key_b64": "4+EMg3F9+rHRoHt2JCbpNrOcDjvEQdEq5tezn4Hlbbk="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2041|6010",
+      "aes_key_b64": "ueKLnkhqDtH1KXpj4DYGnonMI5x+eYxIpwRnnKOYyAo="
+    },
+    {
+      "namespace": "exact",
+      "item": "kalb robert",
+      "aes_key_b64": "4+EMg3F9+rHRoHt2JCbpNrOcDjvEQdEq5tezn4Hlbbk="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2041|6010",
+      "aes_key_b64": "ueKLnkhqDtH1KXpj4DYGnonMI5x+eYxIpwRnnKOYyAo="
+    },
+    {
+      "namespace": "exact",
+      "item": "katherine lee",
+      "aes_key_b64": "VJY6gJViwTidRNLQyFgaRXiGRPHU8D1tEQkSiVjdFCY="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2030|4000",
+      "aes_key_b64": "elBPF/Du5CPGcSISINfXrgSycLBocPr/KpCCZG1NqW8="
+    },
+    {
+      "namespace": "exact",
+      "item": "catherine lee",
+      "aes_key_b64": "NC+VXLCCZROOxOj+icEBjU8AmxKH5uAecacN6XLbxJw="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2030|4000",
+      "aes_key_b64": "elBPF/Du5CPGcSISINfXrgSycLBocPr/KpCCZG1NqW8="
+    },
+    {
+      "namespace": "exact",
+      "item": "donald j trump",
+      "aes_key_b64": "GdkiLebO3FbYtsmHr/369PeCH4fLIkPjKmg4w8G/wxs="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2000|3050|3605",
+      "aes_key_b64": "o40a64EjNwlunPhlQ8jnh6UNELT+i8T8E+xnt9LCFFA="
+    },
+    {
+      "namespace": "exact",
+      "item": "donald trump",
+      "aes_key_b64": "2P9tOqb3xubZTHoeWKeFW7HuxIl39hd+zyybiHUZ8dE="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "3050|3605",
+      "aes_key_b64": "VbD8zpje/7WWm6q9XNkdf0mfUGO3xUIfGQUkneS8bAU="
+    },
+    {
+      "namespace": "exact",
+      "item": "cohen steven",
+      "aes_key_b64": "1uYElp4dRurosj420sGC20wxY+caJbDqenQaIV4M0vM="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2301",
+      "aes_key_b64": "neX/qBMauVTPA01QyJrbIjEXNHFu8+0KWsxVnxUIAKk="
+    },
+    {
+      "namespace": "exact",
+      "item": "cohen stephen",
+      "aes_key_b64": "2K4qjcbdtQwHTys+Yv4lRK/wLGyfCKlYT1JxF6rDN5I="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2050|2301",
+      "aes_key_b64": "neX/qBMauVTPA01QyJrbIjEXNHFu8+0KWsxVnxUIAKk="
+    },
+    {
+      "namespace": "exact",
+      "item": "epstein jeffrey",
+      "aes_key_b64": "XN7Pdm8F0TNjoX45ecLnK/QXGtbHxs15xaPWnDE4SO0="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "0123|2016",
+      "aes_key_b64": "geERD5nSCYPCfAQ6lTiMKJm0LAnd2hmc1SeXpKknvjs="
+    },
+    {
+      "namespace": "exact",
+      "item": "brien smith",
+      "aes_key_b64": "lPX/R2gxm3e6Vy6zfPtyTEGbywlKVFJY1IIB2ItfTVo="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "1605|2503",
+      "aes_key_b64": "8b3SrNNWoSSO6g3TWVVafTLJkOFG10hrLuDqrC735Kw="
+    },
+    {
+      "namespace": "exact",
+      "item": "ghislaine maxwell",
+      "aes_key_b64": "cwhUus6gLtc5N10tq80Ladn4nIMtFLqXI5/NUxh2/Yw="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2024|5020",
+      "aes_key_b64": "C04r4f6nHtmaF4Fclt4Uz2KAFwXhJwgjewFgcWOIbnI="
+    },
+    {
+      "namespace": "exact",
+      "item": "elizabeth warren",
+      "aes_key_b64": "Hu7KDDefNTHBO/nyXZoszoTC1WyMWEe7S/6ZtvOq/+4="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "0402|0605",
+      "aes_key_b64": "aywBF+//rr6KDTsGzMqgXUiHbyOZL9MHK9MVdqSpCAA="
+    },
+    {
+      "namespace": "exact",
+      "item": "diaz raquel",
+      "aes_key_b64": "HKSiEnh8WD0BuahOvkw73ubUx5ciuEegIDoY/HmphKY="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "3020|6020",
+      "aes_key_b64": "gpcD54VIOQ/PYXm7HDWA5EpTrKm7Ck6g9p+BfF4QZSY="
+    },
+    {
+      "namespace": "exact",
+      "item": "brzezinski zbigniew",
+      "aes_key_b64": "MMlRNjCtcUiUuviDEGppjpnBORNoCbtuIkOCpASncuw="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "1620|2102",
+      "aes_key_b64": "j72BSv+BiWY/PazYSLWKsmRYGeFKKlmWZYcwPpq3Gas="
+    },
+    {
+      "namespace": "exact",
+      "item": "ng xavier",
+      "aes_key_b64": "4dGHw6MGOUy+YdOuFohCnp0zikI9p5uhnDyB1ad2zv8="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "2010|5200",
+      "aes_key_b64": "17uJbQjj6H3spGQqkHmOBUw8co68NULek3e323f9noA="
+    },
+    {
+      "namespace": "exact",
+      "item": "wu zhang",
+      "aes_key_b64": "O9cQG9k4JshsONV6nukysdgryMYZPR6QVgYZAyTaHH8="
+    },
+    {
+      "namespace": "phonetic",
+      "item": "0000|2052",
+      "aes_key_b64": "7k4Wni6b2QXGSUmbdGJQqpxm6GyTXmAjv4Furq3WcBQ="
+    }
+  ],
+  "normalize_exact_vectors": [
+    {
+      "input": "John Smith",
+      "output": "john smith"
+    },
+    {
+      "input": "Smith, John",
+      "output": "john smith"
+    },
+    {
+      "input": "Jon Smyth",
+      "output": "jon smyth"
+    },
+    {
+      "input": "Robert Kalb Jr.",
+      "output": "kalb robert"
+    },
+    {
+      "input": "Robert Kalb",
+      "output": "kalb robert"
+    },
+    {
+      "input": "Katherine Lee",
+      "output": "katherine lee"
+    },
+    {
+      "input": "Catherine Lee",
+      "output": "catherine lee"
+    },
+    {
+      "input": "Donald J. Trump",
+      "output": "donald j trump"
+    },
+    {
+      "input": "Donald Trump",
+      "output": "donald trump"
+    },
+    {
+      "input": "Steven Cohen",
+      "output": "cohen steven"
+    },
+    {
+      "input": "Stephen Cohen",
+      "output": "cohen stephen"
+    },
+    {
+      "input": "Jeffrey Epstein",
+      "output": "epstein jeffrey"
+    },
+    {
+      "input": "'Brien-Smith",
+      "output": "brien smith"
+    },
+    {
+      "input": "Ghislaine Maxwell",
+      "output": "ghislaine maxwell"
+    },
+    {
+      "input": "Elizabeth Warren",
+      "output": "elizabeth warren"
+    },
+    {
+      "input": "Raquel Diaz",
+      "output": "diaz raquel"
+    },
+    {
+      "input": "Zbigniew Brzezinski",
+      "output": "brzezinski zbigniew"
+    },
+    {
+      "input": "Xavier Ng",
+      "output": "ng xavier"
+    },
+    {
+      "input": "Wu Zhang",
+      "output": "wu zhang"
+    }
+  ],
+  "phonetic_key_vectors": [
+    {
+      "input": "John Smith",
+      "output": "2050|2503"
+    },
+    {
+      "input": "Smith, John",
+      "output": "2050|2503"
+    },
+    {
+      "input": "Jon Smyth",
+      "output": "2050|2503"
+    },
+    {
+      "input": "Robert Kalb Jr.",
+      "output": "2041|6010"
+    },
+    {
+      "input": "Robert Kalb",
+      "output": "2041|6010"
+    },
+    {
+      "input": "Katherine Lee",
+      "output": "2030|4000"
+    },
+    {
+      "input": "Catherine Lee",
+      "output": "2030|4000"
+    },
+    {
+      "input": "Donald J. Trump",
+      "output": "2000|3050|3605"
+    },
+    {
+      "input": "Donald Trump",
+      "output": "3050|3605"
+    },
+    {
+      "input": "Steven Cohen",
+      "output": "2050|2301"
+    },
+    {
+      "input": "Stephen Cohen",
+      "output": "2050|2301"
+    },
+    {
+      "input": "Jeffrey Epstein",
+      "output": "0123|2016"
+    },
+    {
+      "input": "'Brien-Smith",
+      "output": "1605|2503"
+    },
+    {
+      "input": "Ghislaine Maxwell",
+      "output": "2024|5020"
+    },
+    {
+      "input": "Elizabeth Warren",
+      "output": "0402|0605"
+    },
+    {
+      "input": "Raquel Diaz",
+      "output": "3020|6020"
+    },
+    {
+      "input": "Zbigniew Brzezinski",
+      "output": "1620|2102"
+    },
+    {
+      "input": "Xavier Ng",
+      "output": "2010|5200"
+    },
+    {
+      "input": "Wu Zhang",
+      "output": "0000|2052"
+    }
+  ],
+  "lsh_band_token_vectors": [
+    {
+      "input": "John Smith",
+      "output": [
+        "0:337161226809272421,20776726146771390,9123087940819142,159930276681550066,469627032599515848,500295898853171408,738310868814112843,551503951927670999",
+        "1:200862114903886832,96071213646555544,202441193515048653,178339160571967248,35383847505402263,124443102419298114,130204137642374691,93924055254196266",
+        "2:604096436908858024,294203233131990770,82762905649553993,118090777290564470,88321714802889037,103570733599928007,181383887033928759,232988134303235339"
+      ]
+    },
+    {
+      "input": "Smith, John",
+      "output": [
+        "0:337161226809272421,20776726146771390,9123087940819142,159930276681550066,469627032599515848,500295898853171408,738310868814112843,551503951927670999",
+        "1:200862114903886832,96071213646555544,202441193515048653,178339160571967248,35383847505402263,124443102419298114,130204137642374691,93924055254196266",
+        "2:604096436908858024,294203233131990770,82762905649553993,118090777290564470,88321714802889037,103570733599928007,181383887033928759,232988134303235339"
+      ]
+    },
+    {
+      "input": "Jon Smyth",
+      "output": [
+        "0:337161226809272421,361906660033932676,4491124831490574,181779265416983036,137431533296584970,135478506125026279,286432586326852949,48356641308942893",
+        "1:814317452412531235,596379919912027955,158006881698553599,430088642526967707,131780268669924585,124443102419298114,518662061025198516,93924055254196266",
+        "2:122255042009855881,280847346916370242,539969890429945468,23781794633819948,416451774109614158,103570733599928007,194208585942127308,682282689017195252"
+      ]
+    },
+    {
+      "input": "Robert Kalb Jr.",
+      "output": [
+        "0:1749823294645805,41218048643695987,6919157199919020,165619972077754460,225829825852056679,370122316730907629,241211238339162195,396209497187027385",
+        "1:166487698715105776,56921449138646319,23408976144538738,208831707545688547,249525171413022685,73928844010823737,167896411508061406,51860709288278616",
+        "2:83710936972408544,10279387194191934,140157569261610845,381469741327449364,39038616708089376,83660287248397203,292671093004782612,34740620908839606"
+      ]
+    },
+    {
+      "input": "Robert Kalb",
+      "output": [
+        "0:1749823294645805,41218048643695987,6919157199919020,165619972077754460,225829825852056679,370122316730907629,241211238339162195,396209497187027385",
+        "1:166487698715105776,56921449138646319,23408976144538738,208831707545688547,249525171413022685,73928844010823737,167896411508061406,51860709288278616",
+        "2:83710936972408544,10279387194191934,140157569261610845,381469741327449364,39038616708089376,83660287248397203,292671093004782612,34740620908839606"
+      ]
+    },
+    {
+      "input": "Katherine Lee",
+      "output": [
+        "0:109182148270997701,81289666118160295,45185710590798033,20348154253158648,66830934497213024,99614409486239029,323166056201477243,186139547944506830",
+        "1:199680091526696647,35317181243477189,168027902230211477,83747113047155586,186476175527388202,309301232941337303,16226293342349727,472872811015754160",
+        "2:38252581414249224,445712573865357935,146945713044041097,110375607156927682,343674505046852119,49834551654023799,104899493242795064,34740620908839606"
+      ]
+    },
+    {
+      "input": "Catherine Lee",
+      "output": [
+        "0:109182148270997701,81289666118160295,45185710590798033,20348154253158648,66830934497213024,99614409486239029,323166056201477243,186139547944506830",
+        "1:199680091526696647,35317181243477189,168027902230211477,97966070696054605,186476175527388202,345928660185133302,16226293342349727,89973103084556218",
+        "2:38252581414249224,445712573865357935,18013089190441850,110375607156927682,99512288189974824,49834551654023799,104899493242795064,110247272984004319"
+      ]
+    },
+    {
+      "input": "Donald J. Trump",
+      "output": [
+        "0:351780282831425813,257401878491286548,730755359635616364,3400920045102226,80465560404256692,144930323933029295,20238472678719495,590903628299442505",
+        "1:57947023663568158,120977757516581326,3405776677616363,39554593802481499,39089048924813108,429691810655258232,33773357720778911,20973450852427458",
+        "2:319852514609364897,27125054487277839,124279740140324753,168039058138702585,33966973721237956,525330203470284785,6317853859861630,43183533288164130"
+      ]
+    },
+    {
+      "input": "Donald Trump",
+      "output": [
+        "0:351780282831425813,403657037025291511,730755359635616364,3400920045102226,80465560404256692,144930323933029295,20238472678719495,590903628299442505",
+        "1:57947023663568158,87648973142706586,3405776677616363,39554593802481499,39089048924813108,429691810655258232,33773357720778911,20973450852427458",
+        "2:319852514609364897,66224560545479302,124279740140324753,323535494060848391,221713238933566292,525330203470284785,6317853859861630,43183533288164130"
+      ]
+    },
+    {
+      "input": "Steven Cohen",
+      "output": [
+        "0:265855266726994666,26041088516111564,63579252348415344,219070680666326131,54829061146370393,237412400575950936,73916204379324642,177585856512026573",
+        "1:439018264348056680,188044010131191364,29357447881494451,25266897206333703,99602755817131078,124443102419298114,161361390495405619,55034525035336878",
+        "2:381718736889381671,187587814972790515,146459967882901275,36051276113138671,492243760297299379,112047571537297508,392332649013080943,40921498667916252"
+      ]
+    },
+    {
+      "input": "Stephen Cohen",
+      "output": [
+        "0:265855266726994666,402719740839697744,71681609189562270,219070680666326131,54829061146370393,237412400575950936,73916204379324642,257341486758457757",
+        "1:392647436999819499,116328994824443431,29357447881494451,25266897206333703,99602755817131078,124443102419298114,56872981112404520,169638108016580009",
+        "2:114706925397906922,187587814972790515,146459967882901275,36051276113138671,296475317536224213,112047571537297508,2726876016598157,40921498667916252"
+      ]
+    },
+    {
+      "input": "Jeffrey Epstein",
+      "output": [
+        "0:170211412880851390,584137264104088933,792993206102559,151721634416481706,4493702924631036,234171169703191123,122956029991443167,351417588956593066",
+        "1:64603106320607594,94655792631496083,437214946766267468,93650818876009648,321414346819637878,19207912711293012,161361390495405619,220140569816621495",
+        "2:452678391674512286,74787234469950022,4197949593224577,516544281422973862,30866121917820204,340121909373124750,187135575892147738,45647910639047160"
+      ]
+    },
+    {
+      "input": "'Brien-Smith",
+      "output": [
+        "0:47250574633576041,20776726146771390,47086899910926545,39591439900720618,54829061146370393,401714526449135471,325128145606590886,226493277074544102",
+        "1:46610346960745435,188044010131191364,248881560926339462,178339160571967248,35383847505402263,124443102419298114,130204137642374691,177891199599659006",
+        "2:238173571471047731,294203233131990770,99276155969237215,76713999022339492,88321714802889037,103570733599928007,283784319126857346,232988134303235339"
+      ]
+    },
+    {
+      "input": "Ghislaine Maxwell",
+      "output": [
+        "0:53567166535354492,108564280761947515,19036220828796490,17324842584072524,66830934497213024,19047259668539933,100314412112741445,63032248155202010",
+        "1:148677026645771443,81496782340458245,194644472798149534,119251295874312414,195008300965754355,21812627998655229,39639578518163814,172594967102268058",
+        "2:63781045360452800,56798457371841636,123376142788778299,110375607156927682,88044979774510443,227607757562561978,125096657425866906,141582232868979674"
+      ]
+    },
+    {
+      "input": "Elizabeth Warren",
+      "output": [
+        "0:284302235435050694,402719740839697744,148017225287656054,6554426989827540,54829061146370393,133443279228251555,360685932948714048,98640931808215908",
+        "1:277544503840326478,119598520615164468,154107976496671430,249462497920224375,134611818964736675,353308215072459514,20326117550103685,12346641620252609",
+        "2:34586262746741949,281798619591617351,146459967882901275,76713999022339492,97153299286139309,6406475710805697,20232618594186344,259398620187724139"
+      ]
+    },
+    {
+      "input": "Raquel Diaz",
+      "output": [
+        "0:100924428750444041,705219536318241532,80764563899337792,131158179664839791,346929313209995072,43858477495388288,125305233919906483,366771699198642438",
+        "1:276931739698212324,339981859789756926,82021135341020433,214600951609107749,541121401039427508,213012744432993577,62788067557610005,62912343656608394",
+        "2:481129172149235810,270977972621286599,103079878720874890,316059908825117962,14113608597336947,97452482282699023,200303057795530916,298483534013397192"
+      ]
+    },
+    {
+      "input": "Zbigniew Brzezinski",
+      "output": [
+        "0:36625798853740862,286227688719373742,323033722304410706,59164975622265673,230429033063774360,217171638828417560,20607580918511657,30646408479508649",
+        "1:129339223898549189,30836003104447361,38451486738317594,10335271560865430,106817266857114730,177071460874570631,241498122954808968,107698543680837888",
+        "2:265749731779837945,467294168240670236,480289439900701,80888006041938370,8331449103500442,6763044859755807,132871779988577435,54124548280577484"
+      ]
+    },
+    {
+      "input": "Xavier Ng",
+      "output": [
+        "0:84599443634930279,436635749193185951,305515833934844082,286516763406582803,378591179830833359,283827890984050388,177261819635151982,4997463653420242",
+        "1:119085025658468638,593909757987369213,258185720908693494,39684324730139249,82743081835089893,152815998883571019,276654899161355163,67987550874144734",
+        "2:331826670621260972,226337865810711516,79295970767999209,176577272331742845,181307931444999664,30909797341396536,280365743805517767,820811880786109728"
+      ]
+    },
+    {
+      "input": "Wu Zhang",
+      "output": [
+        "0:32497244132073514,1094386376674555,58372711817320569,181363184651212303,57618923476619769,512645058769091286,137640753083741482,980857327779486003",
+        "1:166028195972051887,91904216023628183,180478056352538592,98772189427794083,127479095637248054,209299159266044776,332473648360672767,126586090686835632",
+        "2:218269004994562581,252553706162840222,710498985979648948,244998159603624196,277166731663561766,136738010302957945,188855700774823886,209989618192323777"
+      ]
+    }
+  ]
+}
