@@ -1,5 +1,5 @@
 """Rebuild search index directly from DB - bypass graph loading."""
-import sqlite3, json
+import sqlite3, json, gzip
 from collections import defaultdict
 
 print("Loading from database...")
@@ -93,7 +93,7 @@ final = list(seen.values())
 final.sort(key=lambda e: -e.get('count', 0))
 
 print(f"Index: {len(final)} entries")
-with open('webapp/data/search_index.json', 'w') as f:
+with gzip.open('webapp/data/search_index.json.gz', 'wt') as f:
     json.dump(final, f)
 
 conn.close()

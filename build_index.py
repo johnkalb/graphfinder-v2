@@ -2,7 +2,7 @@
 """Build graph pickle + deduplicated name index for the FastAPI pathfinder app.
 Filters out location-type nodes (houses, addresses, phone numbers) from search.
 """
-import os, sys, pickle, json, re
+import os, sys, pickle, json, re, gzip
 sys.path.insert(0, os.getcwd())
 from collections import defaultdict
 from src.config import DB_PATH
@@ -529,8 +529,8 @@ search_index.sort(key=lambda x: x["canonical"].lower())
 print(f"  {len(search_index)} canonical entries in search index")
 
 # ── Save search index ──
-idx_path = os.path.join(OUT, "search_index.json")
-with open(idx_path, "w", encoding="utf-8") as f:
+idx_path = os.path.join(OUT, "search_index.json.gz")
+with gzip.open(idx_path, "wt", encoding="utf-8") as f:
     json.dump(search_index, f, ensure_ascii=False, indent=1)
 print(f"Search index saved to {idx_path}")
 
