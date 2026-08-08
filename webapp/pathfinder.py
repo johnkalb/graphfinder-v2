@@ -2700,7 +2700,7 @@ async function checkContacts(names, emptyMessage) {
   result.style.color = '';
   result.textContent = '';
   try {
-    const { RistrettoPoint } = await import('https://cdn.jsdelivr.net/npm/@noble/curves@1.9.7/esm/ed25519.js');
+    const { RistrettoPoint } = await import('https://cdn.jsdelivr.net/npm/@noble/curves@1.9.7/esm/ed25519.js/+esm');
     const metaResponse = await fetch('/api/contacts/manifest-meta');
     if (!metaResponse.ok) throw new Error('Contact matching is temporarily unavailable');
     const meta = await metaResponse.json();
