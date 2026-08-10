@@ -2629,23 +2629,60 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+let addMeSubmittedCount = 0;
+
 async function submitAddMe(btn) {
   const name = btn.dataset.name;
-  if (!confirm(`Add a connection between you and ${name}? This will be recorded with your login email as the source and submitted for review.`)) return;
+  if (!confirm(
+    `Add a connection between you and ${name}?\n\n`
+    + `Only confirm if they would actually take your call today -- not just someone whose contact info happens to be in your phone. `
+    + `Casual or stale contacts (people you haven't really talked to in a long time) don't belong here; this is meant for real, current relationships.\n\n`
+    + `This will be recorded with your login email as the source and submitted for review.`
+  )) return;
   btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await fetch('/api/contacts/add-me', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ person_name: name })
+      body: JSON.stringify({ person_name: name }),
+      signal: controller.signal,
     });
     const data = await res.json();
-    btn.outerHTML = data.success
-      ? ' <span style="color:#3fb950">✓ Submitted for review</span>'
-      : ` <span style="color:#f85149">Error: ${escHtml(data.error || 'failed')}</span>`;
+    if (data.success) {
+      addMeSubmittedCount++;
+      btn.outerHTML = ' <span style="color:#3fb950">✓ Submitted for review</span>';
+      updateAddMeSummary();
+    } else {
+      btn.outerHTML = ` <span style="color:#f85149">Error: ${escHtml(data.error || 'failed')}</span>`;
+    }
   } catch (e) {
-    btn.outerHTML = ` <span style="color:#f85149">Error: ${escHtml(e.message)}</span>`;
+    const message = e.name === 'AbortError' ? 'Timed out -- the server is taking longer than expected. Try again.' : e.message;
+    btn.disabled = false;
+    btn.textContent = '+ Add me';
+    const result = document.getElementById('psi-result');
+    if (result) {
+      const notice = document.createElement('div');
+      notice.style.color = '#f85149';
+      notice.textContent = message;
+      result.appendChild(notice);
+    }
+  } finally {
+    clearTimeout(timeoutId);
   }
+}
+
+function updateAddMeSummary() {
+  let summary = document.getElementById('add-me-summary');
+  if (!summary) {
+    summary = document.createElement('div');
+    summary.id = 'add-me-summary';
+    summary.style.cssText = 'margin-top:10px;font-weight:600;color:#3fb950;';
+    document.getElementById('psi-result').appendChild(summary);
+  }
+  summary.textContent = `${addMeSubmittedCount} connection${addMeSubmittedCount === 1 ? '' : 's'} submitted for review. You're done -- no further action needed.`;
 }
 
 /* The contact file is parsed locally.  The only values sent below are
@@ -2985,7 +3022,10 @@ async function checkContacts(names, emptyMessage) {
           ` <button class="add-me-btn" data-name="${escHtml(m.name)}" onclick="submitAddMe(this)">+ Add me</button>`;
         return `<div>${escHtml(contact)} \u2192 <strong>${escHtml(m.name)}</strong> <span style="color:#8b949e">(${tierLabel[m.tier]})</span>${addBtn}</div>`;
       }).join('');
-      result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>${rows}`;
+      addMeSubmittedCount = 0;
+      result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>`
+        + `<div class="psi-note" style="margin:6px 0;">Only use "+ Add me" for people who\u2019d actually take your call today \u2014 not a casual or stale contact you just happen to have saved.</div>`
+        + rows;
     }
   } catch (error) {
     result.textContent = 'Error: ' + error.message;
