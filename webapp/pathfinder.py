@@ -1597,6 +1597,12 @@ async def get_service_metrics():
         logger.exception("service/metrics failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "failed to load metrics (see server logs)"})
 
+@app.get("/api/debug/headers")
+async def debug_headers(request: Request):
+    """Temporary diagnostic: echo back the request headers this instance
+    actually received, to check what Cloudflare Access forwards to origin."""
+    return dict(request.headers)
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(HTML_TEMPLATE, headers={"Cache-Control": "no-cache"})
