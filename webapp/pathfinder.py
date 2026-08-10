@@ -1808,7 +1808,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="psi-section" id="psi-section" style="display:none;">
     <button id="psi-btn">🔒 Check My Contacts</button>
     <span id="psi-result" style="display:none;"></span>
-    <p class="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
+    <p class="psi-note" id="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
     <input type="file" id="psi-file" accept=".vcf,.csv,.txt" style="display:none" onchange="doOPRF(this)">
   </div>
 
@@ -2716,6 +2716,7 @@ function contactPsiLshBandTokens(name) {
 function initContactCheckUI() {
   const section = document.getElementById('psi-section');
   const btn = document.getElementById('psi-btn');
+  const note = document.getElementById('psi-note');
   const hasContactPicker = 'contacts' in navigator && 'ContactsManager' in window;
   // iPadOS 13+ reports itself as "MacIntel" with no "iPad" in the UA string,
   // so UA-string matching alone misses it -- the standard workaround is
@@ -2723,13 +2724,21 @@ function initContactCheckUI() {
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isMobile = isIOS || /Android|Mobi/.test(navigator.userAgent);
+  const baseNote = 'Your contacts are hashed in your browser and never sent in plaintext.';
 
   if (hasContactPicker) {
     section.style.display = '';
     btn.onclick = pickContactsNative;
+    note.textContent = baseNote;
   } else if (isMobile) {
+    // This browser can't hand contacts to a website directly (only Chrome/
+    // Edge on Android support the Contact Picker API) -- the button opens
+    // the OS file picker instead, so contacts have to be exported first.
     section.style.display = '';
     btn.onclick = () => document.getElementById('psi-file').click();
+    note.textContent = baseNote + (isIOS
+      ? ' Your browser needs a file: in Contacts, tap Share → Export vCard, then select that file here.'
+      : ' Your browser can’t share contacts with websites directly — export them first (Contacts app → Settings/Menu → Export → .vcf), then select that file here.');
   }
   // Neither: leave psi-section hidden (desktop browsers only, now).
 }
@@ -2770,7 +2779,12 @@ async function checkContacts(names, emptyMessage) {
   result.style.color = '';
   result.textContent = '';
   try {
-    const { RistrettoPoint } = await import('https://cdn.jsdelivr.net/npm/@noble/curves@1.9.7/esm/ed25519.js/+esm');
+    let RistrettoPoint;
+    try {
+      ({ RistrettoPoint } = await import('https://cdn.jsdelivr.net/npm/@noble/curves@1.9.7/esm/ed25519.js/+esm'));
+    } catch (e) {
+      throw new Error('Could not load the crypto library (cdn.jsdelivr.net) needed for contact matching -- check your network connection, or that your browser/DNS isn’t blocking that domain, and try again.');
+    }
     const metaResponse = await fetch('/api/contacts/manifest-meta');
     if (!metaResponse.ok) throw new Error('Contact matching is temporarily unavailable');
     const meta = await metaResponse.json();
