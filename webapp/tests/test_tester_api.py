@@ -452,6 +452,23 @@ def test_add_me_unresolvable_person_returns_400(client):
     assert r.json()["success"] is False
 
 
+def test_add_me_loads_graph_before_resolving_name(client):
+    """Regression test: _resolve_name() depends on the module-level _graph,
+    which only loads lazily on the first path search (cold-start perf) --
+    confirmed live that add-me called _resolve_name() without first calling
+    _load_graph(), so a fresh server process incorrectly reported real,
+    valid people as 'not found in graph' until someone happened to run a
+    path search first."""
+    with patch("pathfinder._resolve_name", side_effect=lambda x: x), \
+         patch("pathfinder._load_graph") as mock_load_graph:
+        r = client.post(
+            "/api/contacts/add-me", json={"person_name": "Jane Doe"},
+            headers={"Cf-Access-Authenticated-User-Email": "alice@example.com"},
+        )
+    assert r.status_code == 200
+    mock_load_graph.assert_called_once()
+
+
 def test_add_me_success_persists_self_attested_suggestion_not_spoofable_by_body(client, tester_data_dir):
     with patch("pathfinder._resolve_name", side_effect=lambda x: x):
         r = client.post(
@@ -735,6 +752,34 @@ def test_service_queue_and_review_workflow(client, tester_data_dir):
         assert rel[1] == "Jane Doe"
         assert rel[4] == "John Doe"
         assert rel[7] == "USER_SUGGESTION"
+
+
+def test_service_review_loads_graph_before_resolving_names(client, tester_data_dir):
+    """Regression test: the approval branch's _resolve_name() calls also
+    depend on the lazily-loaded module-level _graph (only loads on the first
+    path search otherwise) -- this call site had the same gap as add-me."""
+    conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
+    meta = json.dumps({
+        "subject": "Regression Subject", "predicate": "FAMILY", "object": "Regression Object",
+        "source_name": "Test", "source_url": "http://example.com", "snippet": "test",
+    })
+    conn.execute(
+        "INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata) "
+        "VALUES ('suggestion', 'new', 'normal', ?, ?, ?, ?)",
+        ("Regression test item", "body", "tester@example.com", meta),
+    )
+    conn.commit()
+    item_id = conn.execute("SELECT id FROM service_items WHERE subject = 'Regression test item'").fetchone()[0]
+    conn.close()
+
+    with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}), \
+         patch("pathfinder._resolve_name", side_effect=lambda x: x), \
+         patch("pathfinder._load_graph") as mock_load_graph:
+        r = client.post(f"/api/service/items/{item_id}/review", json={
+            "status": "approved", "reviewed_by": "reviewer@example.com",
+        })
+    assert r.status_code == 200
+    mock_load_graph.assert_called_once()
 
 
 def test_service_metrics(client):

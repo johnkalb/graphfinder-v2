@@ -1334,6 +1334,7 @@ async def add_me(req: AddMeRequest, request: Request):
         if not email:
             return JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
 
+        _load_graph()  # _resolve_name needs _graph, which otherwise only loads lazily on first path search
         obj_canonical = _resolve_name(req.person_name)
         if not obj_canonical:
             return JSONResponse(status_code=400, content={"success": False, "error": "person not found in graph"})
@@ -1429,6 +1430,7 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
             # are the one exception: subject is the reporting user's own name, which is
             # expected NOT to already be a graph node -- build_scored_edges.py mints a
             # new node for it from the relationships row written below.
+            _load_graph()  # _resolve_name needs _graph, which otherwise only loads lazily on first path search
             obj_canonical = _resolve_name(obj)
             if predicate == "SELF_ATTESTED_CONTACT":
                 subject_canonical = subject.strip() if subject else None
@@ -1652,37 +1654,6 @@ async def get_service_metrics():
     except Exception:
         logger.exception("service/metrics failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "failed to load metrics (see server logs)"})
-
-@app.get("/api/debug/cf-auth")
-async def debug_cf_auth(request: Request):
-    """Temporary diagnostic for the Add Me 401 investigation. Reports where
-    Cf-Access auth resolution succeeds/fails without exposing the raw token."""
-    assertion = request.headers.get("Cf-Access-Jwt-Assertion")
-    result = {
-        "has_convenience_header": bool(request.headers.get("Cf-Access-Authenticated-User-Email")),
-        "has_jwt_assertion": bool(assertion),
-        "resolved_email": _request_user_email(request),
-    }
-    if assertion:
-        try:
-            header_b64, payload_b64, _sig_b64 = assertion.split(".")
-            pad = lambda s: s + "=" * (-len(s) % 4)
-            header = json.loads(base64.urlsafe_b64decode(pad(header_b64)))
-            payload = json.loads(base64.urlsafe_b64decode(pad(payload_b64)))
-            result["jwt_kid"] = header.get("kid")
-            result["jwt_alg"] = header.get("alg")
-            result["jwt_email_claim"] = payload.get("email")
-            result["jwt_exp"] = payload.get("exp")
-            result["now"] = datetime.now(timezone.utc).timestamp()
-            try:
-                pubkey = _cf_access_public_key(header.get("kid"))
-                result["jwks_key_found"] = pubkey is not None
-                result["jwks_known_kids"] = list(_cf_access_jwks_cache["keys"].keys())
-            except Exception as e:
-                result["jwks_fetch_error"] = repr(e)
-        except Exception as e:
-            result["jwt_parse_error"] = repr(e)
-    return result
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
