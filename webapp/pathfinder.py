@@ -1599,7 +1599,7 @@ async def get_service_metrics():
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return HTMLResponse(HTML_TEMPLATE)
+    return HTMLResponse(HTML_TEMPLATE, headers={"Cache-Control": "no-cache"})
 
 @app.get("/faq", response_class=HTMLResponse)
 async def faq_page():
