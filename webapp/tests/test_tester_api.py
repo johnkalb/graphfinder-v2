@@ -32,6 +32,7 @@ repeat request for the same URL with byte-identical content, reports
 "change_detected"/"new_source". Verified directly (two calls, empty table)
 before writing the assertion.
 """
+import base64
 import email
 import json
 import sqlite3
@@ -530,6 +531,97 @@ def test_add_me_approval_creates_relationship_without_subject_preexisting(client
     assert rel[5] == "PERSON"                # target_type
     assert rel[6] == "SELF_ATTESTED_CONTACT"  # relation_type
     assert rel[7] == "USER_SUGGESTION"        # source_data
+
+
+# ==========================================================================
+# 9c. Cf-Access-Jwt-Assertion fallback (this deployment's Cloudflare Access
+# config forwards the JWT assertion but not the Cf-Access-Authenticated-
+# User-Email convenience header -- confirmed live via a temporary header-echo
+# diagnostic -- so _request_user_email() must verify and decode the JWT).
+# ==========================================================================
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _make_test_cf_access_jwt(email, private_key, kid="test-kid-1", exp_delta=3600):
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives import hashes
+    import time as _time
+    header_b64 = _b64url(json.dumps({"alg": "RS256", "kid": kid, "typ": "JWT"}).encode())
+    payload_b64 = _b64url(json.dumps({"email": email, "exp": int(_time.time()) + exp_delta}).encode())
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+    signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
+
+
+def _jwk_from_public_key(pubkey, kid):
+    numbers = pubkey.public_numbers()
+    def b64url_uint(x):
+        return _b64url(x.to_bytes((x.bit_length() + 7) // 8, "big"))
+    return {"kid": kid, "kty": "RSA", "alg": "RS256", "n": b64url_uint(numbers.n), "e": b64url_uint(numbers.e)}
+
+
+@pytest.fixture
+def cf_access_keypair(monkeypatch):
+    """Generates a throwaway RSA keypair, points pathfinder's JWKS fetch at a
+    mocked response serving its public half, and resets the module's JWKS
+    cache so each test starts clean."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    kid = "test-kid-1"
+    jwks_response = MagicMock(status_code=200)
+    jwks_response.json.return_value = {"keys": [_jwk_from_public_key(private_key.public_key(), kid)]}
+    jwks_response.raise_for_status = lambda: None
+    pf._cf_access_jwks_cache["keys"] = {}
+    pf._cf_access_jwks_cache["fetched_at"] = 0.0
+    with patch("requests.get", return_value=jwks_response):
+        yield private_key, kid
+    pf._cf_access_jwks_cache["keys"] = {}
+    pf._cf_access_jwks_cache["fetched_at"] = 0.0
+
+
+def test_add_me_authenticates_via_cf_access_jwt_when_convenience_header_absent(client, tester_data_dir, cf_access_keypair):
+    private_key, kid = cf_access_keypair
+    token = _make_test_cf_access_jwt("carol@example.com", private_key, kid=kid)
+    with patch("pathfinder._resolve_name", side_effect=lambda x: x):
+        r = client.post(
+            "/api/contacts/add-me", json={"person_name": "Jane Doe"},
+            headers={"Cf-Access-Jwt-Assertion": token},
+        )
+    assert r.status_code == 200
+    conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM service_items WHERE item_type = 'suggestion' AND submitter_email = 'carol@example.com' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+
+
+def test_add_me_rejects_jwt_with_invalid_signature(client, cf_access_keypair):
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    _, kid = cf_access_keypair
+    wrong_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    forged_token = _make_test_cf_access_jwt("mallory@example.com", wrong_key, kid=kid)
+    with patch("pathfinder._resolve_name", side_effect=lambda x: x):
+        r = client.post(
+            "/api/contacts/add-me", json={"person_name": "Jane Doe"},
+            headers={"Cf-Access-Jwt-Assertion": forged_token},
+        )
+    assert r.status_code == 401
+
+
+def test_add_me_rejects_expired_jwt(client, cf_access_keypair):
+    private_key, kid = cf_access_keypair
+    expired_token = _make_test_cf_access_jwt("dave@example.com", private_key, kid=kid, exp_delta=-3600)
+    with patch("pathfinder._resolve_name", side_effect=lambda x: x):
+        r = client.post(
+            "/api/contacts/add-me", json={"person_name": "Jane Doe"},
+            headers={"Cf-Access-Jwt-Assertion": expired_token},
+        )
+    assert r.status_code == 401
 
 
 # ==========================================================================

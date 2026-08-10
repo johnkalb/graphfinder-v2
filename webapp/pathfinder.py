@@ -324,12 +324,68 @@ def _test_department_db_path() -> str:
     return str(DATA_DIR / "test_department.db")
 
 
+# Cloudflare Access is configured to forward Cf-Access-Jwt-Assertion on every
+# request to this app, but NOT the Cf-Access-Authenticated-User-Email
+# convenience header (confirmed live via a temporary header-echo diagnostic --
+# only the JWT assertion arrives). Verify the JWT's signature against
+# Cloudflare's published JWKS and read the email claim from it directly,
+# rather than depending on a convenience header this deployment doesn't send.
+_CF_ACCESS_TEAM_DOMAIN = os.environ.get("CF_ACCESS_TEAM_DOMAIN", "frosty-dream-d462.cloudflareaccess.com")
+_CF_ACCESS_CERTS_URL = f"https://{_CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs"
+_CF_ACCESS_JWKS_TTL_SECONDS = 3600
+_cf_access_jwks_cache = {"keys": {}, "fetched_at": 0.0}
+
+def _cf_access_public_key(kid: str):
+    now = datetime.now(timezone.utc).timestamp()
+    if not kid or now - _cf_access_jwks_cache["fetched_at"] > _CF_ACCESS_JWKS_TTL_SECONDS or kid not in _cf_access_jwks_cache["keys"]:
+        import requests
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        resp = requests.get(_CF_ACCESS_CERTS_URL, timeout=5)
+        resp.raise_for_status()
+        keys = {}
+        for jwk in resp.json().get("keys", []):
+            pad = lambda s: s + "=" * (-len(s) % 4)
+            n = int.from_bytes(base64.urlsafe_b64decode(pad(jwk["n"])), "big")
+            e = int.from_bytes(base64.urlsafe_b64decode(pad(jwk["e"])), "big")
+            keys[jwk["kid"]] = rsa.RSAPublicNumbers(e, n).public_key()
+        _cf_access_jwks_cache["keys"] = keys
+        _cf_access_jwks_cache["fetched_at"] = now
+    return _cf_access_jwks_cache["keys"].get(kid)
+
+def _verify_cf_access_jwt_email(assertion: str) -> Optional[str]:
+    try:
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.exceptions import InvalidSignature
+        header_b64, payload_b64, sig_b64 = assertion.split(".")
+        pad = lambda s: s + "=" * (-len(s) % 4)
+        header = json.loads(base64.urlsafe_b64decode(pad(header_b64)))
+        payload = json.loads(base64.urlsafe_b64decode(pad(payload_b64)))
+        signature = base64.urlsafe_b64decode(pad(sig_b64))
+        pubkey = _cf_access_public_key(header.get("kid"))
+        if pubkey is None:
+            return None
+        pubkey.verify(signature, f"{header_b64}.{payload_b64}".encode(), padding.PKCS1v15(), hashes.SHA256())
+        if payload.get("exp", 0) < datetime.now(timezone.utc).timestamp():
+            return None
+        email = payload.get("email")
+        return email.strip().lower() if email else None
+    except InvalidSignature:
+        logger.warning("CF Access JWT signature verification failed")
+        return None
+    except Exception:
+        logger.exception("CF Access JWT parsing/verification failed")
+        return None
+
 def _request_user_email(request: Optional[Request]) -> Optional[str]:
     if request is None:
         return None
     email = request.headers.get("Cf-Access-Authenticated-User-Email")
     if email:
         return email.strip().lower()
+    assertion = request.headers.get("Cf-Access-Jwt-Assertion")
+    if assertion:
+        return _verify_cf_access_jwt_email(assertion)
     return None
 
 
@@ -1207,7 +1263,7 @@ class AddMeRequest(BaseModel):
 @app.post("/api/suggest-link")
 async def suggest_link(req: SuggestionRequest, request: Request):
     try:
-        email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
+        email = _request_user_email(request) or req.email
         db_path = _test_department_db_path()
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
@@ -1242,7 +1298,7 @@ async def suggest_link(req: SuggestionRequest, request: Request):
 @app.post("/api/dispute-link")
 async def dispute_link(req: DisputeRequest, request: Request):
     try:
-        email = request.headers.get("Cf-Access-Authenticated-User-Email") or req.email
+        email = _request_user_email(request) or req.email
         db_path = _test_department_db_path()
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
@@ -1344,7 +1400,7 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
             conn.close()
             return JSONResponse(status_code=404, content={"success": False, "error": "Service item not found"})
             
-        reviewer = req.reviewed_by or request.headers.get("Cf-Access-Authenticated-User-Email") or "admin"
+        reviewer = req.reviewed_by or _request_user_email(request) or "admin"
         now_str = datetime.now(timezone.utc).isoformat()
         
         c.execute("""
@@ -1450,7 +1506,7 @@ async def resolve_service_item(item_id: int, req: ResolveRequest, request: Reque
             conn.close()
             return JSONResponse(status_code=404, content={"success": False, "error": "Service item not found"})
             
-        resolver = req.resolved_by or request.headers.get("Cf-Access-Authenticated-User-Email") or "admin"
+        resolver = req.resolved_by or _request_user_email(request) or "admin"
         now_str = datetime.now(timezone.utc).isoformat()
         
         c.execute("""
@@ -1596,12 +1652,6 @@ async def get_service_metrics():
     except Exception:
         logger.exception("service/metrics failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "failed to load metrics (see server logs)"})
-
-@app.get("/api/debug/headers")
-async def debug_headers(request: Request):
-    """Temporary diagnostic: echo back the request headers this instance
-    actually received, to check what Cloudflare Access forwards to origin."""
-    return dict(request.headers)
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
