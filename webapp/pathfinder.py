@@ -2785,7 +2785,12 @@ async function checkContacts(names, emptyMessage) {
     } catch (e) {
       throw new Error('Could not load the crypto library (cdn.jsdelivr.net) needed for contact matching -- check your network connection, or that your browser/DNS isn’t blocking that domain, and try again.');
     }
-    const metaResponse = await fetch('/api/contacts/manifest-meta');
+    let metaResponse;
+    try {
+      metaResponse = await fetch('/api/contacts/manifest-meta');
+    } catch (e) {
+      throw new Error('Could not reach the server (manifest-meta) -- check your network connection and try again.');
+    }
     if (!metaResponse.ok) throw new Error('Contact matching is temporarily unavailable');
     const meta = await metaResponse.json();
 
@@ -2821,10 +2826,15 @@ async function checkContacts(names, emptyMessage) {
     const evaluatedPoints = [];
     for (let offset = 0; offset < queries.length; offset += 3000) {
       const chunk = queries.slice(offset, offset + 3000);
-      const response = await fetch('/api/contacts/oprf-eval', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key_version: meta.key_version, points: chunk.map(q => toB64(q.blindedPoint.toRawBytes())) }),
-      });
+      let response;
+      try {
+        response = await fetch('/api/contacts/oprf-eval', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key_version: meta.key_version, points: chunk.map(q => toB64(q.blindedPoint.toRawBytes())) }),
+        });
+      } catch (e) {
+        throw new Error(`Could not reach the server (oprf-eval, batch at offset ${offset}) -- check your network connection and try again.`);
+      }
       if (!response.ok) throw new Error((await response.json()).detail || 'OPRF evaluation failed');
       evaluatedPoints.push(...(await response.json()).points);
     }
@@ -2853,7 +2863,12 @@ async function checkContacts(names, emptyMessage) {
     const neededShardIds = [...new Set(queries.map(q => q.shardId))];
     const buckets = {};
     await Promise.all(neededShardIds.map(async (shardId) => {
-      const shardResponse = await fetch(shardUrlTemplate.replace('{shard}', shardId));
+      let shardResponse;
+      try {
+        shardResponse = await fetch(shardUrlTemplate.replace('{shard}', shardId));
+      } catch (e) {
+        throw new Error(`Could not reach the server (manifest-shard ${shardId}) -- check your network connection and try again.`);
+      }
       if (!shardResponse.ok) return; // shard has no entries for this prefix range -- not an error
       const shardBuf = await shardResponse.arrayBuffer();
       const decompressed = new Response(new Response(shardBuf).body.pipeThrough(new DecompressionStream('gzip')));
