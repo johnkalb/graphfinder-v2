@@ -15,6 +15,9 @@ def categorize(rt):
         return "CO_INVENTOR"
     if r == "PATENT_ASSIGNED_TO":
         return "PATENT_ASSIGNED_TO"
+    # Self-reported by the app's authenticated user via "Check My Contacts" -> "Add Me"
+    if r == "SELF_ATTESTED_CONTACT":
+        return "SELF_ATTESTED"
     # SEC co-directorship (all DIRECTOR(...) title variants + board roles)
     if r.startswith("DIRECTOR") or r in (
         "CO_DIRECTOR", "INDEPENDENT_DIRECTOR", "NON-EXECUTIVE_DIRECTOR",
