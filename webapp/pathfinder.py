@@ -1201,6 +1201,9 @@ class DisputeRequest(BaseModel):
     source_url: Optional[str] = None
     email: Optional[str] = None
 
+class AddMeRequest(BaseModel):
+    person_name: str = Field(..., min_length=2, max_length=100)
+
 @app.post("/api/suggest-link")
 async def suggest_link(req: SuggestionRequest, request: Request):
     try:
@@ -1268,6 +1271,43 @@ async def dispute_link(req: DisputeRequest, request: Request):
         logger.exception("dispute-link failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
 
+@app.post("/api/contacts/add-me")
+async def add_me(req: AddMeRequest, request: Request):
+    try:
+        email = _request_user_email(request)
+        if not email:
+            return JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
+
+        obj_canonical = _resolve_name(req.person_name)
+        if not obj_canonical:
+            return JSONResponse(status_code=400, content={"success": False, "error": "person not found in graph"})
+
+        db_path = _test_department_db_path()
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        row = c.execute("SELECT name FROM testers WHERE email = ?", (email,)).fetchone()
+        display_name = (row[0] if row and row[0] else email.split("@")[0]).strip()
+
+        meta = json.dumps({
+            "subject": display_name,
+            "predicate": "SELF_ATTESTED_CONTACT",
+            "object": obj_canonical,
+            "source_name": f"Self-reported by {email}",
+            "source_url": None,
+            "snippet": "Submitted via Check My Contacts → Add Me.",
+        })
+        c.execute("""
+            INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
+            VALUES ('suggestion', 'new', 'normal', ?, ?, ?, ?)
+        """, (f"Add Me: {display_name} ↔ {obj_canonical}", "Self-reported contact", email, meta))
+
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Submitted for review."}
+    except Exception:
+        logger.exception("add-me failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
+
 @app.get("/api/service/queue")
 async def get_service_queue(status: Optional[str] = "new", limit: int = 25, sort: str = "created_at"):
     try:
@@ -1329,10 +1369,16 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
             source_url = meta.get("source_url")
             snippet = meta.get("snippet")
             
-            # Check if subject and object exist in graph
-            subject_canonical = _resolve_name(subject)
+            # Check if subject and object exist in graph. Self-attested "Add Me" claims
+            # are the one exception: subject is the reporting user's own name, which is
+            # expected NOT to already be a graph node -- build_scored_edges.py mints a
+            # new node for it from the relationships row written below.
             obj_canonical = _resolve_name(obj)
-            
+            if predicate == "SELF_ATTESTED_CONTACT":
+                subject_canonical = subject.strip() if subject else None
+            else:
+                subject_canonical = _resolve_name(subject)
+
             graph_has_nodes = False
             if subject_canonical and obj_canonical:
                 graph_has_nodes = True
@@ -1352,7 +1398,7 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
                         "snippet": snippet
                     }])
                     
-                    tgt_type = 'PERSON' if predicate in {'FAMILY', 'COMMUNICATED_WITH', 'ASSOCIATED_WITH', 'TRANSACTED_WITH'} else 'ORG'
+                    tgt_type = 'PERSON' if predicate in {'FAMILY', 'COMMUNICATED_WITH', 'ASSOCIATED_WITH', 'TRANSACTED_WITH', 'SELF_ATTESTED_CONTACT'} else 'ORG'
                     
                     prod_cur.execute("""
                         INSERT OR IGNORE INTO relationships 
@@ -1681,6 +1727,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .psi-section button:hover { background: #388bfd; }
   .psi-note { color: #8b949e; font-size: 0.8rem; margin-top: 0.5rem; }
   .psi-result { display: inline-block; margin-left: 1rem; font-weight: 600; color: #3fb950; }
+  .psi-result div { font-weight: 400; }
+  .add-me-btn { background: transparent !important; color: #58a6ff !important; border: 1px solid #30363d !important;
+                border-radius: 5px !important; padding: 0.1rem 0.5rem !important; font-size: 0.75rem !important;
+                font-weight: 400; margin-left: 0.4rem; cursor: pointer; }
+  .add-me-btn:hover { background: #1f6feb22 !important; }
+  .add-me-btn:disabled { opacity: 0.5; cursor: default; }
   
   /* Modal system for User Submissions */
   .modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -2519,6 +2571,25 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+async function submitAddMe(btn) {
+  const name = btn.dataset.name;
+  if (!confirm(`Add a connection between you and ${name}? This will be recorded with your login email as the source and submitted for review.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/contacts/add-me', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ person_name: name })
+    });
+    const data = await res.json();
+    btn.outerHTML = data.success
+      ? ' <span style="color:#3fb950">✓ Submitted for review</span>'
+      : ` <span style="color:#f85149">Error: ${escHtml(data.error || 'failed')}</span>`;
+  } catch (e) {
+    btn.outerHTML = ` <span style="color:#f85149">Error: ${escHtml(e.message)}</span>`;
+  }
+}
+
 /* The contact file is parsed locally.  The only values sent below are
    blinded Ristretto points; plaintext names never enter a fetch body.
    Tier derivation (normalizeExact/phoneticKey/lshBandTokens) is a
@@ -2633,16 +2704,15 @@ function contactPsiLshBandTokens(name) {
 }
 
 // Three input paths, chosen once at page load by initContactCheckUI():
-//   - Android Chrome/Edge (Contact Picker API present): native picker,
+//   - Contact Picker API present (Chrome/Edge on Android): native picker,
 //     no file/export step at all.
-//   - iOS (Safari and all other iOS browsers, which are WebKit and never
-//     expose the Contact Picker API): the file-upload flow below. iOS's
-//     Contacts app already exports a .vcf via its own Share sheet, so
-//     this isn't extra friction there the way it is on Android, where the
-//     Contacts app treats the underlying file as protected and forces a
-//     separate export step first.
-//   - Everything else (desktop browsers): feature hidden entirely --
-//     see initContactCheckUI().
+//   - Any other mobile browser (iOS Safari/WebKit, and Android browsers that
+//     don't implement the Contact Picker API -- Samsung Internet, Firefox
+//     Android, etc.): the file-upload flow below. Every mobile OS's own
+//     Contacts app can export a .vcf via its share sheet, so this always
+//     works even though it's an extra step compared to the native picker.
+//   - Desktop browsers: feature hidden entirely -- there's no contacts file
+//     to pick and no picker API to call.
 function initContactCheckUI() {
   const section = document.getElementById('psi-section');
   const btn = document.getElementById('psi-btn');
@@ -2652,16 +2722,16 @@ function initContactCheckUI() {
   // touch-point detection on an otherwise-Mac platform.
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isMobile = isIOS || /Android|Mobi/.test(navigator.userAgent);
 
   if (hasContactPicker) {
     section.style.display = '';
     btn.onclick = pickContactsNative;
-  } else if (isIOS) {
+  } else if (isMobile) {
     section.style.display = '';
     btn.onclick = () => document.getElementById('psi-file').click();
   }
-  // Neither: leave psi-section hidden (desktop browsers, and any mobile
-  // browser with neither the Contact Picker API nor iOS's own export path).
+  // Neither: leave psi-section hidden (desktop browsers only, now).
 }
 
 async function doOPRF(input) {
@@ -2824,7 +2894,9 @@ async function checkContacts(names, emptyMessage) {
     } else {
       const rows = matchedContacts.map(contact => {
         const m = bestByContact[contact];
-        return `<div>${escHtml(contact)} \u2192 <strong>${escHtml(m.name)}</strong> <span style="color:#8b949e">(${tierLabel[m.tier]})</span></div>`;
+        const addBtn = m.tier === 'possible' ? '' :
+          ` <button class="add-me-btn" data-name="${escHtml(m.name)}" onclick="submitAddMe(this)">+ Add me</button>`;
+        return `<div>${escHtml(contact)} \u2192 <strong>${escHtml(m.name)}</strong> <span style="color:#8b949e">(${tierLabel[m.tier]})</span>${addBtn}</div>`;
       }).join('');
       result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>${rows}`;
     }

@@ -424,6 +424,115 @@ def test_dispute_link_missing_required_field_returns_422(client):
 
 
 # ==========================================================================
+# 9b. POST /api/contacts/add-me ("Check My Contacts" -> "Add Me")
+# ==========================================================================
+
+def test_add_me_without_auth_header_returns_401(client):
+    r = client.post("/api/contacts/add-me", json={"person_name": "Jane Doe"})
+    assert r.status_code == 401
+    assert r.json()["success"] is False
+
+
+def test_add_me_missing_person_name_returns_422(client):
+    r = client.post(
+        "/api/contacts/add-me", json={},
+        headers={"Cf-Access-Authenticated-User-Email": "alice@example.com"},
+    )
+    assert r.status_code == 422
+
+
+def test_add_me_unresolvable_person_returns_400(client):
+    with patch("pathfinder._resolve_name", return_value=None):
+        r = client.post(
+            "/api/contacts/add-me", json={"person_name": "Nobody Real"},
+            headers={"Cf-Access-Authenticated-User-Email": "alice@example.com"},
+        )
+    assert r.status_code == 400
+    assert r.json()["success"] is False
+
+
+def test_add_me_success_persists_self_attested_suggestion_not_spoofable_by_body(client, tester_data_dir):
+    with patch("pathfinder._resolve_name", side_effect=lambda x: x):
+        r = client.post(
+            "/api/contacts/add-me",
+            json={"person_name": "Jane Doe", "email": "attacker@evil.com"},
+            headers={"Cf-Access-Authenticated-User-Email": "alice@example.com"},
+        )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+    conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM service_items WHERE item_type = 'suggestion' AND submitter_email = 'alice@example.com' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    # AddMeRequest has no `email` field, so a spoofed body value is simply
+    # ignored -- attribution comes only from the Cf-Access header.
+    assert row["submitter_email"] == "alice@example.com"
+    meta = json.loads(row["metadata"])
+    assert meta["predicate"] == "SELF_ATTESTED_CONTACT"
+    assert meta["object"] == "Jane Doe"
+    assert meta["source_name"] == "Self-reported by alice@example.com"
+
+
+def test_add_me_approval_creates_relationship_without_subject_preexisting(client, tester_data_dir):
+    """Regression test for the approval-gate patch: a SELF_ATTESTED_CONTACT
+    suggestion's subject is the reporting user's own name, which is expected
+    to NOT already resolve as a graph node (unlike ordinary suggestions,
+    where both endpoints must pre-exist). Approval must still succeed and
+    write a pipeline_cache relationship row using the object alone."""
+    with patch("pathfinder._resolve_name", side_effect=lambda x: x):
+        add_res = client.post(
+            "/api/contacts/add-me", json={"person_name": "Jane Doe"},
+            headers={"Cf-Access-Authenticated-User-Email": "bob@example.com"},
+        )
+    assert add_res.status_code == 200
+
+    conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
+    conn.row_factory = sqlite3.Row
+    item = conn.execute(
+        "SELECT id FROM service_items WHERE item_type = 'suggestion' AND submitter_email = 'bob@example.com' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    item_id = item["id"]
+
+    pipeline_db = tester_data_dir / "pipeline_cache_addme.db"
+    conn = sqlite3.connect(str(pipeline_db))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS relationships (
+            source_id TEXT, source_name TEXT, source_type TEXT,
+            target_id TEXT, target_name TEXT, target_type TEXT,
+            relation_type TEXT, source_data TEXT, evidence TEXT
+        )
+    """)
+    conn.close()
+
+    # Only the object ("Jane Doe") resolves -- the subject (the reporting
+    # user's own display name) does not, simulating a brand-new person.
+    with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}), \
+         patch("pathfinder._resolve_name", side_effect=lambda x: x if x == "Jane Doe" else None), \
+         patch("pathfinder._get_pipeline_db_path", return_value=str(pipeline_db)):
+        rev_res = client.post(f"/api/service/items/{item_id}/review", json={
+            "status": "approved", "reviewed_by": "reviewer@example.com",
+        })
+    assert rev_res.status_code == 200
+    assert rev_res.json()["success"] is True
+
+    conn = sqlite3.connect(str(pipeline_db))
+    rel = conn.execute("SELECT * FROM relationships").fetchone()
+    conn.close()
+    assert rel is not None
+    assert rel[4] == "Jane Doe"              # target_name
+    assert rel[5] == "PERSON"                # target_type
+    assert rel[6] == "SELF_ATTESTED_CONTACT"  # relation_type
+    assert rel[7] == "USER_SUGGESTION"        # source_data
+
+
+# ==========================================================================
 # 10. Service Department Unified Triage & Email tests (SPEC 1 & 2)
 # ==========================================================================
 
@@ -480,8 +589,15 @@ def test_service_queue_and_review_workflow(client, tester_data_dir):
     disputes = [item for item in queue if item["item_type"] == "dispute"]
     assert len(suggestions) > 0
     assert len(disputes) > 0
-    
-    s_item = suggestions[0]
+
+    # Select by content, not position: other tests (e.g. add-me) also leave
+    # 'new'-status suggestion items in this shared session-scoped DB, and
+    # queue order isn't guaranteed to put this specific one first.
+    s_item = next(
+        item for item in suggestions
+        if json.loads(item["metadata"]).get("subject") == "Jane Doe"
+        and json.loads(item["metadata"]).get("object") == "John Doe"
+    )
     s_id = s_item["id"]
     
     # Initialize mock pipeline_cache.db relationships table
