@@ -1699,21 +1699,6 @@ async def get_service_metrics():
         logger.exception("service/metrics failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "failed to load metrics (see server logs)"})
 
-@app.get("/api/debug/db-mode")
-async def debug_db_mode():
-    """Temporary diagnostic for the Postgres migration rollout. Confirms
-    IS_POSTGRES actually activated and the pool can round-trip a query."""
-    result = {"is_postgres": db.IS_POSTGRES}
-    if db.IS_POSTGRES:
-        try:
-            conn = db.connect()
-            row = conn.execute("SELECT COUNT(*) AS n FROM service_items").fetchone()
-            result["service_items_count"] = row["n"]
-            conn.close()
-        except Exception as e:
-            result["query_error"] = repr(e)
-    return result
-
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(HTML_TEMPLATE, headers={"Cache-Control": "no-cache"})
