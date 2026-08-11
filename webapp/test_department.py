@@ -5,6 +5,13 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
+try:
+    import db
+except ImportError:
+    from webapp import db
+
+_PK = "SERIAL PRIMARY KEY" if db.IS_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
 WEB_ACTIVITY_EVENTS = {
     "page_view",
     "search",
@@ -21,10 +28,8 @@ MEANINGFUL_USAGE_EVENTS = {
 CASE_OPEN_CATEGORIES = {"performance", "bug", "confusion", "trust", "coverage"}
 
 
-def _db_connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _db_connect(db_path: str):
+    return db.connect(db_path)
 
 
 def _normalize_email(email: Optional[str]) -> Optional[str]:
@@ -72,9 +77,9 @@ def init_test_department_db(db_path: str) -> None:
     conn = _db_connect(db_path)
     cur = conn.cursor()
     cur.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS testers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {_PK},
             email TEXT NOT NULL UNIQUE,
             name TEXT,
             invited_by_email TEXT,
@@ -89,17 +94,23 @@ def init_test_department_db(db_path: str) -> None:
         )
         """
     )
-    # Ensure columns exist on old database schema
-    cur.execute("PRAGMA table_info(testers)")
-    cols = [r["name"] for r in cur.fetchall()]
-    if "invite_delivery_status" not in cols:
-        cur.execute("ALTER TABLE testers ADD COLUMN invite_delivery_status TEXT")
-    if "invite_message_id" not in cols:
-        cur.execute("ALTER TABLE testers ADD COLUMN invite_message_id TEXT")
+    if db.IS_POSTGRES:
+        # Postgres supports IF NOT EXISTS on ADD COLUMN natively -- no need
+        # to introspect first.
+        cur.execute("ALTER TABLE testers ADD COLUMN IF NOT EXISTS invite_delivery_status TEXT")
+        cur.execute("ALTER TABLE testers ADD COLUMN IF NOT EXISTS invite_message_id TEXT")
+    else:
+        # Ensure columns exist on old database schema
+        cur.execute("PRAGMA table_info(testers)")
+        cols = [r["name"] for r in cur.fetchall()]
+        if "invite_delivery_status" not in cols:
+            cur.execute("ALTER TABLE testers ADD COLUMN invite_delivery_status TEXT")
+        if "invite_message_id" not in cols:
+            cur.execute("ALTER TABLE testers ADD COLUMN invite_message_id TEXT")
 
-    cur.execute("""
+    cur.execute(f"""
         CREATE TABLE IF NOT EXISTS service_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {_PK},
             item_type TEXT NOT NULL,
             status TEXT DEFAULT 'new',
             priority TEXT DEFAULT 'normal',
@@ -115,9 +126,9 @@ def init_test_department_db(db_path: str) -> None:
         )
     """)
     cur.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS tester_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {_PK},
             tester_id INTEGER NOT NULL,
             event_type TEXT NOT NULL,
             event_at TEXT NOT NULL,
@@ -129,9 +140,9 @@ def init_test_department_db(db_path: str) -> None:
         """
     )
     cur.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS tester_feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {_PK},
             tester_id INTEGER NOT NULL,
             source TEXT NOT NULL,
             subject TEXT,
@@ -144,9 +155,9 @@ def init_test_department_db(db_path: str) -> None:
         """
     )
     cur.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS tester_notes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {_PK},
             tester_id INTEGER NOT NULL,
             author_email TEXT,
             note_text TEXT NOT NULL,
@@ -157,9 +168,9 @@ def init_test_department_db(db_path: str) -> None:
         """
     )
     cur.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS tester_cases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {_PK},
             tester_id INTEGER NOT NULL,
             case_type TEXT NOT NULL,
             summary TEXT NOT NULL,
@@ -227,6 +238,7 @@ def _ensure_tester(
             email, name, invited_by_email, invited_by_name, invite_source,
             invite_subject, invite_body, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
         """,
         (
             email,
@@ -240,7 +252,7 @@ def _ensure_tester(
             now_iso,
         ),
     )
-    return int(cur.lastrowid)
+    return int(cur.fetchone()["id"])
 
 
 def _insert_event(
@@ -258,6 +270,7 @@ def _insert_event(
         """
         INSERT INTO tester_events (tester_id, event_type, event_at, is_meaningful, source, metadata_json)
         VALUES (?, ?, ?, ?, ?, ?)
+        RETURNING id
         """,
         (
             tester_id,
@@ -268,7 +281,7 @@ def _insert_event(
             json.dumps(metadata or {}, sort_keys=True),
         ),
     )
-    return int(cur.lastrowid)
+    return int(cur.fetchone()["id"])
 
 
 def record_invitation(
@@ -403,6 +416,7 @@ def _open_case_if_needed(
         """
         INSERT INTO tester_cases (tester_id, case_type, summary, severity, status, evidence_json, created_at, updated_at)
         VALUES (?, ?, ?, ?, 'open', ?, ?, ?)
+        RETURNING id
         """,
         (
             tester_id,
@@ -414,7 +428,7 @@ def _open_case_if_needed(
             now_iso,
         ),
     )
-    return int(cur.lastrowid)
+    return int(cur.fetchone()["id"])
 
 
 def add_feedback(
@@ -437,6 +451,7 @@ def add_feedback(
         """
         INSERT INTO tester_feedback (tester_id, source, subject, feedback_text, category, raw_payload, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
         """,
         (
             tester_id,
@@ -448,7 +463,7 @@ def add_feedback(
             _coerce_timestamp(received_at),
         ),
     )
-    feedback_id = int(cur.lastrowid)
+    feedback_id = int(cur.fetchone()["id"])
     _insert_event(
         conn,
         tester_id,
@@ -508,6 +523,7 @@ def add_note(
         """
         INSERT INTO tester_notes (tester_id, author_email, note_text, source, created_at)
         VALUES (?, ?, ?, ?, ?)
+        RETURNING id
         """,
         (
             tester_id,
@@ -517,7 +533,7 @@ def add_note(
             _coerce_timestamp(noted_at),
         ),
     )
-    note_id = int(cur.lastrowid)
+    note_id = int(cur.fetchone()["id"])
     _insert_event(
         conn,
         tester_id,

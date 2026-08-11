@@ -23,6 +23,10 @@ try:
     from tester_operations import send_email
 except ImportError:
     from webapp.tester_operations import send_email
+try:
+    import db
+except ImportError:
+    from webapp import db
 
 app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 logger = logging.getLogger("pathfinder")
@@ -419,9 +423,9 @@ def _log_tester_usage(request: Optional[Request], event_type: str, metadata: Opt
 
 def _log_performance_metrics(route: str, latency_ms: float, status_code: int):
     db_path = DATA_DIR / "ops_metrics.db"
-    if not db_path.exists():
+    if not db.IS_POSTGRES and not db_path.exists():
         init_ops_db(str(db_path))
-    conn = sqlite3.connect(db_path)
+    conn = db.connect(db_path)
     conn.execute("INSERT INTO request_logs (route, latency_ms, status_code) VALUES (?, ?, ?)",
                  (route, latency_ms, status_code))
     conn.commit()
@@ -429,10 +433,10 @@ def _log_performance_metrics(route: str, latency_ms: float, status_code: int):
 
 def _log_anonymous_event(session_id: str, event_type: str, metadata: dict):
     db_path = DATA_DIR / "ops_metrics.db"
-    if not db_path.exists():
+    if not db.IS_POSTGRES and not db_path.exists():
         init_ops_db(str(db_path))
     try:
-        conn = sqlite3.connect(db_path)
+        conn = db.connect(db_path)
         conn.execute(
             "INSERT INTO anonymous_events (session_id, event_type, metadata) VALUES (?, ?, ?)",
             (session_id, event_type, json.dumps(metadata))
@@ -1141,7 +1145,7 @@ async def td_invite_bcc(req: TesterInviteRequest):
     msg_id = res.get("message_id")
     
     try:
-        conn = sqlite3.connect(db_path)
+        conn = db.connect(db_path)
         conn.execute(
             "UPDATE testers SET invite_delivery_status = ?, invite_message_id = ? WHERE email = ?",
             (delivery_status, msg_id, req.invitee_email.strip().lower())
@@ -1259,7 +1263,7 @@ async def trigger_legal_review(req: LegalTriggerRequest):
             register_obligation(str(legal_db_path), req.source_url, raw_text, {})
             # Also log as a legal_review item in service_items (Phase 1/2)
             try:
-                conn = sqlite3.connect(str(test_dept_db_path))
+                conn = db.connect(str(test_dept_db_path))
                 conn.execute("""
                     INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
                     VALUES ('legal_review', 'needs_review', 'high', ?, ?, 'legal@sixdegrees.net', ?)
@@ -1303,7 +1307,7 @@ async def suggest_link(req: SuggestionRequest, request: Request):
     try:
         email = _request_user_email(request) or req.email
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
+        conn = db.connect(db_path)
         c = conn.cursor()
         
         # 1. Legacy insert
@@ -1338,7 +1342,7 @@ async def dispute_link(req: DisputeRequest, request: Request):
     try:
         email = _request_user_email(request) or req.email
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
+        conn = db.connect(db_path)
         c = conn.cursor()
         
         # 1. Legacy insert
@@ -1377,7 +1381,7 @@ async def add_me(req: AddMeRequest, request: Request):
             return JSONResponse(status_code=400, content={"success": False, "error": "person not found in graph"})
 
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
+        conn = db.connect(db_path)
         c = conn.cursor()
         row = c.execute("SELECT name FROM testers WHERE email = ?", (email,)).fetchone()
         display_name = (row[0] if row and row[0] else email.split("@")[0]).strip()
@@ -1406,8 +1410,7 @@ async def add_me(req: AddMeRequest, request: Request):
 async def get_service_queue(status: Optional[str] = "new", limit: int = 25, sort: str = "created_at"):
     try:
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = db.connect(db_path)
         c = conn.cursor()
         
         if sort not in {"created_at", "priority", "id"}:
@@ -1432,8 +1435,7 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
         return denied
     try:
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = db.connect(db_path)
         c = conn.cursor()
         
         item = c.execute("SELECT * FROM service_items WHERE id = ?", (item_id,)).fetchone()
@@ -1541,8 +1543,7 @@ async def resolve_service_item(item_id: int, req: ResolveRequest, request: Reque
         return denied
     try:
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = db.connect(db_path)
         c = conn.cursor()
         
         item = c.execute("SELECT * FROM service_items WHERE id = ?", (item_id,)).fetchone()
@@ -1583,8 +1584,7 @@ async def notify_service_item(item_id: int, request: Request):
         return denied
     try:
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = db.connect(db_path)
         c = conn.cursor()
         
         item = c.execute("SELECT * FROM service_items WHERE id = ?", (item_id,)).fetchone()
@@ -1619,8 +1619,7 @@ async def notify_service_item(item_id: int, request: Request):
 async def get_service_metrics():
     try:
         db_path = _test_department_db_path()
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = db.connect(db_path)
         c = conn.cursor()
         
         # Calculate approval rate (approved suggestions / total suggestions)

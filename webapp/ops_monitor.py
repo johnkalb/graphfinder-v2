@@ -1,12 +1,15 @@
-import sqlite3
 import os
 from datetime import datetime, timedelta
 
+try:
+    import db
+except ImportError:
+    from webapp import db
+
 def check_performance(db_path, threshold_ms=500):
-    if not os.path.exists(db_path):
+    if not db.IS_POSTGRES and not os.path.exists(db_path):
         return []
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = db.connect(db_path)
     yesterday = (datetime.now() - timedelta(days=1)).isoformat()
     # Find routes where average latency > threshold in last 24h
     alerts = conn.execute("""
