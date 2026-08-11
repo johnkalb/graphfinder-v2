@@ -452,21 +452,21 @@ def test_add_me_unresolvable_person_returns_400(client):
     assert r.json()["success"] is False
 
 
-def test_add_me_loads_graph_before_resolving_name(client):
-    """Regression test: _resolve_name() depends on the module-level _graph,
-    which only loads lazily on the first path search (cold-start perf) --
-    confirmed live that add-me called _resolve_name() without first calling
-    _load_graph(), so a fresh server process incorrectly reported real,
-    valid people as 'not found in graph' until someone happened to run a
-    path search first."""
-    with patch("pathfinder._resolve_name", side_effect=lambda x: x), \
-         patch("pathfinder._load_graph") as mock_load_graph:
-        r = client.post(
-            "/api/contacts/add-me", json={"person_name": "Jane Doe"},
-            headers={"Cf-Access-Authenticated-User-Email": "alice@example.com"},
-        )
+def test_add_me_resolves_names_without_full_graph_loaded(client, monkeypatch):
+    """Regression test: _resolve_name() no longer requires the full,
+    expensive networkx graph (_graph, ~15M edges) to be loaded -- confirmed
+    live in production that building it was slow enough to hang requests.
+    It now resolves via _load_node_lookup(), a much cheaper node-name-only
+    lookup that works even when _graph is still None (e.g. before any path
+    search has ever run in this process)."""
+    monkeypatch.setattr(pf, "_graph", None)
+    monkeypatch.setattr(pf, "_node_lookup_cache", {"jane doe": "Jane Doe"})
+    r = client.post(
+        "/api/contacts/add-me", json={"person_name": "jane doe"},
+        headers={"Cf-Access-Authenticated-User-Email": "alice@example.com"},
+    )
     assert r.status_code == 200
-    mock_load_graph.assert_called_once()
+    assert pf._graph is None  # still never touched the heavy graph
 
 
 def test_add_me_success_persists_self_attested_suggestion_not_spoofable_by_body(client, tester_data_dir):
@@ -754,10 +754,10 @@ def test_service_queue_and_review_workflow(client, tester_data_dir):
         assert rel[7] == "USER_SUGGESTION"
 
 
-def test_service_review_loads_graph_before_resolving_names(client, tester_data_dir):
-    """Regression test: the approval branch's _resolve_name() calls also
-    depend on the lazily-loaded module-level _graph (only loads on the first
-    path search otherwise) -- this call site had the same gap as add-me."""
+def test_service_review_resolves_names_without_full_graph_loaded(client, tester_data_dir, monkeypatch):
+    """Regression test: the approval branch's _resolve_name() calls also no
+    longer need the full, expensive networkx graph loaded (same fix as
+    add-me) -- they resolve via the cheap _load_node_lookup() cache."""
     conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
     meta = json.dumps({
         "subject": "Regression Subject", "predicate": "FAMILY", "object": "Regression Object",
@@ -772,14 +772,16 @@ def test_service_review_loads_graph_before_resolving_names(client, tester_data_d
     item_id = conn.execute("SELECT id FROM service_items WHERE subject = 'Regression test item'").fetchone()[0]
     conn.close()
 
-    with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}), \
-         patch("pathfinder._resolve_name", side_effect=lambda x: x), \
-         patch("pathfinder._load_graph") as mock_load_graph:
+    monkeypatch.setattr(pf, "_graph", None)
+    monkeypatch.setattr(pf, "_node_lookup_cache", {
+        "regression subject": "Regression Subject", "regression object": "Regression Object",
+    })
+    with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}):
         r = client.post(f"/api/service/items/{item_id}/review", json={
             "status": "approved", "reviewed_by": "reviewer@example.com",
         })
     assert r.status_code == 200
-    mock_load_graph.assert_called_once()
+    assert pf._graph is None  # still never touched the heavy graph
 
 
 def test_service_metrics(client):

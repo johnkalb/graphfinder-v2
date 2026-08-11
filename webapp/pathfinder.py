@@ -672,6 +672,33 @@ def _find_path(src_name, tgt_name, max_depth=6, k=5, include_deceased=False):
         logger.exception("pathfind failed for %r -> %r", src_name, tgt_name)
         return {"error": "pathfind_failed", "detail": "path search failed (see server logs)"}
 
+_node_lookup_cache = None  # {lowercased name: original-case canonical name}
+
+def _load_node_lookup():
+    """Cheap alternative to _load_graph() for callers that only need to know
+    whether a name exists as a node (add_me, suggestion approval) -- not
+    compute paths. Skips building the full networkx Graph (15M+ edges, each
+    with its own attribute dict), which is by far the expensive part of
+    _load_graph(): parsing the same source JSON is unavoidable either way,
+    but turning it into O(nodes) dict entries instead of O(edges) graph
+    structure is a large constant-factor win in both time and memory. Also
+    fixes the O(n) case-insensitive scan _resolve_name() used to fall back
+    to -- this is an O(1) dict lookup instead, keyed by lowercase name."""
+    global _node_lookup_cache
+    if _node_lookup_cache is not None:
+        return _node_lookup_cache
+    if _graph is not None:
+        _node_lookup_cache = {n.lower(): n for n in _graph.nodes()}
+        return _node_lookup_cache
+    import gzip
+    spath = DATA_DIR / "graph_scored.json.gz"
+    nodes = []
+    if spath.exists():
+        with gzip.open(spath, "rt", encoding="utf-8") as f:
+            nodes = json.load(f).get("nodes", [])
+    _node_lookup_cache = {n.lower(): n for n in nodes}
+    return _node_lookup_cache
+
 def _resolve_name(name):
     name_lower = name.strip().lower()
     cmap = _canonical_map or {}
@@ -686,13 +713,7 @@ def _resolve_name(name):
                         return nid2
             else:
                 return info.get("canonical")
-    if _graph is not None and name_lower in _graph:
-        return name_lower
-    if _graph is not None:
-        for n in _graph.nodes():
-            if n.lower() == name_lower:
-                return n
-    return None
+    return _load_node_lookup().get(name_lower)
 
 _evidence = None
 def _load_evidence():
@@ -1334,7 +1355,6 @@ async def add_me(req: AddMeRequest, request: Request):
         if not email:
             return JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
 
-        _load_graph()  # _resolve_name needs _graph, which otherwise only loads lazily on first path search
         obj_canonical = _resolve_name(req.person_name)
         if not obj_canonical:
             return JSONResponse(status_code=400, content={"success": False, "error": "person not found in graph"})
@@ -1430,7 +1450,6 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
             # are the one exception: subject is the reporting user's own name, which is
             # expected NOT to already be a graph node -- build_scored_edges.py mints a
             # new node for it from the relationships row written below.
-            _load_graph()  # _resolve_name needs _graph, which otherwise only loads lazily on first path search
             obj_canonical = _resolve_name(obj)
             if predicate == "SELF_ATTESTED_CONTACT":
                 subject_canonical = subject.strip() if subject else None
