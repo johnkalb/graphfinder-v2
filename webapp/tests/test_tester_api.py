@@ -534,9 +534,11 @@ def test_add_me_approval_creates_relationship_without_subject_preexisting(client
     with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}), \
          patch("pathfinder._resolve_name", side_effect=lambda x: x if x == "Jane Doe" else None), \
          patch("pathfinder._get_pipeline_db_path", return_value=str(pipeline_db)):
-        rev_res = client.post(f"/api/service/items/{item_id}/review", json={
-            "status": "approved", "reviewed_by": "reviewer@example.com",
-        })
+        rev_res = client.post(
+            f"/api/service/items/{item_id}/review",
+            json={"status": "approved", "reviewed_by": "reviewer@example.com"},
+            headers={"Cf-Access-Authenticated-User-Email": "john.kalb@gmail.com"},
+        )
     assert rev_res.status_code == 200
     assert rev_res.json()["success"] is True
 
@@ -687,6 +689,71 @@ def test_invite_bcc_triggers_smtp_send(client, tester_data_dir):
             assert row[1] == body["message_id"]
 
 
+# ==========================================================================
+# 9d. Admin authorization on /api/service/{review,resolve,notify}
+#
+# Submission (suggest-link/dispute-link/add-me) is open to any authenticated
+# user; moderating those submissions is restricted to an allowlist. Without
+# this gate, any of the ~10 Cloudflare-Access-authenticated users could
+# approve/reject/resolve arbitrary claims, including Add Me claims made
+# about themselves -- defeating the point of a review step entirely.
+# ==========================================================================
+
+def _make_service_item(db_path, item_type="suggestion", submitter_email="tester@example.com"):
+    conn = sqlite3.connect(db_path)
+    meta = json.dumps({
+        "subject": "Auth Test Subject", "predicate": "FAMILY", "object": "Auth Test Object",
+        "source_name": "Test", "source_url": "http://example.com", "snippet": "test",
+    })
+    conn.execute(
+        "INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata) "
+        "VALUES (?, 'new', 'normal', 'Auth test item', 'body', ?, ?)",
+        (item_type, submitter_email, meta),
+    )
+    conn.commit()
+    item_id = conn.execute("SELECT id FROM service_items WHERE subject = 'Auth test item'").fetchone()[0]
+    conn.close()
+    return item_id
+
+
+def test_review_without_admin_header_returns_403(client, tester_data_dir):
+    item_id = _make_service_item(str(tester_data_dir / "test_department.db"))
+    r = client.post(f"/api/service/items/{item_id}/review", json={"status": "approved"})
+    assert r.status_code == 403
+    assert r.json()["success"] is False
+
+
+def test_review_with_non_admin_authenticated_user_returns_403(client, tester_data_dir):
+    item_id = _make_service_item(str(tester_data_dir / "test_department.db"))
+    r = client.post(
+        f"/api/service/items/{item_id}/review", json={"status": "approved"},
+        headers={"Cf-Access-Authenticated-User-Email": "some-other-authenticated-user@example.com"},
+    )
+    assert r.status_code == 403
+
+
+def test_review_with_admin_email_succeeds_for_both_allowlisted_accounts(client, tester_data_dir):
+    for admin_email in ("john.kalb@gmail.com", "kureious09@gmail.com"):
+        item_id = _make_service_item(str(tester_data_dir / "test_department.db"))
+        r = client.post(
+            f"/api/service/items/{item_id}/review", json={"status": "rejected"},
+            headers={"Cf-Access-Authenticated-User-Email": admin_email},
+        )
+        assert r.status_code == 200, f"{admin_email} should be authorized"
+
+
+def test_resolve_without_admin_header_returns_403(client, tester_data_dir):
+    item_id = _make_service_item(str(tester_data_dir / "test_department.db"))
+    r = client.post(f"/api/service/items/{item_id}/resolve", json={})
+    assert r.status_code == 403
+
+
+def test_notify_without_admin_header_returns_403(client, tester_data_dir):
+    item_id = _make_service_item(str(tester_data_dir / "test_department.db"))
+    r = client.post(f"/api/service/notify/{item_id}")
+    assert r.status_code == 403
+
+
 def test_service_queue_and_review_workflow(client, tester_data_dir):
     r = client.get("/api/service/queue")
     assert r.status_code == 200
@@ -736,11 +803,11 @@ def test_service_queue_and_review_workflow(client, tester_data_dir):
         pf._graph.add_node("Jane Doe")
         pf._graph.add_node("John Doe")
         
-        rev_res = client.post(f"/api/service/items/{s_id}/review", json={
-            "status": "approved",
-            "reviewed_by": "reviewer@example.com",
-            "note": "Valid connection found"
-        })
+        rev_res = client.post(
+            f"/api/service/items/{s_id}/review",
+            json={"status": "approved", "reviewed_by": "reviewer@example.com", "note": "Valid connection found"},
+            headers={"Cf-Access-Authenticated-User-Email": "john.kalb@gmail.com"},
+        )
         assert rev_res.status_code == 200
         assert rev_res.json()["success"] is True
         mock_send.assert_called()
@@ -777,9 +844,11 @@ def test_service_review_resolves_names_without_full_graph_loaded(client, tester_
         "regression subject": "Regression Subject", "regression object": "Regression Object",
     })
     with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}):
-        r = client.post(f"/api/service/items/{item_id}/review", json={
-            "status": "approved", "reviewed_by": "reviewer@example.com",
-        })
+        r = client.post(
+            f"/api/service/items/{item_id}/review",
+            json={"status": "approved", "reviewed_by": "reviewer@example.com"},
+            headers={"Cf-Access-Authenticated-User-Email": "john.kalb@gmail.com"},
+        )
     assert r.status_code == 200
     assert pf._graph is None  # still never touched the heavy graph
 
@@ -803,7 +872,10 @@ def test_manual_notification(client):
     if item_with_email:
         i_id = item_with_email[0]["id"]
         with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}) as mock_send:
-            res = client.post(f"/api/service/notify/{i_id}")
+            res = client.post(
+                f"/api/service/notify/{i_id}",
+                headers={"Cf-Access-Authenticated-User-Email": "john.kalb@gmail.com"},
+            )
             assert res.status_code == 200
             assert res.json()["success"] is True
             mock_send.assert_called_once()

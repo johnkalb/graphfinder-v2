@@ -389,6 +389,23 @@ def _request_user_email(request: Optional[Request]) -> Optional[str]:
     return None
 
 
+# Anyone authenticated via Cloudflare Access can submit (suggestions,
+# disputes, Add Me claims) -- moderating those submissions (approve/reject/
+# resolve/notify) is restricted to this allowlist. Submission and moderation
+# are deliberately different trust levels: letting any authenticated user
+# approve/reject arbitrary claims -- including ones made about themselves --
+# would defeat the point of having a review step at all.
+_ADMIN_EMAILS = {"john.kalb@gmail.com", "kureious09@gmail.com"}
+
+def _require_admin(request: Request) -> Optional[JSONResponse]:
+    """Returns an error JSONResponse if the request isn't from an allowlisted
+    admin, or None if it's authorized to proceed."""
+    email = _request_user_email(request)
+    if not email or email not in _ADMIN_EMAILS:
+        return JSONResponse(status_code=403, content={"success": False, "error": "admin authorization required"})
+    return None
+
+
 def _log_tester_usage(request: Optional[Request], event_type: str, metadata: Optional[dict] = None):
     email = _request_user_email(request)
     if not email:
@@ -1410,6 +1427,9 @@ async def get_service_queue(status: Optional[str] = "new", limit: int = 25, sort
 
 @app.post("/api/service/items/{item_id}/review")
 async def review_service_item(item_id: int, req: ReviewRequest, request: Request):
+    denied = _require_admin(request)
+    if denied:
+        return denied
     try:
         db_path = _test_department_db_path()
         conn = sqlite3.connect(db_path)
@@ -1516,6 +1536,9 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
 
 @app.post("/api/service/items/{item_id}/resolve")
 async def resolve_service_item(item_id: int, req: ResolveRequest, request: Request):
+    denied = _require_admin(request)
+    if denied:
+        return denied
     try:
         db_path = _test_department_db_path()
         conn = sqlite3.connect(db_path)
@@ -1554,7 +1577,10 @@ async def resolve_service_item(item_id: int, req: ResolveRequest, request: Reque
         return JSONResponse(status_code=500, content={"success": False, "error": "resolve failed (see server logs)"})
 
 @app.post("/api/service/notify/{item_id}")
-async def notify_service_item(item_id: int):
+async def notify_service_item(item_id: int, request: Request):
+    denied = _require_admin(request)
+    if denied:
+        return denied
     try:
         db_path = _test_department_db_path()
         conn = sqlite3.connect(db_path)
