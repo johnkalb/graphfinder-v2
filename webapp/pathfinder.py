@@ -1374,28 +1374,6 @@ async def trigger_legal_review(req: LegalTriggerRequest):
         logger.exception("legal trigger-review failed for %r", req.source_url)
         return JSONResponse(status_code=500, content={"error": "legal review check failed (see server logs)"})
 
-@app.post("/api/debug/test-email")
-async def debug_test_email(request: Request):
-    """TEMPORARY -- diagnosing why operator-notification emails aren't
-    arriving after SMTP env vars were configured. Calls send_email()
-    directly and returns its raw result (including the real error), since
-    the normal call sites swallow failures into server logs only. Remove
-    once SMTP delivery is confirmed working."""
-    denied = _require_admin(request)
-    if denied:
-        return denied
-    target = os.environ.get("OPERATOR_EMAIL") or _request_user_email(request)
-    result = send_email(target, "[sixdegrees] SMTP test", "<p>Test email from debug_test_email.</p>", "Test email.")
-    return {
-        "target": target,
-        "smtp_host": os.environ.get("SMTP_HOST", "smtp.gmail.com"),
-        "smtp_port": os.environ.get("SMTP_PORT", "587"),
-        "smtp_user_configured": bool(os.environ.get("SMTP_USER")),
-        "smtp_pass_configured": bool(os.environ.get("SMTP_PASS")),
-        "from_addr": os.environ.get("TESTER_INVITE_FROM", "tester-support@sixdegrees.net"),
-        "result": result,
-    }
-
 class SuggestionRequest(BaseModel):
     subject: str = Field(..., min_length=2, max_length=100)
     predicate: str = Field(..., min_length=2, max_length=50)
