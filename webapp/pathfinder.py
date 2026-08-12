@@ -272,6 +272,8 @@ async def startup():
                 "sharded": True,
                 "shard_hex_chars": contact_psi_manifest.SHARD_HEX_CHARS,
                 "manifest_shard_url_template": "/api/contacts/manifest-shard/{shard}",
+                "manifest_shards_batch_url": "/api/contacts/manifest-shards",
+                "manifest_shards_batch_max": MANIFEST_SHARD_BATCH_MAX,
                 "num_shards": len(shard_files),
                 "manifest_digest": digest.hexdigest(),
                 "built_at": datetime.now(timezone.utc).isoformat(),
@@ -1004,6 +1006,38 @@ async def contacts_manifest_shard(shard: str):
     if not path.exists():
         return JSONResponse(status_code=404, content={"detail": "contact manifest shard unavailable"})
     return FileResponse(path, media_type="application/gzip", headers={"Cache-Control": "public, max-age=86400"})
+
+class ManifestShardsBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    shards: list[str]
+
+MANIFEST_SHARD_BATCH_MAX = 25
+
+@app.post("/api/contacts/manifest-shards")
+async def contacts_manifest_shards(body: ManifestShardsBatchRequest):
+    # Fetching shards one-at-a-time (one GET per shard) reliably tripped
+    # Cloudflare's edge rate limiting: a contact list of a few hundred people
+    # commonly needs 150+ of the 256 total shards, since each shard covers
+    # tens of thousands of hash-prefix buckets but the corpus has grown large
+    # enough that queries spread across nearly the whole shard space. This
+    # batches many shard IDs into one request/response so total data
+    # transferred is unchanged but request COUNT (what the rate limit
+    # actually counts) drops by ~20x.
+    if not body.shards or len(body.shards) > MANIFEST_SHARD_BATCH_MAX:
+        return JSONResponse(status_code=400, content={"detail": f"shards must be 1-{MANIFEST_SHARD_BATCH_MAX} per request"})
+    expected_len = contact_psi_app.current_manifest_meta().get("shard_hex_chars", contact_psi_manifest.SHARD_HEX_CHARS)
+    shard_pattern = re.compile(r"[0-9a-f]{%d}" % expected_len)
+    import gzip
+    merged_buckets = {}
+    for shard in body.shards:
+        if not shard_pattern.fullmatch(shard):
+            return JSONResponse(status_code=400, content={"detail": f"invalid shard id: {shard}"})
+        path = DATA_DIR / "contact_psi_manifest" / contact_psi_manifest.shard_filename(shard)
+        if not path.exists():
+            continue  # shard has no entries for this prefix range -- not an error
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            merged_buckets.update(json.load(f).get("buckets", {}))
+    return JSONResponse(content={"buckets": merged_buckets})
 
 @app.get("/api/search")
 async def search(request: Request, q: str = Query(default="")):
@@ -3041,48 +3075,54 @@ async function checkContacts(names, emptyMessage) {
     // sees the same blinded-point traffic from the OPRF step, plus which
     // (of up to 256) shard files were requested, which reveals at most a
     // few bits of a derived key's hash prefix -- not the item itself.
-    const shardUrlTemplate = meta.manifest_shard_url_template || '/api/contacts/manifest-shard/{shard}';
+    //
+    // One GET per shard reliably tripped Cloudflare's edge rate limiting: a
+    // contact list of a few hundred people commonly needs 150+ of the 256
+    // shards (the corpus has grown enough that queries spread across nearly
+    // the whole shard space), so this was firing 150-250 requests. The 429s
+    // were being treated identically to "shard has no entries" and silently
+    // swallowed, silently dropping real matches with no indication to the
+    // user. Batch many shard IDs into few POST requests instead -- total
+    // data transferred is unchanged, but request COUNT (what the rate limit
+    // actually counts) drops by ~20x.
     const neededShardIds = [...new Set(queries.map(q => q.shardId))];
-    // Fetching all needed shards at once (up to 256) as one big Promise.all
-    // reliably triggers Cloudflare's edge rate limiting on large contact
-    // lists (a few hundred contacts easily needs 100+ shards) -- the 429s
-    // were being silently treated as "shard has no entries" and swallowed,
-    // silently dropping real matches with no indication to the user. Bound
-    // concurrency and retry 429s/network errors instead of firing them all
-    // at once and giving up on the first non-2xx.
+    const batchUrl = meta.manifest_shards_batch_url || '/api/contacts/manifest-shards';
+    const batchMax = meta.manifest_shards_batch_max || 25;
     const buckets = {};
     let shardsGaveUp = 0;
-    async function fetchShard(shardId) {
+    async function fetchBatch(shardIds) {
       for (let attempt = 0; ; attempt++) {
-        let shardResponse;
+        let response;
         try {
-          shardResponse = await fetch(shardUrlTemplate.replace('{shard}', shardId));
+          response = await fetch(batchUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shards: shardIds }),
+          });
         } catch (e) {
           if (attempt < 2) { await new Promise(r => setTimeout(r, 300 * (attempt + 1))); continue; }
-          shardsGaveUp++;
+          shardsGaveUp += shardIds.length;
           return;
         }
-        if (shardResponse.status === 429 && attempt < 4) {
-          const retryAfter = Math.min(Number(shardResponse.headers.get('Retry-After')) || 1, 3);
+        if (response.status === 429 && attempt < 4) {
+          const retryAfter = Math.min(Number(response.headers.get('Retry-After')) || 1, 3);
           await new Promise(r => setTimeout(r, retryAfter * 1000));
           continue;
         }
-        if (!shardResponse.ok) { if (shardResponse.status !== 404) shardsGaveUp++; return; }
-        const shardBuf = await shardResponse.arrayBuffer();
-        const decompressed = new Response(new Response(shardBuf).body.pipeThrough(new DecompressionStream('gzip')));
-        const shardManifest = JSON.parse(await decompressed.text());
-        Object.assign(buckets, shardManifest.buckets || {});
+        if (!response.ok) { shardsGaveUp += shardIds.length; return; }
+        const data = await response.json();
+        Object.assign(buckets, data.buckets || {});
         return;
       }
     }
-    const shardQueue = [...neededShardIds];
-    async function shardWorker() {
-      while (shardQueue.length) {
-        const shardId = shardQueue.shift();
-        await fetchShard(shardId);
+    const batches = [];
+    for (let i = 0; i < neededShardIds.length; i += batchMax) batches.push(neededShardIds.slice(i, i + batchMax));
+    const batchQueue = [...batches];
+    async function batchWorker() {
+      while (batchQueue.length) {
+        await fetchBatch(batchQueue.shift());
       }
     }
-    await Promise.all(Array.from({ length: Math.min(12, neededShardIds.length) }, shardWorker));
+    await Promise.all(Array.from({ length: Math.min(4, batches.length) }, batchWorker));
 
     const tierRank = { exact: 0, phonetic: 1, possible: 2 };
     const bestByContact = {};
