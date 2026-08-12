@@ -158,14 +158,38 @@ def _load_search():
 def _load_graph():
     """Load the scored NetworkX graph. Each edge carries:
        prob  (P would take a call), weight (-log prob, for shortest path),
-       cats  (contributing relationship categories)."""
+       cats  (contributing relationship categories).
+
+       Graph data may be split into shards (graph_scored_000.json.gz, ...) to
+       stay under GitHub's 100MB per-file limit. Each shard is self-contained
+       with its own LOCAL node indices, but reuses the same canonical
+       name strings for any node -- since the graph is keyed by node name,
+       adding all shards into one nx.Graph unions them by name automatically,
+       with no separate index-remapping step needed."""
     global _graph
     if _graph is not None:
         return
     import gzip, math
+    shard_paths = sorted(DATA_DIR.glob("graph_scored_[0-9][0-9][0-9].json.gz"))
     spath = DATA_DIR / "graph_scored.json.gz"
     epath = DATA_DIR / "graph_edges.json.gz"
-    if spath.exists():
+    if shard_paths:
+        _fwd_penalty = -math.log(_FORWARD_PROB) if _FORWARD_PROB > 0 else 0.0
+        g = nx.Graph()
+        for shard_path in shard_paths:
+            with gzip.open(shard_path, "rt", encoding="utf-8") as f:
+                ed = json.load(f)
+            nodes = ed["nodes"]
+            edge_list = ed["edges"]
+            ed = None
+            g.add_nodes_from(nodes)
+            for u, v, prob, cats in edge_list:
+                p = prob if prob > 1e-9 else 1e-9
+                g.add_edge(nodes[u], nodes[v], prob=prob,
+                           weight=-math.log(p) + _fwd_penalty, cats=cats)
+            edge_list = None
+        _graph = g
+    elif spath.exists():
         with gzip.open(spath, "rt", encoding="utf-8") as f:
             ed = json.load(f)
         nodes = ed["nodes"]
@@ -712,12 +736,20 @@ def _load_node_lookup():
         _node_lookup_cache = {n.lower(): n for n in _graph.nodes()}
         return _node_lookup_cache
     import gzip
-    spath = DATA_DIR / "graph_scored.json.gz"
-    nodes = []
-    if spath.exists():
-        with gzip.open(spath, "rt", encoding="utf-8") as f:
-            nodes = json.load(f).get("nodes", [])
-    _node_lookup_cache = {n.lower(): n for n in nodes}
+    shard_paths = sorted(DATA_DIR.glob("graph_scored_[0-9][0-9][0-9].json.gz"))
+    lookup = {}
+    if shard_paths:
+        for shard_path in shard_paths:
+            with gzip.open(shard_path, "rt", encoding="utf-8") as f:
+                for n in json.load(f).get("nodes", []):
+                    lookup[n.lower()] = n
+    else:
+        spath = DATA_DIR / "graph_scored.json.gz"
+        if spath.exists():
+            with gzip.open(spath, "rt", encoding="utf-8") as f:
+                for n in json.load(f).get("nodes", []):
+                    lookup[n.lower()] = n
+    _node_lookup_cache = lookup
     return _node_lookup_cache
 
 def _resolve_name(name):
@@ -2685,6 +2717,12 @@ async function submitAddMe(btn) {
   )) return;
   btn.disabled = true;
   btn.textContent = 'Submitting…';
+  // Any previous failure notice for THIS button (a retry) -- clear it before
+  // trying again so stale/duplicate notices don't stack up next to the button.
+  const staleNotice = btn.nextElementSibling;
+  if (staleNotice && staleNotice.classList && staleNotice.classList.contains('add-me-notice')) {
+    staleNotice.remove();
+  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000);
   try {
@@ -2703,16 +2741,21 @@ async function submitAddMe(btn) {
       btn.outerHTML = ` <span style="color:#f85149">Error: ${escHtml(data.error || 'failed')}</span>`;
     }
   } catch (e) {
-    const message = e.name === 'AbortError' ? 'Timed out -- the server is taking longer than expected. Try again.' : e.message;
+    // Scoped next to THIS button, not appended to #psi-result -- that shared
+    // container also holds the successful match list from checkContacts(),
+    // and dumping an unrelated failure notice in there read as if the whole
+    // contact check had failed even though it had already succeeded.
+    const message = e.name === 'AbortError'
+      ? 'Timed out -- the server is taking longer than expected. Try again.'
+      : `Couldn't reach the server (${e.message}) -- try again.`;
     btn.disabled = false;
     btn.textContent = '+ Add me';
-    const result = document.getElementById('psi-result');
-    if (result) {
-      const notice = document.createElement('div');
-      notice.style.color = '#f85149';
-      notice.textContent = message;
-      result.appendChild(notice);
-    }
+    const notice = document.createElement('span');
+    notice.className = 'add-me-notice';
+    notice.style.color = '#f85149';
+    notice.style.marginLeft = '6px';
+    notice.textContent = message;
+    btn.insertAdjacentElement('afterend', notice);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -3000,20 +3043,46 @@ async function checkContacts(names, emptyMessage) {
     // few bits of a derived key's hash prefix -- not the item itself.
     const shardUrlTemplate = meta.manifest_shard_url_template || '/api/contacts/manifest-shard/{shard}';
     const neededShardIds = [...new Set(queries.map(q => q.shardId))];
+    // Fetching all needed shards at once (up to 256) as one big Promise.all
+    // reliably triggers Cloudflare's edge rate limiting on large contact
+    // lists (a few hundred contacts easily needs 100+ shards) -- the 429s
+    // were being silently treated as "shard has no entries" and swallowed,
+    // silently dropping real matches with no indication to the user. Bound
+    // concurrency and retry 429s/network errors instead of firing them all
+    // at once and giving up on the first non-2xx.
     const buckets = {};
-    await Promise.all(neededShardIds.map(async (shardId) => {
-      let shardResponse;
-      try {
-        shardResponse = await fetch(shardUrlTemplate.replace('{shard}', shardId));
-      } catch (e) {
-        throw new Error(`Could not reach the server (manifest-shard ${shardId}) -- check your network connection and try again.`);
+    let shardsGaveUp = 0;
+    async function fetchShard(shardId) {
+      for (let attempt = 0; ; attempt++) {
+        let shardResponse;
+        try {
+          shardResponse = await fetch(shardUrlTemplate.replace('{shard}', shardId));
+        } catch (e) {
+          if (attempt < 2) { await new Promise(r => setTimeout(r, 300 * (attempt + 1))); continue; }
+          shardsGaveUp++;
+          return;
+        }
+        if (shardResponse.status === 429 && attempt < 4) {
+          const retryAfter = Math.min(Number(shardResponse.headers.get('Retry-After')) || 1, 3);
+          await new Promise(r => setTimeout(r, retryAfter * 1000));
+          continue;
+        }
+        if (!shardResponse.ok) { if (shardResponse.status !== 404) shardsGaveUp++; return; }
+        const shardBuf = await shardResponse.arrayBuffer();
+        const decompressed = new Response(new Response(shardBuf).body.pipeThrough(new DecompressionStream('gzip')));
+        const shardManifest = JSON.parse(await decompressed.text());
+        Object.assign(buckets, shardManifest.buckets || {});
+        return;
       }
-      if (!shardResponse.ok) return; // shard has no entries for this prefix range -- not an error
-      const shardBuf = await shardResponse.arrayBuffer();
-      const decompressed = new Response(new Response(shardBuf).body.pipeThrough(new DecompressionStream('gzip')));
-      const shardManifest = JSON.parse(await decompressed.text());
-      Object.assign(buckets, shardManifest.buckets || {});
-    }));
+    }
+    const shardQueue = [...neededShardIds];
+    async function shardWorker() {
+      while (shardQueue.length) {
+        const shardId = shardQueue.shift();
+        await fetchShard(shardId);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(12, neededShardIds.length) }, shardWorker));
 
     const tierRank = { exact: 0, phonetic: 1, possible: 2 };
     const bestByContact = {};
@@ -3057,8 +3126,12 @@ async function checkContacts(names, emptyMessage) {
 
     const tierLabel = { exact: 'Definite', phonetic: 'Likely', possible: 'Possible' };
     const matchedContacts = Object.keys(bestByContact);
+    const warningHtml = shardsGaveUp > 0
+      ? `<div style="color:#d29922;margin-top:6px;">Note: ${shardsGaveUp} of ${neededShardIds.length} lookup shard${shardsGaveUp === 1 ? '' : 's'} `
+        + `couldn\u2019t be reached after retrying \u2014 a few matches may be missing. Try again in a moment for a complete check.</div>`
+      : '';
     if (!matchedContacts.length) {
-      result.textContent = `Checked ${names.length} contact${names.length === 1 ? '' : 's'} privately \u2014 no matches found`;
+      result.innerHTML = `Checked ${names.length} contact${names.length === 1 ? '' : 's'} privately \u2014 no matches found` + warningHtml;
     } else {
       const rows = matchedContacts.map(contact => {
         const m = bestByContact[contact];
@@ -3069,7 +3142,7 @@ async function checkContacts(names, emptyMessage) {
       addMeSubmittedCount = 0;
       result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>`
         + `<div class="psi-note" style="margin:6px 0;">Only use "+ Add me" for people who\u2019d actually take your call today \u2014 not a casual or stale contact you just happen to have saved.</div>`
-        + rows;
+        + rows + warningHtml;
     }
   } catch (error) {
     result.textContent = 'Error: ' + error.message;

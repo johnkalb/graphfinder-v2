@@ -33,6 +33,10 @@ Thumbs.db
 *.tar.gz
 *.log
 *.tmp
+
+# E2E test auth state (Cloudflare Access session cookies -- never commit)
+webapp/tests/e2e/.auth_state.json
+webapp/tests/e2e/_synthetic_contacts.vcf
 compact_names.json
 webapp/data/graph.pkl
 webapp/data/canonical_map.json
