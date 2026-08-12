@@ -228,25 +228,28 @@ def main():
     require_auth_state()
     anomalies = []
 
+    def run(name, fn, *fn_args):
+        print(f"== {name} ==")
+        try:
+            fn(*fn_args)
+        except Exception as e:
+            anomalies.append(Anomaly(name, "scenario_crashed", str(e)))
+            print(f"  (scenario raised: {e})")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not args.headed)
         desktop_context = browser.new_context(storage_state=str(AUTH_STATE))
 
-        print("== homepage ==")
-        scenario_homepage(desktop_context, args.base_url, anomalies)
-        print("== search ==")
-        scenario_search(desktop_context, args.base_url, anomalies)
-        print("== pathfind ==")
-        scenario_pathfind(desktop_context, args.base_url, anomalies)
-        print("== suggest_modal ==")
-        scenario_suggest_modal(desktop_context, args.base_url, anomalies)
+        run("homepage", scenario_homepage, desktop_context, args.base_url, anomalies)
+        run("search", scenario_search, desktop_context, args.base_url, anomalies)
+        run("pathfind", scenario_pathfind, desktop_context, args.base_url, anomalies)
+        run("suggest_modal", scenario_suggest_modal, desktop_context, args.base_url, anomalies)
 
         desktop_context.close()
 
-        print("== check_contacts (mobile-emulated) ==")
         vcf_path = HERE / "_synthetic_contacts.vcf"
         make_synthetic_vcf(vcf_path)
-        scenario_check_contacts(browser, args.base_url, anomalies, vcf_path)
+        run("check_contacts", scenario_check_contacts, browser, args.base_url, anomalies, vcf_path)
 
         browser.close()
 
