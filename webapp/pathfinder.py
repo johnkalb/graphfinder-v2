@@ -1257,6 +1257,30 @@ def _notify_operator_of_new_case(category: str, tester_email: str, feedback_text
     text = f"New {category} case from {tester_email} (feedback #{feedback_id}):\n\n{snippet}{diagnosis_text}\n\nView the queue: /api/test-department/summary"
     return send_email(operator_email, subject, html_body, text)
 
+def _notify_operator_of_new_submission(item_type: str, subject: str, body: str, submitter_email: Optional[str]) -> dict:
+    """Email the operator when a new suggestion/dispute/add-me submission
+    lands in service_items -- previously nothing alerted anyone on new
+    submissions (only on review/resolve, which never happened because no one
+    knew to look): confirmed real user Add Me submissions sitting unreviewed
+    for days with no signal to either party. Mirrors
+    _notify_operator_of_new_case's pattern for tester feedback."""
+    operator_email = os.environ.get("OPERATOR_EMAIL")
+    if not operator_email:
+        return {"success": False, "error": "OPERATOR_EMAIL not configured"}
+    email_subject = f"[sixdegrees] New {item_type} submission"
+    from_line = html.escape(submitter_email or "anonymous")
+    body_snippet = html.escape(body.strip()[:500])
+    html_body = (
+        f"<p>New <strong>{html.escape(item_type)}</strong> submitted for review.</p>"
+        f"<p><strong>From:</strong> {from_line}</p>"
+        f"<p><strong>Subject:</strong> {html.escape(subject)}</p>"
+        f"<p><strong>Details:</strong> {body_snippet}</p>"
+        f"<p>Review the queue: /api/service/queue?status=new</p>"
+    )
+    text = (f"New {item_type} from {submitter_email or 'anonymous'}:\n\n{subject}\n{body.strip()[:500]}"
+            f"\n\nReview the queue: /api/service/queue?status=new")
+    return send_email(operator_email, email_subject, html_body, text)
+
 
 @app.post("/api/test-department/feedback")
 async def td_feedback(req: TesterFeedbackRequest):
@@ -1398,6 +1422,12 @@ async def suggest_link(req: SuggestionRequest, request: Request):
         
         conn.commit()
         conn.close()
+        try:
+            _notify_operator_of_new_submission(
+                "suggestion", f"{req.subject.strip()} {req.predicate.strip()} {req.object.strip()}",
+                req.snippet.strip(), email)
+        except Exception as e:
+            print(f"[operator-notify] Error sending operator alert: {e}")
         return {"success": True, "message": "Thank you! Your connection suggestion has been submitted for review."}
     except Exception:
         logger.exception("suggest-link failed")
@@ -1430,6 +1460,10 @@ async def dispute_link(req: DisputeRequest, request: Request):
         
         conn.commit()
         conn.close()
+        try:
+            _notify_operator_of_new_submission("dispute", req.edge_key.strip(), req.reason.strip(), email)
+        except Exception as e:
+            print(f"[operator-notify] Error sending operator alert: {e}")
         return {"success": True, "message": "Thank you! Your dispute/correction has been submitted for review."}
     except Exception:
         logger.exception("dispute-link failed")
@@ -1467,6 +1501,11 @@ async def add_me(req: AddMeRequest, request: Request):
 
         conn.commit()
         conn.close()
+        try:
+            _notify_operator_of_new_submission(
+                "Add Me", f"{display_name} ↔ {obj_canonical}", "Self-reported contact", email)
+        except Exception as e:
+            print(f"[operator-notify] Error sending operator alert: {e}")
         return {"success": True, "message": "Submitted for review."}
     except Exception:
         logger.exception("add-me failed")
