@@ -1,8 +1,12 @@
 import hashlib
-import sqlite3
 import json
 from typing import Optional
 from pathlib import Path
+
+try:
+    import db
+except ImportError:
+    from webapp import db
 
 # Placeholder for path to legal DB
 def get_legal_db_path(data_dir: Path) -> str:
@@ -17,23 +21,24 @@ def register_obligation(
     raw_text: str,
     extracted_obligations: dict
 ) -> int:
-    conn = sqlite3.connect(db_path)
+    conn = db.connect(db_path)
     cur = conn.cursor()
     terms_hash = _hash_text(raw_text)
-    
+
     cur.execute("""
-        INSERT INTO legal_obligations 
+        INSERT INTO legal_obligations
         (source_url, terms_hash, extracted_obligations, raw_text)
         VALUES (?, ?, ?, ?)
+        RETURNING id
     """, (source_url, terms_hash, json.dumps(extracted_obligations), raw_text))
-    
-    obligation_id = cur.lastrowid
+
+    obligation_id = cur.fetchone()["id"]
     conn.commit()
     conn.close()
     return obligation_id
 
 def check_for_changes(db_path: str, source_url: str, current_raw_text: str) -> Optional[str]:
-    conn = sqlite3.connect(db_path)
+    conn = db.connect(db_path)
     cur = conn.cursor()
     cur.execute("""
         SELECT terms_hash FROM legal_obligations 
@@ -46,7 +51,7 @@ def check_for_changes(db_path: str, source_url: str, current_raw_text: str) -> O
     if not row:
         return "new_source"
     
-    if row[0] != _hash_text(current_raw_text):
+    if row["terms_hash"] != _hash_text(current_raw_text):
         return "terms_changed"
     
     return None

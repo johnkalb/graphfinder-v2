@@ -1384,7 +1384,7 @@ async def add_me(req: AddMeRequest, request: Request):
         conn = db.connect(db_path)
         c = conn.cursor()
         row = c.execute("SELECT name FROM testers WHERE email = ?", (email,)).fetchone()
-        display_name = (row[0] if row and row[0] else email.split("@")[0]).strip()
+        display_name = (row["name"] if row and row["name"] else email.split("@")[0]).strip()
 
         meta = json.dumps({
             "subject": display_name,
