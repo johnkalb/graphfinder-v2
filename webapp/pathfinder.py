@@ -628,7 +628,18 @@ def _one_in(p):
         return f"{round(p*100)}%"
     return f"\u2248 1 in {round(1.0/p)}"
 
-def _find_path(src_name, tgt_name, max_depth=6, k=5, include_deceased=False):
+def _find_path(src_name, tgt_name, max_depth=6, k=3, include_deceased=False):
+    # k caps how many alternative paths shortest_simple_paths (Yen's
+    # algorithm) computes. Cost scales with k: each additional path beyond
+    # the first re-explores deviation points from every previously found
+    # path, which gets expensive when those deviations pass through
+    # mega-hub nodes (e.g. a public figure with 100k+ connections). Fewer
+    # paths requested directly bounds that cost, on top of being more
+    # useful to the user -- there's rarely a reason to see 5 alternate
+    # routes between two well-connected people. The generator already
+    # yields paths in increasing weight order (== decreasing probability,
+    # which strongly correlates with fewer hops via the per-hop forwarding
+    # penalty), so the first k are already the "shortest/best" ones.
     _load_graph()
     if _graph is None:
         return {"error": "Graph not loaded"}
