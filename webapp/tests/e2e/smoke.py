@@ -20,6 +20,7 @@ import argparse
 import json
 import random
 import sys
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -219,6 +220,125 @@ def scenario_suggest_modal(context, base_url, anomalies):
     page.close()
 
 
+TEST_MARKER_PREFIX = "E2E-TEST"
+
+
+def _admin_reject_test_item(context, base_url, subject_contains, anomalies, scenario_name):
+    """Find the most recent 'new' service_items entry whose subject contains
+    subject_contains and reject it via the admin API, so test submissions
+    made by this tester don't sit in the real moderation queue. Requires the
+    cached auth session to belong to an admin account (see _ADMIN_EMAILS)."""
+    page = context.new_page()
+    try:
+        resp = page.goto(f"{base_url}/api/service/queue?status=new&limit=50", timeout=15000)
+        data = json.loads(resp.text())
+        match = next((item for item in data.get("queue", []) if subject_contains in (item.get("subject") or "")), None)
+        if not match:
+            anomalies.append(Anomaly(scenario_name, "cleanup_not_found",
+                                      f"Could not find test item to reject (subject contains {subject_contains!r})"))
+            return
+        review_resp = page.request.post(
+            f"{base_url}/api/service/items/{match['id']}/review",
+            data=json.dumps({"status": "rejected", "note": "E2E test cleanup"}),
+            headers={"Content-Type": "application/json"},
+        )
+        if review_resp.status != 200:
+            anomalies.append(Anomaly(scenario_name, "cleanup_failed",
+                                      f"Reject call for item {match['id']} returned {review_resp.status}"))
+    finally:
+        page.close()
+
+
+def scenario_suggest_link_manual(context, base_url, anomalies):
+    page = context.new_page()
+    marker = f"{TEST_MARKER_PREFIX}-{int(time.time())}"
+    dialogs = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.accept()))
+    with Watcher(page, "suggest_link_manual", anomalies):
+        page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+        page.click("#suggest-btn")
+        page.wait_for_selector("#suggest-modal:visible", timeout=5000)
+        page.click("#tab-manual")
+        page.wait_for_selector("#suggest-manual-form:visible", timeout=5000)
+        page.fill("#sug-manual-subject", f"{marker} Subject")
+        page.fill("#sug-manual-object", f"{marker} Object")
+        page.select_option("#sug-manual-predicate", "FRIEND")
+        page.fill("#sug-manual-source-name", "E2E Tester")
+        page.fill("#sug-manual-source-url", "https://example.com/e2e-test")
+        page.fill("#sug-manual-snippet", f"Automated E2E test submission {marker}, safe to reject.")
+        page.click("#sug-manual-submit-btn")
+        page.wait_for_timeout(3000)
+        if not dialogs:
+            anomalies.append(Anomaly("suggest_link_manual", "no_confirmation", "No success/error alert shown after submit"))
+        elif "thank you" not in dialogs[0].lower() and "submitted" not in dialogs[0].lower():
+            anomalies.append(Anomaly("suggest_link_manual", "unexpected_response", dialogs[0][:300]))
+    page.close()
+    _admin_reject_test_item(context, base_url, marker, anomalies, "suggest_link_manual")
+
+
+def scenario_dispute_link(context, base_url, anomalies):
+    page = context.new_page()
+    marker = f"{TEST_MARKER_PREFIX}-{int(time.time())}"
+    dialogs = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.accept()))
+    with Watcher(page, "dispute_link", anomalies):
+        page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+        # Dispute modal is normally opened from a rendered path's edge tooltip
+        # (showDisputeModal(edgeKey)); the endpoint itself doesn't validate
+        # that the edge exists, so a synthetic key is a valid test of the
+        # submission plumbing without depending on pathfinding succeeding.
+        page.evaluate(f"showDisputeModal('{marker}')")
+        page.wait_for_selector("#dispute-modal:visible", timeout=5000)
+        page.fill("#disp-reason", f"Automated E2E test dispute {marker}, safe to reject.")
+        page.fill("#disp-source-url", "https://example.com/e2e-test")
+        page.click("#disp-submit-btn")
+        page.wait_for_timeout(3000)
+        if not dialogs:
+            anomalies.append(Anomaly("dispute_link", "no_confirmation", "No success/error alert shown after submit"))
+        elif "thank you" not in dialogs[0].lower() and "submitted" not in dialogs[0].lower():
+            anomalies.append(Anomaly("dispute_link", "unexpected_response", dialogs[0][:300]))
+    page.close()
+    _admin_reject_test_item(context, base_url, f"Dispute: {marker}", anomalies, "dispute_link")
+
+
+def scenario_add_me_submit(browser, base_url, anomalies, vcf_path):
+    """Runs Check My Contacts (mobile-emulated) and clicks '+ Add me' on one
+    real match, exercising the actual submission path end-to-end rather than
+    just reasoning about the code."""
+    context = browser.new_context(
+        storage_state=str(AUTH_STATE),
+        user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+        viewport={"width": 412, "height": 915},
+        is_mobile=True,
+    )
+    page = context.new_page()
+    page.on("dialog", lambda d: d.accept())  # auto-accept the "are you sure?" confirm()
+    target_name = None
+    with Watcher(page, "add_me_submit", anomalies):
+        page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_selector("#psi-section:visible", timeout=8000)
+        page.set_input_files("#psi-file", str(vcf_path))
+        page.wait_for_function(
+            "document.getElementById('psi-result').textContent.trim().length > 0", timeout=90000,
+        )
+        btn = page.query_selector(".add-me-btn")
+        if not btn:
+            anomalies.append(Anomaly("add_me_submit", "no_add_me_button",
+                                      "No '+ Add me' button rendered after a successful contact match"))
+        else:
+            target_name = btn.get_attribute("data-name")
+            btn.click()
+            page.wait_for_timeout(3000)  # confirm() dialog + async submission
+            result_html = page.eval_on_selector("#psi-result", "el => el.innerHTML")
+            if "Submitted for review" not in result_html:
+                anomalies.append(Anomaly("add_me_submit", "submission_not_confirmed",
+                                          f"No 'Submitted for review' confirmation for {target_name}: {result_html[-300:]}"))
+    page.close()
+    context.close()
+    return target_name
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -231,10 +351,11 @@ def main():
     def run(name, fn, *fn_args):
         print(f"== {name} ==")
         try:
-            fn(*fn_args)
+            return fn(*fn_args)
         except Exception as e:
             anomalies.append(Anomaly(name, "scenario_crashed", str(e)))
             print(f"  (scenario raised: {e})")
+            return None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not args.headed)
@@ -244,12 +365,19 @@ def main():
         run("search", scenario_search, desktop_context, args.base_url, anomalies)
         run("pathfind", scenario_pathfind, desktop_context, args.base_url, anomalies)
         run("suggest_modal", scenario_suggest_modal, desktop_context, args.base_url, anomalies)
+        run("suggest_link_manual", scenario_suggest_link_manual, desktop_context, args.base_url, anomalies)
+        run("dispute_link", scenario_dispute_link, desktop_context, args.base_url, anomalies)
 
         desktop_context.close()
 
         vcf_path = HERE / "_synthetic_contacts.vcf"
         make_synthetic_vcf(vcf_path)
         run("check_contacts", scenario_check_contacts, browser, args.base_url, anomalies, vcf_path)
+        added_name = run("add_me_submit", scenario_add_me_submit, browser, args.base_url, anomalies, vcf_path)
+        if added_name:
+            cleanup_context = browser.new_context(storage_state=str(AUTH_STATE))
+            _admin_reject_test_item(cleanup_context, args.base_url, f"↔ {added_name}", anomalies, "add_me_submit")
+            cleanup_context.close()
 
         browser.close()
 
