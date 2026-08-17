@@ -83,3 +83,20 @@ def connect(db_path=None):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_raw_pg_connection():
+    """A plain (non-wrapped) psycopg2 connection from the same pool, for
+    callers that need real psycopg2 cursor semantics -- e.g. pgRouting
+    queries, whose SQL syntax (::directed named params, array columns) isn't
+    compatible with the ?->%s auto-replace wrapper connect() returns, and
+    whose row shape is easier to consume as plain tuples than RealDictCursor
+    dicts. Caller is responsible for pool.putconn() via release_raw_pg_connection().
+    Postgres-only; raises if DATABASE_URL isn't set."""
+    if not IS_POSTGRES:
+        raise RuntimeError("get_raw_pg_connection() requires DATABASE_URL (Postgres mode)")
+    return _get_pool().getconn()
+
+
+def release_raw_pg_connection(conn):
+    _get_pool().putconn(conn)

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
 import networkx as nx
+import igraph as ig
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel, Field, ConfigDict
@@ -112,6 +113,23 @@ _search_index = None
 _canonical_map = None
 _labels = None
 _deceased = None  # {lowercase name: death date} -- Wikidata P570, authoritative
+_graph_load_error = None  # set if the startup background warm-up load raised
+
+
+def _graph_backend_ready():
+    """Whether the active _PATHFINDER_BACKEND's graph is loaded and
+    _find_path_dispatch() can serve a request without triggering a
+    synchronous load first. DigitalOcean App Platform has a hard 100s
+    request timeout that can't be raised -- loading ~15M edges takes well
+    over that (measured ~90-135s depending on backend), so the graph load
+    must happen in a background task at startup (see _warm_up_graph()),
+    never inline inside a request. pgrouting doesn't hold graph state in
+    this process, so it's always "ready" from this process's perspective."""
+    if _PATHFINDER_BACKEND == "pgrouting":
+        return True
+    if _PATHFINDER_BACKEND == "igraph":
+        return _igraph_graph is not None
+    return _graph is not None
 
 def _load_deceased():
     """Load authoritative date-of-death info (Wikidata P570) for known people."""
@@ -235,13 +253,41 @@ def load_data():
     _load_search()
     _load_graph()
 
+async def _warm_up_graph():
+    """Loads the active backend's graph in a background task, kicked off
+    from startup() rather than run inline there -- run_in_executor offloads
+    the blocking load to a thread so it doesn't stall the event loop (and
+    therefore /health and every other route) for the ~90-135s a cold load
+    takes. Still not instant, but it means real traffic only has to wait
+    out this window on the rare request that lands during it (see
+    _graph_backend_ready() in the /api/path route) instead of every cold
+    boot paying it inline on whichever request happens to arrive first."""
+    global _graph_load_error
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        if _PATHFINDER_BACKEND == "igraph":
+            await loop.run_in_executor(None, _load_igraph)
+        elif _PATHFINDER_BACKEND == "pgrouting":
+            pass  # graph lives in Postgres; nothing to warm up in-process
+        else:
+            await loop.run_in_executor(None, _load_graph)
+    except Exception:
+        logger.exception("background graph warm-up failed")
+        _graph_load_error = "graph warm-up failed (see server logs)"
+
+
 @app.on_event("startup")
 async def startup():
-    """Load only the search index at startup; graph loads lazily on first path request."""
+    """Load the search index inline (fast, satisfies the health check);
+    kick off the graph load as a background task so it warms up without
+    blocking startup or any other request."""
     init_submission_db(str(DATA_DIR / "test_department.db"))
     init_ops_db(str(DATA_DIR / "ops_metrics.db"))
     init_legal_compliance_db(str(DATA_DIR / "legal_compliance.db"))
     _load_search()
+    import asyncio
+    asyncio.create_task(_warm_up_graph())
     # Configure the encrypted, prefix-sharded manifest only when production
     # secrets and the generated shard directory are present. Never log or
     # return the server secret. The server never loads shard contents into
@@ -346,7 +392,9 @@ async def debug():
             fp = DATA_DIR / f
             info["files"][f] = os.path.getsize(fp) if fp.is_file() else "dir"
     info["search_index_loaded"] = len(_search_index) if _search_index else 0
+    info["pathfinder_backend"] = _PATHFINDER_BACKEND
     info["graph_loaded"] = len(_graph.nodes()) if (_graph is not None and hasattr(_graph, "nodes")) else 0
+    info["igraph_loaded"] = _igraph_graph.vcount() if _igraph_graph is not None else 0
     return info
 
 
@@ -730,6 +778,415 @@ def _find_path(src_name, tgt_name, max_depth=6, k=3, include_deceased=False):
         logger.exception("pathfind failed for %r -> %r", src_name, tgt_name)
         return {"error": "pathfind_failed", "detail": "path search failed (see server logs)"}
 
+
+def _find_path_pg(src_name, tgt_name, k=3, include_deceased=False):
+    """pgRouting-backed replacement for _find_path(). The graph lives in
+    Postgres (graph_nodes/graph_edges) instead of an in-memory NetworkX
+    object rebuilt from JSON on every cold start -- see the 2026-08-13
+    graph-loading investigation (cold start exceeded the platform's gateway
+    timeout once the graph grew past ~15M edges). Reuses
+    path_probability/path_probability_guided/_get_label/_get_node_sci/
+    _CATEGORY_PROB/_viability_band/_one_in unchanged from _find_path(); only
+    the graph-search backend and per-edge data lookup differ. Kept alongside
+    _find_path() (not replacing it) until results are validated against known
+    query pairs -- see task tracking for the pgRouting migration."""
+    import psycopg2
+    conn = db.get_raw_pg_connection()
+    try:
+        cur = conn.cursor()
+        deceased = _load_deceased()
+
+        def resolve(name):
+            # Canonicalize through the same alias-aware lookup _find_path()
+            # uses (_resolve_name() -> _canonical_map / _load_node_lookup())
+            # before hitting Postgres -- graph_nodes stores canonical names
+            # only, so a raw name_lower match on the caller's input would
+            # miss aliases/alternate spellings. _load_node_lookup() doesn't
+            # require the full graph to be loaded: it falls back to parsing
+            # just the "nodes" arrays out of the source shards, which is
+            # cheap relative to building the 15M-edge NetworkX/igraph graph.
+            canonical = _resolve_name(name) or name
+            name_lower = canonical.strip().lower()
+            # md5(name_lower) = md5(%s) hits the index (see migrations/001,
+            # name_lower itself isn't indexable -- a few source "names" are
+            # multi-KB mis-parsed table dumps that overflow btree's row-size
+            # limit); name_lower = %s guards against a hash collision.
+            cur.execute(
+                "SELECT id, name FROM graph_nodes WHERE md5(name_lower) = md5(%s) AND name_lower = %s",
+                (name_lower, name_lower),
+            )
+            return cur.fetchone()
+
+        src = resolve(src_name)
+        if not src:
+            return {"error": f"Source '{src_name}' not found"}
+        tgt = resolve(tgt_name)
+        if not tgt:
+            return {"error": f"Target '{tgt_name}' not found"}
+        src_id, tgt_id = src[0], tgt[0]
+
+        if include_deceased:
+            edges_sql = "SELECT id, source, target, cost, reverse_cost FROM graph_edges"
+        else:
+            # Deceased people can't be intermediaries, but are still allowed
+            # as the search endpoint itself -- src_id/tgt_id come from the
+            # validated integer PK lookup above (not user input), safe to
+            # interpolate directly into this inner SQL-text parameter.
+            edges_sql = (
+                "SELECT ge.id, ge.source, ge.target, ge.cost, ge.reverse_cost "
+                "FROM graph_edges ge "
+                "JOIN graph_nodes ns ON ns.id = ge.source "
+                "JOIN graph_nodes nt ON nt.id = ge.target "
+                f"WHERE (NOT ns.is_deceased OR ge.source IN ({src_id}, {tgt_id})) "
+                f"AND (NOT nt.is_deceased OR ge.target IN ({src_id}, {tgt_id}))"
+            )
+
+        try:
+            cur.execute(
+                "SELECT k.path_id, k.path_seq, gn.name, ge.prob, ge.cats "
+                "FROM pgr_ksp(%s, %s, %s, %s, directed := false) k "
+                "JOIN graph_nodes gn ON gn.id = k.node "
+                "LEFT JOIN graph_edges ge ON ge.id = k.edge "
+                "ORDER BY k.path_id, k.path_seq",
+                (edges_sql, src_id, tgt_id, k),
+            )
+            rows = cur.fetchall()
+        except psycopg2.Error:
+            logger.exception("pgr_ksp failed for %r -> %r", src_name, tgt_name)
+            conn.rollback()
+            return {"error": "pathfind_failed", "detail": "path search failed (see server logs)"}
+
+        if not rows:
+            return {"paths": [], "src_found": True, "tgt_found": True,
+                    "deceased_excluded": 0, "include_deceased": include_deceased}
+
+        from collections import defaultdict
+        by_path = defaultdict(list)
+        for path_id, path_seq, node_name, prob, cats in rows:
+            by_path[path_id].append((path_seq, node_name, prob, cats))
+
+        def build(node_names, edge_probs, edge_cats):
+            step_objects = []
+            for name in node_names:
+                dd = deceased.get(name.lower()) if deceased else None
+                lbl = _get_label(name)
+                step_objects.append({"node": name, "label": lbl, "relation": None, "prob": None,
+                                      "cats": None, "deceased": dd, "sci": _get_node_sci(lbl)})
+            for j in range(len(node_names) - 1):
+                p = edge_probs[j]
+                cats = edge_cats[j] or []
+                rel = max(cats, key=lambda c: _CATEGORY_PROB.get(c, 0.0)) if cats else None
+                step_objects[j]["relation"] = rel
+                step_objects[j]["prob"] = round(p, 4)
+                step_objects[j]["cats"] = cats
+            path_prob, link_comp, fwd_comp = _path_probability(edge_probs)
+            guided_prob, _gl, guided_fwd = _path_probability_guided(edge_probs)
+            n_relays = max(0, len(edge_probs) - 1)
+            return {
+                "length": len(node_names) - 1,
+                "probability": round(path_prob, 6),
+                "link_prob": round(link_comp, 6),
+                "forward_prob": round(fwd_comp, 6),
+                "guided_probability": round(guided_prob, 6),
+                "guided_band": _viability_band(guided_prob),
+                "guided_prob_label": _one_in(guided_prob),
+                "n_relays": n_relays,
+                "forward_rate": _FORWARD_PROB,
+                "prob_label": _one_in(path_prob),
+                "band": _viability_band(path_prob),
+                "path": step_objects,
+            }
+
+        paths = []
+        for path_id in sorted(by_path.keys()):
+            seq_rows = sorted(by_path[path_id], key=lambda r: r[0])
+            node_names = [r[1] for r in seq_rows]
+            edge_probs = [r[2] for r in seq_rows[:-1]]
+            edge_cats = [r[3] for r in seq_rows[:-1]]
+            paths.append(build(node_names, edge_probs, edge_cats))
+
+        return {"paths": paths, "src_found": True, "tgt_found": True,
+                "deceased_excluded": 0, "include_deceased": include_deceased}
+    finally:
+        db.release_raw_pg_connection(conn)
+
+
+_igraph_graph = None  # Optional[ig.Graph]
+_igraph_nodes = None  # [name], index-aligned with graph vertex ids
+_igraph_name_to_idx = None  # {name: vertex_id}
+_igraph_weight = None  # np.float64[edge_id] = -log(prob) + forward penalty
+_igraph_living_weight = None  # same, but inf on every edge touching a deceased vertex
+_igraph_prob = None  # np.float64[edge_id]
+_igraph_cats_mask = None  # np.uint32[edge_id], bit per category (see _igraph_cats_vocab)
+_igraph_cats_vocab = None  # [category_name], index == bit position
+_igraph_deceased_idx = None  # {vertex_id} whose name is in _load_deceased()
+
+
+def _load_igraph():
+    """igraph-backed replacement for _load_graph(). Same source data
+    (graph_scored*.json.gz) and edge-weight formula, but holds the graph in
+    igraph's C-backed structure instead of networkx's per-node/per-edge
+    Python dict-of-dicts -- measured 1.76GB vs 8.86GB RSS for the real
+    ~1.8M-node/~15.2M-edge graph. Streams the edges array via ijson
+    directly into growable numpy arrays instead of json.load()'ing the
+    whole thing into nested Python lists first (measured that as a 5.68GB
+    transient peak, on top of and separate from the steady-state cost).
+
+    cats (contributing relationship categories) are stored as a uint32
+    bitmask per edge rather than a Python list of strings per edge -- only
+    26 distinct categories exist in the real data, comfortably under 32
+    bits, and decoding back to strings is only needed for the handful of
+    edges on an actually-returned path, not all 15M of them. A 33rd+ novel
+    category (none exist today) would collapse into a shared overflow bit
+    rather than crash or silently drop -- see the cats_bit lookup below.
+
+    living_weight mirrors _find_path()'s per-request subgraph exclusion
+    (deceased people can't be intermediaries) as a precomputed alternate
+    weight array (inf on every edge touching a deceased vertex) instead of
+    a second graph or a per-request graph copy -- see _find_path_igraph().
+    """
+    global _igraph_graph, _igraph_nodes, _igraph_name_to_idx
+    global _igraph_weight, _igraph_living_weight, _igraph_prob
+    global _igraph_cats_mask, _igraph_cats_vocab, _igraph_deceased_idx
+    if _igraph_graph is not None:
+        return
+    import gzip, math
+    import ijson
+    import numpy as np
+
+    fwd_penalty = -math.log(_FORWARD_PROB) if _FORWARD_PROB > 0 else 0.0
+    shard_paths = sorted(DATA_DIR.glob("graph_scored_[0-9][0-9][0-9].json.gz"))
+    spath = DATA_DIR / "graph_scored.json.gz"
+    source_paths = shard_paths if shard_paths else ([spath] if spath.exists() else [])
+    if not source_paths:
+        _igraph_graph = ig.Graph()
+        _igraph_nodes = []
+        _igraph_name_to_idx = {}
+        return
+
+    class _GrowArray:
+        """Amortized-O(1)-append numpy array -- avoids ever materializing
+        the 15M-edge list as boxed Python objects (see docstring above)."""
+        def __init__(self, dtype, cap=1 << 16):
+            self.buf = np.empty(cap, dtype=dtype)
+            self.n = 0
+
+        def append(self, v):
+            if self.n == len(self.buf):
+                self.buf = np.resize(self.buf, len(self.buf) * 2)
+            self.buf[self.n] = v
+            self.n += 1
+
+        def view(self):
+            return self.buf[: self.n]
+
+    nodes = []
+    name_to_idx = {}
+    sources = _GrowArray(np.int32)
+    targets = _GrowArray(np.int32)
+    weight = _GrowArray(np.float64)
+    prob_arr = _GrowArray(np.float64)
+    cats_mask_arr = _GrowArray(np.uint32)
+    cats_vocab = []
+    cats_bit = {}
+
+    for spath_i in source_paths:
+        with gzip.open(spath_i, "rb") as f:
+            shard_nodes = list(ijson.items(f, "nodes.item"))
+        # Shards may repeat node names (see _load_graph()'s docstring: nx
+        # unions shards by name) -- remap each shard's LOCAL edge indices to
+        # GLOBAL vertex ids, reusing an existing id for a name already seen.
+        remap = np.empty(len(shard_nodes), dtype=np.int32)
+        for local_idx, name in enumerate(shard_nodes):
+            vid = name_to_idx.get(name)
+            if vid is None:
+                vid = len(nodes)
+                nodes.append(name)
+                name_to_idx[name] = vid
+            remap[local_idx] = vid
+        with gzip.open(spath_i, "rb") as f:
+            for u, v, prob, cats in ijson.items(f, "edges.item", use_float=True):
+                p = prob if prob > 1e-9 else 1e-9
+                sources.append(remap[u])
+                targets.append(remap[v])
+                weight.append(-math.log(p) + fwd_penalty)
+                prob_arr.append(prob)
+                mask = 0
+                for c in (cats or []):
+                    bit = cats_bit.get(c)
+                    if bit is None:
+                        if len(cats_vocab) >= 32:
+                            bit = 31  # overflow bucket, shared by any category beyond the 32nd
+                        else:
+                            bit = len(cats_vocab)
+                            cats_vocab.append(c)
+                            cats_bit[c] = bit
+                    mask |= (1 << bit)
+                cats_mask_arr.append(mask)
+
+    g = ig.Graph(n=len(nodes), edges=list(zip(sources.view().tolist(), targets.view().tolist())),
+                 directed=False)
+    g.vs["name"] = nodes
+
+    base_weight = weight.view().copy()
+    living_weight = base_weight.copy()
+    deceased = _load_deceased()
+    deceased_idx = {name_to_idx[n] for n in nodes if n.lower() in deceased} if deceased else set()
+    if deceased_idx:
+        src_arr = sources.view()
+        tgt_arr = targets.view()
+        needle = np.fromiter(deceased_idx, dtype=np.int32)
+        touches_deceased = np.isin(src_arr, needle) | np.isin(tgt_arr, needle)
+        living_weight[touches_deceased] = np.inf
+
+    _igraph_graph = g
+    _igraph_nodes = nodes
+    _igraph_name_to_idx = name_to_idx
+    _igraph_weight = base_weight
+    _igraph_living_weight = living_weight
+    _igraph_prob = prob_arr.view().copy()
+    _igraph_cats_mask = cats_mask_arr.view().copy()
+    _igraph_cats_vocab = cats_vocab
+    _igraph_deceased_idx = deceased_idx
+
+
+def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False):
+    """igraph-backed replacement for _find_path(). Opt-in via
+    PATHFINDER_BACKEND=igraph (see _find_path_dispatch()) -- validated
+    against _find_path() in webapp/tests/test_pathfinder_igraph.py. Reuses
+    _resolve_name() (alias-aware, via _canonical_map / _load_node_lookup())
+    and the same probability/label helpers _find_path() uses -- none of
+    those touch the graph object directly.
+
+    Deceased-intermediary exclusion (the default, include_deceased=False)
+    doesn't copy or subgraph the graph per request the way _find_path()
+    does (_graph.subgraph(...) is a real O(V+E) copy in igraph, unlike
+    networkx's lazy view) -- instead it swaps in _igraph_living_weight, a
+    precomputed alternate weight array (inf on every edge touching a
+    deceased vertex) built once at load time. The one case that array alone
+    can't handle is a deceased person searched AS an endpoint (still
+    allowed -- only intermediaries are excluded): for that rare case, copy
+    the living-weight array (a ~120MB numpy copy, milliseconds) and restore
+    the original weight on just that endpoint's own incident edges. If no
+    living-only path exists, the masked search returns infinite total
+    weight, which is treated as no path -- the same outcome _find_path()'s
+    subgraph exclusion reaches (a deceased intermediary removed from the
+    subgraph can't be routed through either)."""
+    _load_igraph()
+    if _igraph_graph is None or _igraph_graph.vcount() == 0:
+        return {"error": "Graph not loaded"}
+    src_node = _resolve_name(src_name)
+    tgt_node = _resolve_name(tgt_name)
+    if not src_node:
+        return {"error": f"Source '{src_name}' not found"}
+    if not tgt_node:
+        return {"error": f"Target '{tgt_name}' not found"}
+
+    src_idx = _igraph_name_to_idx.get(src_node)
+    tgt_idx = _igraph_name_to_idx.get(tgt_node)
+    if src_idx is None or tgt_idx is None:
+        return {"paths": [], "src_found": src_idx is not None, "tgt_found": tgt_idx is not None}
+
+    import math
+    deceased = _load_deceased()
+    excluded_deceased = 0
+    if include_deceased or not deceased or not _igraph_deceased_idx:
+        weights = _igraph_weight
+    else:
+        src_dead = src_idx in _igraph_deceased_idx
+        tgt_dead = tgt_idx in _igraph_deceased_idx
+        excluded_deceased = len(_igraph_deceased_idx) - int(src_dead) - int(tgt_dead)
+        if not src_dead and not tgt_dead:
+            weights = _igraph_living_weight
+        else:
+            weights = _igraph_living_weight.copy()
+            for idx in (src_idx, tgt_idx):
+                for eid in _igraph_graph.incident(idx):
+                    weights[eid] = _igraph_weight[eid]
+
+    try:
+        vpaths = _igraph_graph.get_k_shortest_paths(src_idx, tgt_idx, k=k, weights=weights, output="vpath")
+    except Exception:
+        logger.exception("igraph pathfind failed for %r -> %r", src_name, tgt_name)
+        return {"error": "pathfind_failed", "detail": "path search failed (see server logs)"}
+
+    def build(idx_path, edge_ids):
+        step_objects = []
+        for i in idx_path:
+            name = _igraph_nodes[i]
+            dd = deceased.get(name.lower()) if deceased else None
+            lbl = _get_label(name)
+            step_objects.append({"node": name, "label": lbl, "relation": None, "prob": None,
+                                  "cats": None, "deceased": dd, "sci": _get_node_sci(lbl)})
+        edge_probs = []
+        for j, eid in enumerate(edge_ids):
+            p = float(_igraph_prob[eid])
+            mask = int(_igraph_cats_mask[eid])
+            cats = [_igraph_cats_vocab[b] for b in range(len(_igraph_cats_vocab)) if mask & (1 << b)]
+            edge_probs.append(p)
+            rel = max(cats, key=lambda c: _CATEGORY_PROB.get(c, 0.0)) if cats else None
+            step_objects[j]["relation"] = rel
+            step_objects[j]["prob"] = round(p, 4)
+            step_objects[j]["cats"] = cats
+        path_prob, link_comp, fwd_comp = _path_probability(edge_probs)
+        guided_prob, _gl, guided_fwd = _path_probability_guided(edge_probs)
+        n_relays = max(0, len(edge_probs) - 1)
+        return {
+            "length": len(idx_path) - 1,
+            "probability": round(path_prob, 6),
+            "link_prob": round(link_comp, 6),
+            "forward_prob": round(fwd_comp, 6),
+            "guided_probability": round(guided_prob, 6),
+            "guided_band": _viability_band(guided_prob),
+            "guided_prob_label": _one_in(guided_prob),
+            "n_relays": n_relays,
+            "forward_rate": _FORWARD_PROB,
+            "prob_label": _one_in(path_prob),
+            "band": _viability_band(path_prob),
+            "path": step_objects,
+        }
+
+    paths = []
+    for idx_path in vpaths:
+        edge_ids = []
+        finite = True
+        for j in range(len(idx_path) - 1):
+            eid = _igraph_graph.get_eid(idx_path[j], idx_path[j + 1])
+            if math.isinf(weights[eid]):
+                finite = False
+                break
+            edge_ids.append(eid)
+        if not finite:
+            continue
+        paths.append(build(idx_path, edge_ids))
+        if len(paths) >= k:
+            break
+
+    return {"paths": paths, "src_found": True, "tgt_found": True,
+            "deceased_excluded": excluded_deceased, "include_deceased": include_deceased}
+
+
+# igraph is the default: validated equivalent to NetworkX (7/7 tests in
+# webapp/tests/test_pathfinder_igraph.py) and, measured against the current
+# ~15.2M-edge graph, ~8x faster per query and ~5x lighter (1.76GB vs 8.86GB
+# RSS) than NetworkX post-load. The pgRouting alternative (_find_path_pg,
+# still present below) was rejected: pgr_ksp holds no graph state between
+# calls, so it re-materializes its routing graph from a full graph_edges
+# scan+join on every request rather than once at cold start -- measured
+# 80-125s per query against the real data, worse than either in-process
+# backend. PATHFINDER_BACKEND=networkx or =pgrouting remain available as an
+# escape hatch (e.g. to roll back igraph without a redeploy of code).
+_PATHFINDER_BACKEND = os.environ.get("PATHFINDER_BACKEND", "igraph")
+
+
+def _find_path_dispatch(src_name, tgt_name, max_depth=6, k=3, include_deceased=False):
+    if _PATHFINDER_BACKEND == "pgrouting" and db.IS_POSTGRES:
+        return _find_path_pg(src_name, tgt_name, k=k, include_deceased=include_deceased)
+    if _PATHFINDER_BACKEND == "igraph":
+        return _find_path_igraph(src_name, tgt_name, k=k, include_deceased=include_deceased)
+    return _find_path(src_name, tgt_name, max_depth=max_depth, k=k, include_deceased=include_deceased)
+
+
 _node_lookup_cache = None  # {lowercased name: original-case canonical name}
 
 def _load_node_lookup():
@@ -747,6 +1204,9 @@ def _load_node_lookup():
         return _node_lookup_cache
     if _graph is not None:
         _node_lookup_cache = {n.lower(): n for n in _graph.nodes()}
+        return _node_lookup_cache
+    if _igraph_nodes is not None:
+        _node_lookup_cache = {n.lower(): n for n in _igraph_nodes}
         return _node_lookup_cache
     import gzip
     shard_paths = sorted(DATA_DIR.glob("graph_scored_[0-9][0-9][0-9].json.gz"))
@@ -1062,7 +1522,14 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
                include_deceased: bool = Query(default=False)):
     if not src_name or not tgt_name:
         return {"error": "Both src_name and tgt_name required"}
-    res = _find_path(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+    if not _graph_backend_ready():
+        # Cold-boot warm-up window (see _warm_up_graph()) -- never load the
+        # graph inline here: a synchronous load takes well past DO's hard
+        # 100s request timeout. Fail fast instead so the client can retry.
+        if _graph_load_error:
+            return {"error": "graph_unavailable", "detail": _graph_load_error}
+        return {"error": "warming_up", "detail": "Graph is still loading at startup -- try again shortly."}
+    res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
     _log_tester_usage(
         request,
         "path_found" if "paths" in res and len(res.get("paths", [])) > 0 else "path_not_found",
