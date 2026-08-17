@@ -2819,7 +2819,23 @@ async function findPath() {
     });
     const data = await res.json();
     let html = '';
-    if (data.error) {
+    if (data.error === 'warming_up') {
+      state._warmupRetries = (state._warmupRetries || 0) + 1;
+      if (state._warmupRetries <= 20) {
+        document.getElementById('results').innerHTML = '<div class="no-path">⏳ Still starting up, retrying…</div>';
+        btn.textContent = '⏳ Warming up...';
+        setTimeout(findPath, 3000);
+        return;
+      }
+      document.getElementById('results').innerHTML = '<div class="error-msg">Taking longer than expected to start up — please retry in a bit.</div>';
+      btn.disabled = false;
+      btn.textContent = '🔍 Find Path';
+      return;
+    }
+    state._warmupRetries = 0;
+    if (data.error === 'graph_unavailable') {
+      html = '<div class="error-msg">Path search is temporarily unavailable. Please try again later.</div>';
+    } else if (data.error) {
       html = '<div class="error-msg">' + escHtml(data.error) + '</div>';
     } else if (!data.paths || data.paths.length === 0) {
       html = '<div class="no-path">No ' + (incDec ? '' : 'living ') + 'path found between <strong>' + escHtml(state.src.selected) + '</strong> and <strong>' + escHtml(state.tgt.selected) + '</strong>';
