@@ -259,6 +259,18 @@ function findPath() {
     if (xhr.status !== 200) { results.innerHTML = '<div class="not-found">Error: ' + xhr.status + '</div>'; return; }
     try {
       const data = JSON.parse(xhr.responseText);
+      if (data.error === 'warming_up') {
+        results.innerHTML = '<div class="loading">⏳ Still starting up, retrying…</div>';
+        state._warmupRetries = (state._warmupRetries || 0) + 1;
+        if (state._warmupRetries <= 20) { setTimeout(findPath, 3000); }
+        else { results.innerHTML = '<div class="not-found">Taking longer than expected to start up -- please retry in a bit.</div>'; }
+        return;
+      }
+      state._warmupRetries = 0;
+      if (data.error === 'graph_unavailable') {
+        results.innerHTML = '<div class="not-found">Path search is temporarily unavailable. Please try again later.</div>';
+        return;
+      }
       let html = '';
       if (!data.src_found) html += '<div class="not-found">"' + escHtml(data.src_name) + '" not found in network.</div>';
       if (!data.tgt_found) html += '<div class="not-found">"' + escHtml(data.tgt_name) + '" not found in network.</div>';

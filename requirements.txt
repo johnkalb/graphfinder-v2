@@ -1,6 +1,9 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 networkx>=3.0
+igraph>=0.11.9
+ijson>=3.5
+numpy>=1.26
 requests>=2.31.0
 python-multipart>=0.0.9
 gunicorn>=22.0.0
