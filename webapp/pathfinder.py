@@ -1317,6 +1317,45 @@ def _get_google_key():
         google_key = os.environ.get("GOOGLE_API_KEY")
     return google_key
 
+_narrative_cache = {}  # {cache_key: narrative text}
+_narrative_cache_order = []  # FIFO eviction order, capped at _NARRATIVE_CACHE_MAX
+_NARRATIVE_CACHE_MAX = 5000
+
+
+def _narrative_cache_key(path_steps):
+    """Identifies a path by its chain of nodes + relations (not by
+    src/tgt query params) -- same chain, same narrative, regardless of how
+    the caller arrived at it. Independent of path probability/labels, which
+    can change with a data refresh without changing the underlying chain."""
+    parts = []
+    for step in path_steps:
+        parts.append(str(step.get("node", "")))
+        parts.append(str(step.get("relation") or ""))
+    return "|".join(parts)
+
+
+def _get_cached_narrative(path_obj):
+    return _narrative_cache.get(_narrative_cache_key(path_obj["path"]))
+
+
+def _generate_and_cache_narrative(path_obj):
+    """Blocking (Gemini call) -- callers must run this off the event loop
+    thread (see /api/narrative's run_in_executor) so a slow or hung Gemini
+    request can't stall every other request on this worker."""
+    key = _narrative_cache_key(path_obj["path"])
+    cached = _narrative_cache.get(key)
+    if cached is not None:
+        return cached
+    narrative = _generate_path_narrative(path_obj)
+    if narrative:
+        _narrative_cache[key] = narrative
+        _narrative_cache_order.append(key)
+        if len(_narrative_cache_order) > _NARRATIVE_CACHE_MAX:
+            oldest = _narrative_cache_order.pop(0)
+            _narrative_cache.pop(oldest, None)
+    return narrative
+
+
 def _generate_path_narrative(path_obj):
     """Generate a highly professional 1-paragraph narrative summary of the best path using Gemini 2.5 Flash."""
     try:
@@ -1536,10 +1575,38 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
         {"src_name": src_name.strip(), "tgt_name": tgt_name.strip(), "include_deceased": include_deceased},
     )
 
-    # Generate AI Narrative Briefing for the best path (if found)
+    # AI Narrative Briefing: attach it only if already cached from a prior
+    # request for this same path chain -- never call Gemini inline here.
+    # That blocking network call (2-6s+) used to run synchronously inside
+    # this request; now the client fetches it separately via
+    # /api/narrative after rendering the path results, so a slow or down
+    # Gemini API no longer delays the part of the response people actually
+    # wait on.
     if "paths" in res and len(res["paths"]) > 0:
-        res["narrative"] = _generate_path_narrative(res["paths"][0])
+        cached = _get_cached_narrative(res["paths"][0])
+        if cached:
+            res["narrative"] = cached
     return res
+
+
+class NarrativeRequest(BaseModel):
+    path: list = Field(..., max_length=12)
+    length: int = Field(..., ge=0, le=20)
+    guided_probability: Optional[float] = None
+
+
+@app.post("/api/narrative")
+async def narrative(req: NarrativeRequest):
+    """Generates (or returns the cached) AI narrative for a path the client
+    already has from /api/path -- takes the path data directly instead of
+    src/tgt so it doesn't have to redo the graph search. Runs the blocking
+    Gemini call in a thread so it can't stall other requests on this worker
+    the way it used to when this ran inline in /api/path."""
+    path_obj = {"path": req.path, "length": req.length, "guided_probability": req.guided_probability}
+    import asyncio
+    loop = asyncio.get_event_loop()
+    narrative_text = await loop.run_in_executor(None, _generate_and_cache_narrative, path_obj)
+    return {"narrative": narrative_text}
 
 @app.get("/api/relation-info")
 async def relation_info(rtype: str = Query(default="")):
@@ -2674,6 +2741,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <script>
 const state = { src: { selected: null }, tgt: { selected: null } };
+let _pathGen = 0;  // guards against a slow narrative fetch from a stale search landing after a newer one
 let searchTimeout = null;
 
 ['src', 'tgt'].forEach(prefix => {
@@ -2806,6 +2874,7 @@ function updateButton() {
 
 async function findPath() {
   if (!state.src.selected || !state.tgt.selected) return;
+  const myGen = ++_pathGen;
   const btn = document.getElementById('find-btn');
   btn.disabled = true;
   btn.textContent = '⏳ Searching...';
@@ -2926,11 +2995,38 @@ async function findPath() {
       html += '<div class="path-note">Viability = estimated probability the chain would pass a warm introduction at each step (each person would take the call). Multiple alternate paths shown — your own knowledge may favor a different one.</div>';
     }
     document.getElementById('results').innerHTML = html;
+    if (data.paths && data.paths.length > 0 && !data.narrative) {
+      fetchNarrative(data.paths[0], myGen);
+    }
   } catch(e) {
     document.getElementById('results').innerHTML = '<div class="error-msg">Error: ' + e.message + '</div>';
   }
   btn.disabled = false;
   btn.textContent = '🔍 Find Path';
+}
+
+async function fetchNarrative(topPath, gen) {
+  // Fetched separately from the path results so a slow/down Gemini call
+  // (2-6s+) never delays the part of the response people actually wait on
+  // -- see /api/narrative. Best-effort: if it fails or a newer search has
+  // since started (gen mismatch), just leave the briefing box out.
+  try {
+    const res = await fetch('/api/narrative', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: topPath.path, length: topPath.length, guided_probability: topPath.guided_probability }),
+    });
+    const data = await res.json();
+    if (!data.narrative || gen !== _pathGen) return;
+    const results = document.getElementById('results');
+    const div = document.createElement('div');
+    div.className = 'narrative-briefing';
+    div.style.cssText = 'background:#161b22; border:1px solid #30363d; border-left:4px solid #58a6ff; border-radius:8px; padding:1.2rem; margin-bottom:1.5rem; text-align:left;';
+    div.innerHTML = '<div style="font-weight:700; color:#58a6ff; font-size:0.95rem; margin-bottom:0.6rem; display:flex; align-items:center; gap:6px;">'
+                   + '<span>📋 Executive Summary (AI GraphRAG Briefing)</span></div>'
+                   + '<div style="font-size:0.9rem; color:#c9d1d9; line-height:1.6; font-style:normal;">' + escHtml(data.narrative) + '</div>';
+    results.insertBefore(div, results.firstChild);
+  } catch (e) { /* narrative is a nice-to-have; ignore failures */ }
 }
 
 async function showRelTooltip(event, rtype, src, tgt) {
