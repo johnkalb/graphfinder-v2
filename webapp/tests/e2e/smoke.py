@@ -129,6 +129,32 @@ def scenario_homepage(context, base_url, anomalies):
     page.close()
 
 
+def scenario_faq(context, base_url, anomalies):
+    """FAQ page loads and its 'Give Feedback' link (an external Google Form,
+    not an in-app feature) is present and actually resolves -- forms can be
+    deleted or access-restricted independently of a code deploy, so this is
+    the one part of "feedback" worth checking automatically."""
+    page = context.new_page()
+    with Watcher(page, "faq", anomalies):
+        page.goto(base_url + "/faq", wait_until="domcontentloaded", timeout=30000)
+        link = page.query_selector('a:has-text("Give Feedback")')
+        if not link:
+            anomalies.append(Anomaly("faq", "feedback_link_missing", "No 'Give Feedback' link found on /faq"))
+        else:
+            href = link.get_attribute("href")
+            if not href or not href.startswith("http"):
+                anomalies.append(Anomaly("faq", "feedback_link_bad_href", f"href={href!r}"))
+            else:
+                try:
+                    resp = page.request.get(href, timeout=15000)
+                    if resp.status >= 400:
+                        anomalies.append(Anomaly("faq", "feedback_link_unreachable",
+                                                  f"{resp.status} fetching {href}"))
+                except Exception as e:
+                    anomalies.append(Anomaly("faq", "feedback_link_unreachable", f"{href}: {e}"))
+    page.close()
+
+
 def scenario_search(context, base_url, anomalies):
     page = context.new_page()
     with Watcher(page, "search", anomalies):
@@ -362,6 +388,7 @@ def main():
         desktop_context = browser.new_context(storage_state=str(AUTH_STATE))
 
         run("homepage", scenario_homepage, desktop_context, args.base_url, anomalies)
+        run("faq", scenario_faq, desktop_context, args.base_url, anomalies)
         run("search", scenario_search, desktop_context, args.base_url, anomalies)
         run("pathfind", scenario_pathfind, desktop_context, args.base_url, anomalies)
         run("suggest_modal", scenario_suggest_modal, desktop_context, args.base_url, anomalies)
