@@ -28,9 +28,10 @@ NTEE_INCLUDE_PREFIXES = frozenset({
     "S31",         # vocational training for women
     "O54",         # girls' youth development
     "L20",         # women's housing
-    "W30",         # microfinance (incl. women's)
     "I21",         # anti-trafficking
     "P44",         # permanent supportive housing (women)
+    "W30",         # microfinance — INCLUDED ONLY via women-name guard below
+                   # (W30 also covers military/veterans orgs in BMF data)
 })
 
 # Hard-exclude NTEE prefixes: voter education/registration, civil-rights-voting
@@ -42,11 +43,19 @@ VOTING_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# W30 is double-mapped in BMF (microfinance AND military/veterans). W30 orgs
+# belong in the directory only when the name signals a women's focus.
+_W30_WOMEN_RE = re.compile(r"\b(women|woman|girl|girls|female)\b", re.IGNORECASE)
+
 
 def filter_sector(ntee_code: str, name: str) -> bool:
     """True iff org belongs in the women's-issues directory.
 
     Exclusion (NTEE or name) always wins over inclusion (hard reject).
+    NTEE include match is prefix-based at the 3-char division level: a code
+    matches if its first 3 chars equal an include prefix (P46 matches P46 and
+    P4601), except E22, which must match exactly (E220 is hospitals, not
+    women's health).
     """
     code = (ntee_code or "").strip()
     nm = name or ""
@@ -54,7 +63,18 @@ def filter_sector(ntee_code: str, name: str) -> bool:
         return False
     if VOTING_NAME_RE.search(nm):
         return False
-    return any(code.startswith(p) for p in NTEE_INCLUDE_PREFIXES)
+    # W30 special case: include only if the org name signals a women's focus
+    if code.startswith("W30"):
+        return _W30_WOMEN_RE.search(nm) is not None
+    for p in NTEE_INCLUDE_PREFIXES:
+        if code == p:
+            return True
+        # subcode extension allowed for 3-char prefixes except E22
+        if p == "E22":
+            continue
+        if code.startswith(p) and len(code) > len(p) and code[len(p):].isdigit():
+            return True
+    return False
 
 
 def compute_efficiency_ratio(program_expenses, total_revenue):
