@@ -72,3 +72,38 @@ Claude writes tests first from this spec:
 - schema: DB builds, FTS5 works, EIN uniqueness enforced
 - validation: the 31-seed whitelist test
 - efficiency_ratio NULL handling (division by zero)
+
+
+## Filter v2 (2026-08-21 amendment — replaces the original include list)
+
+The original include list came from Gemini's NTEE taxonomy, which empirical sampling against real BMF data proved largely fabricated (E22 = hospitals, U30 = research institutes, S31 = economic development, L20 = housing generally, I21 = youth centers). V2 uses codes verified against actual BMF composition plus a name-based supplement, since many women-serving orgs are coded generically.
+
+**Include — verified women-specific NTEE prefixes:**
+- E42 (reproductive health care — Planned Parenthood, family planning)
+- P43 (family violence — DV services)
+- P45 (women's services NEC)
+- P46 (domestic violence shelters & family services)
+- P47 (pregnancy centers)
+- I70 (women's service organizations — Soroptimist, Zonta)
+- F42 (rape crisis / sexual assault services)
+- R24 (women's rights advocacy)
+- O54 (youth development incl. girls' orgs)
+
+**Exclude (unchanged):** R40, R60 NTEE + voting name regex.
+
+**Name-based supplement (catch generic-coded women-serving orgs):**
+Include regardless of NTEE if name matches
+`\b(women|women's|womens|woman|girls?|female|maternal|maternity|sorority|soroptimist|zonta|breast cancer|ovarian|doula|midwif|ywca|girl scouts|junior league)\b`
+AND does NOT match the voting exclusion regex, AND NTEE is not R40/R60.
+
+**Anti-pattern guard:** the women-term must be present; "women and men" style names are fine, "men's only" are not (no women-term hit).
+
+## TDD v2
+Claude updates tests:
+- filter table rewritten against v2 list + name supplement
+- regression: Dignity Health (E22) EXCLUDED; Soroptimist (I70) INCLUDED; "Breast Cancer Research Foundation" included via name supplement
+- League of Women Voters still excluded
+- whitelist: name-match instead of EIN-match (seed EINs hallucinated)
+
+## Output v2
+Same schema; add `match_reason` column: ntee | name | both.

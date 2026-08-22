@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from womens_nonprofits_pipeline import (
-    create_schema, insert_org, filter_sector, compute_efficiency_ratio,
+    create_schema, insert_org, filter_sector, compute_efficiency_ratio, match_reason,
 )
 
 BMF_DIR = ROOT / "data" / "raw" / "bmf"
@@ -28,19 +28,18 @@ OUT_DB = ROOT / "data" / "womens_issues_nonprofits.db"
 MISSIONS_DB = ROOT / "data" / "pipeline_cache.db"
 
 NTEE_CATEGORY = {
-    "P46": "Domestic Violence Shelters & Services",
-    "P43": "Family Violence Prevention",
     "E42": "Reproductive Health Care",
-    "E22": "Women's Health",
+    "P43": "Family Violence Services",
+    "P45": "Women's Services",
+    "P46": "Domestic Violence Shelters & Services",
+    "P47": "Pregnancy Centers",
+    "I70": "Women's Service Organizations",
+    "F42": "Rape Crisis & Sexual Assault Services",
     "R24": "Women's Rights Advocacy",
-    "U30": "Women in Physical Sciences / STEM",
-    "B40": "Women in Higher Education & Professions",
-    "S31": "Vocational Training for Women",
     "O54": "Girls' Youth Development",
-    "L20": "Women's Housing",
-    "I21": "Anti-Trafficking",
-    "P44": "Permanent Supportive Housing",
+    "W30": "Microfinance (women-focused)",
 }
+
 
 
 def bmf_row_to_org(row):
@@ -63,6 +62,7 @@ def bmf_row_to_org(row):
         "state": row.get("STATE", "").strip(),
         "ntee_code": ntee,
         "ntee_category": NTEE_CATEGORY.get(prefix, prefix),
+        "match_reason": match_reason(ntee, row.get("NAME", "")),
         "subsection": "501(c)(3)" if row.get("SUBSECTION", "").strip() == "03" else row.get("SUBSECTION", ""),
         "mission": None,
         "primary_focus": NTEE_CATEGORY.get(prefix),
@@ -115,6 +115,25 @@ def main():
                     kept += 1
                 except sqlite3.IntegrityError:
                     pass  # duplicate EIN across region files
+
+    # Restore enriched financials from snapshot (survives rebuilds)
+    snap = ROOT / "data" / "enrichment_snapshot.csv"
+    if snap.exists():
+        import csv as _csv
+        restored = 0
+        for r in _csv.DictReader(open(snap, encoding="utf-8")):
+            cur = conn.execute(
+                "UPDATE womens_501c3_nonprofits SET total_revenue=?, program_expenses=?, "
+                "tax_year=?, efficiency_ratio=? WHERE ein=?",
+                (float(r["total_revenue"]) if r["total_revenue"] else None,
+                 float(r["program_expenses"]) if r["program_expenses"] else None,
+                 int(r["tax_year"]) if r["tax_year"] else None,
+                 float(r["efficiency_ratio"]) if r["efficiency_ratio"] else None,
+                 r["ein"]),
+            )
+            restored += cur.rowcount
+        conn.commit()
+        print(f"restored {restored:,} enriched financials from snapshot")
 
     # validation report
     by_ntee = conn.execute(
