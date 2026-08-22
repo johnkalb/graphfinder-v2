@@ -1,12 +1,12 @@
-"""Women's-issues nonprofit directory pipeline (Phase 1).
+"""Women's-issues nonprofit directory pipeline (Phase 1, v2).
 
-Implements the contract defined by the TDD test suite:
+Implements the contract defined by the TDD test suite (v2, 2026-08-21):
 - tests/test_womens_nonprofits_filter.py
 - tests/test_womens_nonprofits_schema.py
 - tests/test_womens_nonprofits_whitelist.py
 - tests/test_womens_nonprofits_efficiency.py
 
-Spec: specifications/womens-nonprofits-directory.md
+Spec: specifications/womens-nonprofits-directory.md (Filter v2 amendment)
 
 Deterministic only — no LLM-generated content. Mission statements are NULL
 until the irs_990 org_missions harvest supplies real ones.
@@ -14,24 +14,19 @@ until the irs_990 org_missions harvest supplies real ones.
 import re
 import sqlite3
 
-# NTEE include prefixes (women's-issues sectors), per spec exactly.
-# NOTE: seed org Women for Women International (13-3760458) is tagged Q30
-# (International Development) by the IRS; Q30 is intentionally NOT included
-# (it is not a women's-specific code), so that seed is an expected whitelist
-# miss, marked xfail in the test suite.
+# NTEE include prefixes (women's-issues), verified against empirical BMF
+# composition on 2026-08-21 (v1 list was fabricated by the Gemini source
+# artifact: E22=hospitals, U30=research, S31=economic development, etc.)
 NTEE_INCLUDE_PREFIXES = frozenset({
-    "P46", "P43",  # domestic/family violence shelters & services
-    "E42", "E22",  # reproductive health, women's health
-    "R24",         # women's rights advocacy
-    "U30",         # women in physical sciences/STEM
-    "B40",         # women in higher education/professions
-    "S31",         # vocational training for women
-    "O54",         # girls' youth development
-    "L20",         # women's housing
-    "I21",         # anti-trafficking
-    "P44",         # permanent supportive housing (women)
-    "W30",         # microfinance — INCLUDED ONLY via women-name guard below
-                   # (W30 also covers military/veterans orgs in BMF data)
+    "E42",  # reproductive health care (Planned Parenthood, family planning)
+    "P43",  # family violence services
+    "P45",  # women's services NEC
+    "P46",  # domestic violence shelters & services
+    "P47",  # pregnancy centers
+    "I70",  # women's service organizations (Soroptimist, Zonta)
+    "F42",  # rape crisis / sexual assault services
+    "R24",  # women's rights advocacy
+    "O54",  # youth development (girls' orgs incl. Girl Scouts chapters)
 })
 
 # Hard-exclude NTEE prefixes: voter education/registration, civil-rights-voting
@@ -43,19 +38,22 @@ VOTING_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-# W30 is double-mapped in BMF (microfinance AND military/veterans). W30 orgs
-# belong in the directory only when the name signals a women's focus.
-_W30_WOMEN_RE = re.compile(r"\b(women|woman|girl|girls|female)\b", re.IGNORECASE)
+# v2 name-based supplement: catches women-serving orgs coded generically.
+# Note: `midwif` has no trailing word-boundary so it matches Midwife,
+# Midwifery, Midwives (fixes a trailing-\b typo in the v2 spec draft).
+WOMENS_NAME_SUPPLEMENT_RE = re.compile(
+    r"\b(women|women's|womens|woman|girls?|female|maternal|maternity|"
+    r"sorority|soroptimist|zonta|breast cancer|ovarian|doula|midwif|"
+    r"ywca|girl scouts|junior league)\b",
+    re.IGNORECASE,
+)
 
 
 def filter_sector(ntee_code: str, name: str) -> bool:
     """True iff org belongs in the women's-issues directory.
 
-    Exclusion (NTEE or name) always wins over inclusion (hard reject).
-    NTEE include match is prefix-based at the 3-char division level: a code
-    matches if its first 3 chars equal an include prefix (P46 matches P46 and
-    P4601), except E22, which must match exactly (E220 is hospitals, not
-    women's health).
+    Exclusion (NTEE R40/R60 prefix, or voting name regex) always wins over
+    either inclusion path (NTEE prefix OR name supplement).
     """
     code = (ntee_code or "").strip()
     nm = name or ""
@@ -63,18 +61,22 @@ def filter_sector(ntee_code: str, name: str) -> bool:
         return False
     if VOTING_NAME_RE.search(nm):
         return False
-    # W30 special case: include only if the org name signals a women's focus
-    if code.startswith("W30"):
-        return _W30_WOMEN_RE.search(nm) is not None
-    for p in NTEE_INCLUDE_PREFIXES:
-        if code == p:
-            return True
-        # subcode extension allowed for 3-char prefixes except E22
-        if p == "E22":
-            continue
-        if code.startswith(p) and len(code) > len(p) and code[len(p):].isdigit():
-            return True
-    return False
+    if any(code.startswith(p) for p in NTEE_INCLUDE_PREFIXES):
+        return True
+    return WOMENS_NAME_SUPPLEMENT_RE.search(nm) is not None
+
+
+def match_reason(ntee_code: str, name: str) -> "str | None":
+    """Which inclusion rule(s) caught the org: "ntee" | "name" | "both" | None."""
+    if not filter_sector(ntee_code, name):
+        return None
+    code = (ntee_code or "").strip()
+    nm = name or ""
+    via_ntee = any(code.startswith(p) for p in NTEE_INCLUDE_PREFIXES)
+    via_name = WOMENS_NAME_SUPPLEMENT_RE.search(nm) is not None
+    if via_ntee and via_name:
+        return "both"
+    return "ntee" if via_ntee else "name"
 
 
 def compute_efficiency_ratio(program_expenses, total_revenue):
@@ -112,6 +114,7 @@ CREATE TABLE IF NOT EXISTS womens_501c3_nonprofits (
     program_expenses REAL,
     tax_year INTEGER,
     efficiency_ratio REAL,
+    match_reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS womens_nonprofits_fts USING fts5(
@@ -124,6 +127,7 @@ _ORG_KEYS = (
     "ein", "name", "city", "state", "ntee_code", "ntee_category",
     "subsection", "mission", "primary_focus", "website",
     "total_revenue", "program_expenses", "tax_year", "efficiency_ratio",
+    "match_reason",
 )
 
 
@@ -140,7 +144,7 @@ def insert_org(conn: sqlite3.Connection, org: dict) -> int:
     sqlite3.IntegrityError (UNIQUE constraint), which callers may catch
     for upsert semantics.
     """
-    cols = [k for k in _ORG_KEYS]
+    cols = list(_ORG_KEYS)
     vals = [org.get(k) for k in cols]
     cur = conn.execute(
         f"INSERT INTO womens_501c3_nonprofits ({', '.join(cols)}) "
