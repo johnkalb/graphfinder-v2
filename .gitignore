@@ -42,3 +42,5 @@ webapp/data/graph.pkl
 webapp/data/canonical_map.json
 webapp/data/labels.json
 .codegraph/
+data/raw/bmf/
+data/enrichment_snapshot.csv
