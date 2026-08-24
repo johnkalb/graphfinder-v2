@@ -26,7 +26,14 @@ DB = "data/pipeline_cache.db"
 OUT = "webapp/data/graph_scored.json.gz"
 
 # --- cleanup helpers (from working-v2) ---
-DROP_RELATIONS = {"FELLOW_REPRESENTATIVE", "FELLOW_SENATOR", "OWNERSHIP"}
+# MENTIONED_WITH (GDELT news co-mention, scored NEWS_COMENTION=0.10) dropped
+# 2026-08-24: 72.37M of 86.1M raw relationship rows (84%) are this one type,
+# and GDELT's NER extraction is noisy enough to fabricate PERSON entities out
+# of boilerplate/generic text (e.g. "whatsapp linkedin" from share buttons,
+# "our lady" from truncated religious/institution names) -- these become
+# fake mega-hub nodes (40k+ degree) that dominate k-shortest-paths cost far
+# out of proportion to the 0.10 probability weight they're scored at.
+DROP_RELATIONS = {"FELLOW_REPRESENTATIVE", "FELLOW_SENATOR", "OWNERSHIP", "MENTIONED_WITH"}
 POS_RELS = {
     "OWNERSHIP", "POSITION", "DIRECTOR", "CEO", "CHAIRMAN", "PRESIDENT",
     "BOARD_MEMBER", "BOARD_MEMBER_OF", "TRUSTEE", "OFFICER", "CFO", "COO",
