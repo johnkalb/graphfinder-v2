@@ -2987,6 +2987,22 @@ async function findPath() {
         html += '<div style="margin-top:8px;font-size:0.85rem;">' + data.deceased_excluded + ' deceased ' + (data.deceased_excluded===1?'person was':'people were') + ' excluded as possible go-betweens. <a href="#" onclick="document.getElementById(\'include-deceased\').checked=true; findPath(); return false;" style="color:#58a6ff;">Include deceased intermediaries</a> to see historical connections.</div>';
       }
       html += '</div>';
+      document.getElementById('results').innerHTML = html;
+      // No connection anywhere in the scored graph -- last-resort check
+      // against live news coverage (see /api/path/fallback). A cached
+      // result (from an earlier lookup of this exact pair) renders
+      // instantly with no extra round-trip; otherwise fetch live.
+      if (data.fallback_cached && data.fallback_cached.found) {
+        // Cached positive -- render immediately, no extra round-trip.
+        renderFallbackCard(data.fallback_cached, state.src.selected, state.tgt.selected);
+      } else if (!data.fallback_cached && data.src_found && data.tgt_found) {
+        // No cache entry yet (cached negatives render nothing -- we already
+        // confirmed there's no connection, the "no path found" message above covers it).
+        fetchFallback(state.src.selected, state.tgt.selected, myGen);
+      }
+      btn.disabled = false;
+      btn.textContent = '🔍 Find Path';
+      return;
     } else {
       if (data.narrative) {
         html += '<div class="narrative-briefing" style="background:#161b22; border:1px solid #30363d; border-left:4px solid #58a6ff; border-radius:8px; padding:1.2rem; margin-bottom:1.5rem; text-align:left;">';
@@ -3102,6 +3118,45 @@ async function fetchNarrative(topPath, gen) {
                    + '<div style="font-size:0.9rem; color:#c9d1d9; line-height:1.6; font-style:normal;">' + escHtml(data.narrative) + '</div>';
     results.insertBefore(div, results.firstChild);
   } catch (e) { /* narrative is a nice-to-have; ignore failures */ }
+}
+
+async function fetchFallback(srcName, tgtName, gen) {
+  // Live last-resort check (see webapp/mentioned_with_fallback.py and
+  // /api/path/fallback) -- only reached when the primary graph search
+  // found no connection at all. A GDELT search + Haiku classification can
+  // take a few seconds, so this is its own round-trip after the "no path
+  // found" message is already showing, same reasoning as fetchNarrative.
+  // Best-effort: a gen mismatch (user started a new search) or any
+  // failure just leaves the "no path found" message as the final state.
+  try {
+    const params = new URLSearchParams({ src_name: srcName, tgt_name: tgtName });
+    const res = await fetch('/api/path/fallback?' + params.toString());
+    const data = await res.json();
+    if (gen !== _pathGen || !data.paths || data.paths.length === 0) return;
+    const p = data.paths[0];
+    const ev = p.fallback_evidence || {};
+    renderFallbackCard({
+      category: p.path[0] && p.path[0].relation,
+      reason: ev.reason, source_url: ev.source_url,
+      article_title: ev.article_title, article_date: ev.article_date,
+    }, srcName, tgtName);
+  } catch (e) { /* best-effort, like fetchNarrative */ }
+}
+
+function renderFallbackCard(fb, srcName, tgtName) {
+  const results = document.getElementById('results');
+  const div = document.createElement('div');
+  div.style.cssText = 'background:#161b22; border:1px solid #30363d; border-left:4px solid #d29922; border-radius:8px; padding:1.2rem; margin-top:1rem; text-align:left;';
+  const catLabel = escHtml(fb.category || 'NEWS_COMENTION');
+  const dateStr = fb.article_date ? String(fb.article_date).slice(0, 8) : '';
+  let html = '<div style="font-weight:700; color:#d29922; font-size:0.9rem; margin-bottom:0.4rem;">⚠️ Possible connection found via live news search (unverified)</div>';
+  html += '<div style="font-size:0.85rem; color:#8b949e; margin-bottom:0.6rem;">Not a confirmed relationship in the network -- this is a last-resort check against recent news coverage between <strong>' + escHtml(srcName) + '</strong> and <strong>' + escHtml(tgtName) + '</strong>, not a verified professional or personal connection.</div>';
+  html += '<div style="font-size:0.9rem; color:#c9d1d9;"><strong>' + catLabel + '</strong>' + (fb.reason ? '<div style="margin-top:4px;">' + escHtml(fb.reason) + '</div>' : '') + '</div>';
+  if (fb.source_url) {
+    html += '<div style="margin-top:8px;"><a href="' + escHtml(fb.source_url) + '" target="_blank" rel="noopener" style="color:#58a6ff; font-size:0.8rem;">🔗 ' + escHtml(fb.article_title || 'Source article') + (dateStr ? ' (' + dateStr + ')' : '') + '</a></div>';
+  }
+  div.innerHTML = html;
+  results.appendChild(div);
 }
 
 async function showRelTooltip(event, rtype, src, tgt) {
