@@ -32,6 +32,7 @@ class DBManager:
                 target_type TEXT,
                 relation_type TEXT, -- 'DIRECTOR', 'OFFICER', '10% OWNER', etc.
                 source_data TEXT, -- 'SEC' or 'WIKIPEDIA'
+                evidence TEXT, -- JSON: source URL/date/themes/etc., relation-type-dependent
                 UNIQUE(source_name, target_name, relation_type)
             )
         """)
@@ -53,23 +54,24 @@ class DBManager:
         conn.commit()
         conn.close()
 
-    def add_relationship(self, src_id, src_name, src_type, tgt_id, tgt_name, tgt_type, relation, source_data):
+    def add_relationship(self, src_id, src_name, src_type, tgt_id, tgt_name, tgt_type, relation, source_data, evidence=None):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                INSERT OR IGNORE INTO relationships 
-                (source_id, source_name, source_type, target_id, target_name, target_type, relation_type, source_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO relationships
+                (source_id, source_name, source_type, target_id, target_name, target_type, relation_type, source_data, evidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                src_id, 
-                src_name.strip() if src_name else "", 
-                src_type, 
-                tgt_id, 
-                tgt_name.strip() if tgt_name else "", 
-                tgt_type, 
-                relation, 
-                source_data
+                src_id,
+                src_name.strip() if src_name else "",
+                src_type,
+                tgt_id,
+                tgt_name.strip() if tgt_name else "",
+                tgt_type,
+                relation,
+                source_data,
+                evidence,
             ))
             conn.commit()
         except sqlite3.Error:
