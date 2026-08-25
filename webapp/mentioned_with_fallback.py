@@ -26,6 +26,7 @@ and classified once, and the spend cap survives App Platform redeploys
 resetting.
 """
 import json
+import logging
 import os
 import datetime
 import threading
@@ -35,6 +36,8 @@ try:
     import db
 except ImportError:
     from webapp import db
+
+logger = logging.getLogger("mentioned_with_fallback")
 
 GDELT_DOC_API = "https://api.gdeltproject.org/api/v2/doc/doc"
 HAIKU_MODEL = "claude-haiku-4-5"
@@ -143,6 +146,7 @@ def search_gdelt_comention(name_a, name_b, timeout=25, maxrecords=5):
     the main /api/path response), so there's no user-facing cost to a
     longer timeout, only to giving up too early."""
     import requests
+    t0 = time.time()
     with _gdelt_lock:
         wait = _GDELT_MIN_INTERVAL - (time.time() - _gdelt_last_call[0])
         if wait > 0:
@@ -152,18 +156,21 @@ def search_gdelt_comention(name_a, name_b, timeout=25, maxrecords=5):
         try:
             r = requests.get(GDELT_DOC_API, params=params, timeout=timeout)
         except requests.exceptions.RequestException as e:
+            logger.warning("GDELT request failed after %.1fs: %s", time.time() - t0, e)
             raise GdeltTransientError(f"request failed: {e}")
         finally:
             _gdelt_last_call[0] = time.time()
-    if r.status_code == 429:
-        raise GdeltTransientError(f"rate limited: {r.text[:200]}")
+    elapsed = time.time() - t0
     if r.status_code != 200:
-        raise GdeltTransientError(f"HTTP {r.status_code}")
+        logger.warning("GDELT HTTP %s after %.1fs, body: %s", r.status_code, elapsed, r.text[:300])
+        raise GdeltTransientError(f"HTTP {r.status_code}: {r.text[:200]}")
     try:
         data = r.json()
     except Exception as e:
+        logger.warning("GDELT returned unparseable JSON after %.1fs: %s -- body: %s", elapsed, e, r.text[:300])
         raise GdeltTransientError(f"bad response: {e}")
     articles = data.get("articles") or []
+    logger.info("GDELT search for %r <-> %r: %d articles in %.1fs", name_a, name_b, len(articles), elapsed)
     return [{"url": a.get("url", ""), "title": a.get("title", ""), "seendate": a.get("seendate", "")}
             for a in articles if a.get("url")]
 
