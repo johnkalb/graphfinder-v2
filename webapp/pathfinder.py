@@ -28,6 +28,10 @@ try:
     import db
 except ImportError:
     from webapp import db
+try:
+    import mentioned_with_fallback
+except ImportError:
+    from webapp import mentioned_with_fallback
 
 app = FastAPI(title="Network Pathfinder", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 logger = logging.getLogger("pathfinder")
@@ -82,7 +86,7 @@ except ImportError:
                                      FORWARD_PROB as _FORWARD_PROB)
 
 try:
-    from database import init_db as init_submission_db, init_ops_db, init_legal_compliance_db, DB_PATH as SUBMISSIONS_DB_PATH
+    from database import init_db as init_submission_db, init_ops_db, init_legal_compliance_db, init_mentioned_with_cache_db, DB_PATH as SUBMISSIONS_DB_PATH
     from test_department import (
         add_feedback as td_add_feedback,
         add_note as td_add_note,
@@ -95,7 +99,7 @@ try:
     )
     from bineval_diagnostic import generate_feedback_diagnosis_prompt
 except ImportError:
-    from webapp.database import init_db as init_submission_db, init_ops_db, init_legal_compliance_db, DB_PATH as SUBMISSIONS_DB_PATH
+    from webapp.database import init_db as init_submission_db, init_ops_db, init_legal_compliance_db, init_mentioned_with_cache_db, DB_PATH as SUBMISSIONS_DB_PATH
     from webapp.test_department import (
         add_feedback as td_add_feedback,
         add_note as td_add_note,
@@ -285,6 +289,7 @@ async def startup():
     init_submission_db(str(DATA_DIR / "test_department.db"))
     init_ops_db(str(DATA_DIR / "ops_metrics.db"))
     init_legal_compliance_db(str(DATA_DIR / "legal_compliance.db"))
+    init_mentioned_with_cache_db(str(DATA_DIR / "mentioned_with_cache.db"))
     _load_search()
     import asyncio
     asyncio.create_task(_warm_up_graph())
@@ -1586,6 +1591,17 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
         cached = _get_cached_narrative(res["paths"][0])
         if cached:
             res["narrative"] = cached
+    elif "paths" in res and res.get("src_found") and res.get("tgt_found"):
+        # No path in the primary graph and both names resolved -- there may
+        # already be a cached last-resort classification (see
+        # mentioned_with_fallback.py) from a prior /api/path/fallback call
+        # for this exact pair. Cache-only: never do the live GDELT/Haiku
+        # work inline here, same reasoning as narratives -- it can take
+        # seconds and must not block this response. A cache miss means the
+        # client should call /api/path/fallback separately if it wants one.
+        cached_fb = mentioned_with_fallback.get_cached_only(
+            src_name.strip(), tgt_name.strip(), str(DATA_DIR / "mentioned_with_cache.db"))
+        res["fallback_cached"] = cached_fb
     return res
 
 
@@ -1593,6 +1609,65 @@ class NarrativeRequest(BaseModel):
     path: list = Field(..., max_length=12)
     length: int = Field(..., ge=0, le=20)
     guided_probability: Optional[float] = None
+
+
+@app.get("/api/path/fallback")
+async def path_fallback(src_name: str = Query(default=""), tgt_name: str = Query(default="")):
+    """Live last-resort lookup for a pair the primary graph can't connect
+    at all -- called by the client as a separate round-trip after /api/path
+    comes back empty (mirrors /api/narrative's pattern: a GDELT search plus
+    a Haiku classification call can take a few seconds and must never block
+    the fast path). See mentioned_with_fallback.py for why this queries
+    GDELT live instead of pre-loading MENTIONED_WITH data into the graph."""
+    if not src_name or not tgt_name:
+        return {"error": "Both src_name and tgt_name required"}
+    src_node = _resolve_name(src_name.strip())
+    tgt_node = _resolve_name(tgt_name.strip())
+    if not src_node or not tgt_node:
+        return {"error": "src_name or tgt_name not found"}
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, mentioned_with_fallback.get_fallback_path,
+        src_node, tgt_node, str(DATA_DIR / "mentioned_with_cache.db"))
+
+    if not result.get("found"):
+        return {"paths": [], "src_found": True, "tgt_found": True, "fallback_checked": True,
+                "fallback_unavailable": result.get("unavailable", False)}
+
+    category = result["category"]
+    prob = _CATEGORY_PROB.get(category, 0.05)
+    path_prob, link_comp, fwd_comp = _path_probability([prob])
+    guided_prob, _gl, guided_fwd = _path_probability_guided([prob])
+    src_label, tgt_label = _get_label(src_node), _get_label(tgt_node)
+    path_obj = {
+        "length": 1,
+        "probability": round(path_prob, 6),
+        "link_prob": round(link_comp, 6),
+        "forward_prob": round(fwd_comp, 6),
+        "guided_probability": round(guided_prob, 6),
+        "guided_band": _viability_band(guided_prob),
+        "guided_prob_label": _one_in(guided_prob),
+        "n_relays": 0,
+        "forward_rate": _FORWARD_PROB,
+        "prob_label": _one_in(path_prob),
+        "band": _viability_band(path_prob),
+        "path": [
+            {"node": src_node, "label": src_label, "relation": category, "prob": round(prob, 4),
+             "cats": [category], "deceased": None, "sci": _get_node_sci(src_label)},
+            {"node": tgt_node, "label": tgt_label, "relation": None, "prob": None,
+             "cats": None, "deceased": None, "sci": _get_node_sci(tgt_label)},
+        ],
+        "fallback": True,
+        "fallback_evidence": {
+            "source_url": result["source_url"],
+            "article_title": result["article_title"],
+            "article_date": result["article_date"],
+            "reason": result["reason"],
+        },
+    }
+    return {"paths": [path_obj], "src_found": True, "tgt_found": True, "fallback_checked": True}
 
 
 @app.post("/api/narrative")

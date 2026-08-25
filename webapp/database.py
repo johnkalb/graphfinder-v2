@@ -169,6 +169,40 @@ def init_ops_db(db_path: str):
     conn.close()
 
 
+def init_mentioned_with_cache_db(db_path: str):
+    """Backs the last-resort news-co-mention fallback (see
+    webapp/mentioned_with_fallback.py): mentioned_with_cache persists each
+    (pair -> classification) result so a live GDELT search + Haiku call
+    only ever happens once per pair, and llm_spend_tracker is the hard
+    monthly cap on those Haiku calls. Both must be DB-backed (not the
+    in-process dict pattern _narrative_cache uses) -- App Platform
+    redeploys on every push to scoring-model, and an in-memory cap would
+    silently reset every time, defeating the point of a cap."""
+    conn = db.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mentioned_with_cache (
+            pair_key TEXT PRIMARY KEY,
+            name_a TEXT,
+            name_b TEXT,
+            found INTEGER,
+            category TEXT,
+            reason TEXT,
+            source_url TEXT,
+            article_title TEXT,
+            article_date TEXT,
+            classified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_spend_tracker (
+            period TEXT PRIMARY KEY,
+            call_count INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
 if __name__ == "__main__":
     init_db()
     print("Database initialized successfully at:", DB_PATH)
@@ -176,3 +210,5 @@ if __name__ == "__main__":
     print("Ops database initialized.")
     init_legal_compliance_db(os.path.join(os.path.dirname(DB_PATH), "legal_compliance.db"))
     print("Legal compliance database initialized.")
+    init_mentioned_with_cache_db(os.path.join(os.path.dirname(DB_PATH), "mentioned_with_cache.db"))
+    print("Mentioned-with fallback cache database initialized.")
