@@ -128,13 +128,20 @@ class GdeltTransientError(Exception):
     false negative for that pair."""
 
 
-def search_gdelt_comention(name_a, name_b, timeout=10, maxrecords=5):
+def search_gdelt_comention(name_a, name_b, timeout=25, maxrecords=5):
     """Live query against GDELT's DOC 2.0 API -- no pre-harvesting, nothing
     stored ahead of time. Returns a list of {url, title, seendate} dicts,
     most recent first, or [] when GDELT genuinely returned zero articles.
     Raises GdeltTransientError on a 429/network failure so the caller can
     distinguish "confirmed no co-mention" from "couldn't check right now"
-    and skip caching the latter."""
+    and skip caching the latter.
+
+    timeout=25 (was 10): GDELT's own response time has run 10-13s even on
+    a successful call throughout testing, and production round-trips from
+    DO's network measured right at the old 10s cutoff -- this runs off the
+    hot path (async, in a thread, via /api/path/fallback, never blocking
+    the main /api/path response), so there's no user-facing cost to a
+    longer timeout, only to giving up too early."""
     import requests
     with _gdelt_lock:
         wait = _GDELT_MIN_INTERVAL - (time.time() - _gdelt_last_call[0])
