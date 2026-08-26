@@ -2638,6 +2638,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   
   <div class="psi-section" id="psi-section" style="display:none;">
     <button id="psi-btn">🔒 Check My Contacts</button>
+    <span id="psi-loading" style="display:none;"></span>
     <span id="psi-result" style="display:none;"></span>
     <p class="psi-note" id="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
     <input type="file" id="psi-file" accept=".vcf,.csv,.txt" style="display:none" onchange="doOPRF(this)">
@@ -3788,13 +3789,21 @@ async function pickContactsNative() {
 async function checkContacts(names, emptyMessage) {
   const btn = document.getElementById('psi-btn');
   const result = document.getElementById('psi-result');
+  const loading = document.getElementById('psi-loading');
   btn.disabled = true;
   result.style.display = 'inline-block';
   result.style.color = '';
+  result.textContent = '';
   // This can take a while (chunked OPRF round-trips over potentially
   // thousands of contacts) -- show a visible in-progress state instead of
   // leaving the result area blank with only the disabled button as a cue.
-  result.innerHTML = `<span class="psi-spinner"></span> Checking ${names.length} contact${names.length === 1 ? '' : 's'}…`;
+  // Kept in a separate element from #psi-result (not just prefixed onto it)
+  // so callers that key off #psi-result's emptiness as an "are we done yet"
+  // signal -- e.g. webapp/tests/e2e/smoke.py's wait_for_function -- still
+  // see it as empty for the whole in-progress window, not just the instant
+  // before this function starts.
+  loading.style.display = 'inline-block';
+  loading.innerHTML = `<span class="psi-spinner"></span> Checking ${names.length} contact${names.length === 1 ? '' : 's'}…`;
   try {
     let RistrettoPoint;
     try {
@@ -3992,7 +4001,7 @@ async function checkContacts(names, emptyMessage) {
   } catch (error) {
     result.textContent = 'Error: ' + error.message;
     result.style.color = '#f85149';
-  } finally { btn.disabled = false; }
+  } finally { btn.disabled = false; loading.style.display = 'none'; }
 }
 
 initContactCheckUI();
