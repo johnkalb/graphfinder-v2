@@ -348,7 +348,15 @@ def scenario_add_me_submit(browser, base_url, anomalies, vcf_path):
         page.wait_for_function(
             "document.getElementById('psi-result').textContent.trim().length > 0", timeout=90000,
         )
-        btn = page.query_selector(".add-me-btn")
+        # :not(#select-all-btn) -- the "Select All" button added alongside
+        # multi-match support reuses .add-me-btn for its styling, so a plain
+        # '.add-me-btn' query can select it instead of an individual match's
+        # button (it renders first, ahead of the per-person rows). Clicking
+        # it submits every match sequentially rather than the one this
+        # scenario means to exercise, and with a synthetic contact list
+        # producing 100+ matches, that batch has no chance of finishing
+        # within this scenario's few-second wait window.
+        btn = page.query_selector(".add-me-btn:not(#select-all-btn)")
         if not btn:
             anomalies.append(Anomaly("add_me_submit", "no_add_me_button",
                                       "No '+ Add me' button rendered after a successful contact match"))
