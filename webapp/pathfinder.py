@@ -1,6 +1,6 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
-import os, pickle, json, sqlite3, hashlib, re, html
+import os, pickle, json, sqlite3, hashlib, re, html, bisect
 import logging
 from pathlib import Path
 from typing import Optional
@@ -115,6 +115,12 @@ except ImportError:
 _graph: Optional[nx.Graph] = None
 _search_index = None
 _search_index_meta = None  # [(canon_lower, parts, is_person), ...], same order/length as _search_index -- kept separate so these internal fields never leak into /api/search's JSON response (which returns _search_index entries directly)
+# Fast-path lookup structures for _find_entry() -- see its docstring for why.
+_search_exact_index = None  # canon_lower -> [entry_idx, ...]
+_search_canon_keys = None   # sorted list of canon_lower strings, parallel to _search_canon_refs
+_search_canon_refs = None   # entry_idx for each _search_canon_keys[i]
+_search_token_keys = None   # sorted list of individual name tokens
+_search_token_refs = None   # entry_idx for each _search_token_keys[i]
 _canonical_map = None
 _labels = None
 _deceased = None  # {lowercase name: death date} -- Wikidata P570, authoritative
@@ -155,6 +161,7 @@ def _load_deceased():
 def _load_search():
     """Load just the search index — fast, independent of graph."""
     global _search_index, _search_index_meta, _canonical_map, _labels
+    global _search_exact_index, _search_canon_keys, _search_canon_refs, _search_token_keys, _search_token_refs
     spath = DATA_DIR / "search_index.json.gz"
     if _search_index is None and spath.exists():
         import gzip
@@ -184,6 +191,26 @@ def _load_search():
             canon = e["canonical"]
             canon_lower = canon.lower()
             _search_index_meta.append((canon_lower, canon_lower.split(), _looks_like_person(canon)))
+        # Fast-path indexes for _find_entry(): an exact-match dict plus two
+        # (sorted-keys, parallel entry-index-refs) pairs so a prefix lookup
+        # is a bisect binary search instead of scanning every one of ~774K
+        # entries -- see _find_entry()'s docstring for the full design and
+        # why it's provably safe to skip the slow fallback scan once the
+        # fast path alone has found a full page of results.
+        _search_exact_index = {}
+        canon_pairs = []
+        token_pairs = []
+        for i, (canon_lower, parts, _is_p) in enumerate(_search_index_meta):
+            _search_exact_index.setdefault(canon_lower, []).append(i)
+            canon_pairs.append((canon_lower, i))
+            for t in set(parts):
+                token_pairs.append((t, i))
+        canon_pairs.sort()
+        token_pairs.sort()
+        _search_canon_keys = [k for k, _ in canon_pairs]
+        _search_canon_refs = [i for _, i in canon_pairs]
+        _search_token_keys = [k for k, _ in token_pairs]
+        _search_token_refs = [i for _, i in token_pairs]
     cpath = DATA_DIR / "canonical_map.json"
     if _canonical_map is None and cpath.exists():
         with open(cpath, "r", encoding="utf-8") as f:
@@ -654,57 +681,59 @@ def _find_entry(query):
     q = _re.sub(r"\bjunior\b", "jr", q)
     q = _re.sub(r"\bsenior\b", "sr", q)
     q = _re.sub(r"\s+", " ", q).strip(" .,")
-    results = []
-    seen = set()
-    if not _search_index:
+    if not _search_index or not q:
         return []
-    for entry, (canon_lower, parts, is_person) in zip(_search_index, _search_index_meta):
-        canon = entry["canonical"]
-        # No placeholder check here -- _search_index is already filtered
-        # once at load time in _load_search(). canon_lower/parts/is_person
-        # are also precomputed there (in the parallel _search_index_meta,
-        # not on entry itself -- see _load_search()), not per-request.
-        # Also search aliases
-        alias_matches = []
-        for a in entry.get("aliases", []):
-            if q in a.lower():
-                alias_matches.append(a.lower())
-        token_prefix_match = any(p.startswith(q) for p in parts)
-        score = None
-        if q == canon_lower:
-            score = 100
-        elif token_prefix_match and is_person:
-            # A real person's name matched by surname or given name (e.g.
-            # "trump" matching "Donald Trump") ranks above an organization
-            # whose full name merely starts with the same word (e.g. "Trump
-            # National Committee") -- searching a single surname almost
-            # always means the person, not every committee/fund named after
-            # them. Checked before the full-string-prefix tier below on
-            # purpose, so it isn't shadowed by that org match.
-            score = 95
-        elif canon_lower.startswith(q):
-            score = 92
-        elif token_prefix_match:
-            # A query matching the start of ANY name token (e.g. a surname)
-            # is as good as matching the start of the whole string -- for
-            # non-person entries (orgs/committees), which the tier above
-            # already promoted ahead of this one for real people.
-            score = 90
-        elif q in canon_lower:
-            score = 50
-        elif alias_matches:
-            score = 40
-        else:
-            # Check if any part of query matches any part of canonical
-            q_parts = q.split()
-            canon_parts = set(parts)
-            matching = sum(1 for qp in q_parts if any(cp.startswith(qp) for cp in canon_parts))
-            if matching > 0:
-                score = 20 + matching * 5
-        if score is not None and score > 0:
-            if canon_lower not in seen:
-                seen.add(canon_lower)
-                results.append((score, entry))
+
+    # Fast path: three small bisect range-scans (exact / any-token-prefix /
+    # full-string-prefix) instead of scanning every one of ~774K entries --
+    # cut a 2-3s linear scan down to single-digit milliseconds for any query
+    # that mostly matches via prefix (the overwhelming majority of real
+    # searches -- typing a name from the start). scores maps entry_idx ->
+    # best tier found so far; tiers 90/92/95/100 here are all strictly above
+    # every slow-path tier below, so taking the max across all three lookups
+    # regardless of order reproduces the same tier a full linear scan with
+    # an elif-chain would assign.
+    scores = {}
+    def _upd(i, s):
+        if scores.get(i, 0) < s:
+            scores[i] = s
+
+    for i in _search_exact_index.get(q, []):
+        _upd(i, 100)
+    tlo = bisect.bisect_left(_search_token_keys, q)
+    thi = bisect.bisect_left(_search_token_keys, q + "￿")
+    for i in _search_token_refs[tlo:thi]:
+        _upd(i, 95 if _search_index_meta[i][2] else 90)
+    clo = bisect.bisect_left(_search_canon_keys, q)
+    chi = bisect.bisect_left(_search_canon_keys, q + "￿")
+    for i in _search_canon_refs[clo:chi]:
+        _upd(i, 92)
+
+    # Slow path: substring / alias / partial-token-overlap tiers (50/40/
+    # 20-35) -- provably safe to skip once the fast path alone already has
+    # a full page (50) of results, since every fast-path tier outranks
+    # every slow-path one, so nothing the slow path could add would ever
+    # place in the final top 50. Below that, still needed for completeness
+    # (e.g. a query like "Bonnie Cohen" that only matches via partial token
+    # overlap against "Bonnie R Cohen", or a substring buried mid-word like
+    # "musk" inside "3Musketeers").
+    if len(scores) < 50:
+        q_parts = q.split()
+        for i, (entry, (canon_lower, parts, _is_p)) in enumerate(zip(_search_index, _search_index_meta)):
+            if i in scores:
+                continue
+            alias_matches = [a.lower() for a in entry.get("aliases", []) if q in a.lower()]
+            if q in canon_lower:
+                scores[i] = 50
+            elif alias_matches:
+                scores[i] = 40
+            else:
+                canon_parts = set(parts)
+                matching = sum(1 for qp in q_parts if any(cp.startswith(qp) for cp in canon_parts))
+                if matching > 0:
+                    scores[i] = 20 + matching * 5
+
+    results = [(s, _search_index[i]) for i, s in scores.items()]
     # Name-match quality (the tier above) is the dominant sort key -- degree
     # no longer boosts score into a HIGHER TIER. That previously let a
     # well-connected hub outrank a more precise match (e.g. a common-surname
@@ -720,7 +749,22 @@ def _find_entry(query):
     # given name) is the final tiebreak only when degree is also equal.
     # Both fields are already loaded on each entry, so neither costs anything.
     results.sort(key=lambda x: (-x[0], -x[1].get("degree", 0), _name_sort_key(x[1]["canonical"])))
-    return [r[1] for r in results[:50]]
+    # Dedup by canon_lower, keeping the best-ranked (already-sorted-first)
+    # occurrence -- scores is keyed by entry_idx, not name, so two distinct
+    # entries that happen to share a lowercase name (none exist in today's
+    # data, checked directly, but nothing in the index build guarantees
+    # that stays true after a future refresh) would otherwise both appear.
+    out = []
+    dedup_seen = set()
+    for _, entry in results:
+        cl = entry["canonical"].lower()
+        if cl in dedup_seen:
+            continue
+        dedup_seen.add(cl)
+        out.append(entry)
+        if len(out) >= 50:
+            break
+    return out
 
 def _name_sort_key(canon):
     """(last_name, rest_of_name) for phonebook-style ordering -- a plain
