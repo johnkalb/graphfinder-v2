@@ -605,6 +605,29 @@ def _is_placeholder_entity(canonical: str) -> bool:
     return any(p.match(stripped) for p in _PLACEHOLDER_ENTITY_PATTERNS)
 
 
+# Mirrors build_scored_edges.py's looks_like_person -- same heuristic
+# (2-3 word name, no org keywords, no digits), duplicated here rather than
+# imported since that module is an offline data-build script, not part of
+# the running webapp.
+_ORG_WORDS = re.compile(
+    r"\b(Inc|Corp|LLC|Company|Co|Group|Foundation|University|College|Bank|Partners|"
+    r"Holdings|Trust|Fund|Capital|Ltd|Institute|Center|Centre|Committee|Council|"
+    r"Systems|Technologies|Services|Corporation|Enterprises|Industries|Management|"
+    r"Ventures|Associates|Media|Properties|Realty|Organization|Association|Society|"
+    r"School|Hospital|Church|Authority|Commission|Bureau|Agency|Department|"
+    r"National|International|Global|Network|Union|League|Academy|Museum|Library|"
+    r"Times|Post|Journal|News|Press|Labs|Laboratory|Office|Board)\b",
+    re.I,
+)
+
+def _looks_like_person(name):
+    if _ORG_WORDS.search(name):
+        return False
+    if any(ch.isdigit() for ch in name):
+        return False
+    return 2 <= len(name.split()) <= 3
+
+
 def _find_entry(query):
     _load_search()
     q = query.lower().strip()
@@ -633,11 +656,22 @@ def _find_entry(query):
         score = None
         if q == canon_lower:
             score = 100
+        elif any(p.startswith(q) for p in parts) and _looks_like_person(canon):
+            # A real person's name matched by surname or given name (e.g.
+            # "trump" matching "Donald Trump") ranks above an organization
+            # whose full name merely starts with the same word (e.g. "Trump
+            # National Committee") -- searching a single surname almost
+            # always means the person, not every committee/fund named after
+            # them. Checked before the full-string-prefix tier below on
+            # purpose, so it isn't shadowed by that org match.
+            score = 95
         elif canon_lower.startswith(q):
             score = 92
         elif any(p.startswith(q) for p in parts):
             # A query matching the start of ANY name token (e.g. a surname)
-            # is as good as matching the start of the whole string.
+            # is as good as matching the start of the whole string -- for
+            # non-person entries (orgs/committees), which the tier above
+            # already promoted ahead of this one for real people.
             score = 90
         elif q in canon_lower:
             score = 50
@@ -651,22 +685,23 @@ def _find_entry(query):
             if matching > 0:
                 score = 20 + matching * 5
         if score is not None and score > 0:
-            # Boost well-connected hubs so the real person outranks tiny
-            # same-name committees/trusts. A strong hub (high degree) can
-            # cross one tier (e.g. surname-match person over a starts-with org),
-            # but the cap keeps an exact full-name match (100) always on top.
-            deg = entry.get("degree", 0)
-            if deg > 0:
-                import math
-                score += min(15.0, math.log10(deg + 1) * 4.0)
             if canon_lower not in seen:
                 seen.add(canon_lower)
                 results.append((score, entry))
-    # Relevance score and hub-degree stay the dominant sort keys (an exact
-    # or prefix match, or a well-known name, should still win) -- phonebook
-    # order (surname, then given name) is only the tiebreak among entries
-    # that are otherwise equally relevant, instead of raw "First Last"
-    # string comparison, which doesn't group same-surname people together.
+    # Name-match quality (the tier above) is the dominant sort key -- degree
+    # no longer boosts score into a HIGHER TIER. That previously let a
+    # well-connected hub outrank a more precise match (e.g. a common-surname
+    # person with many connections beating an exact first+last match who
+    # simply has few recorded relationships -- a real person, just thin
+    # source-data coverage, not something degree should be allowed to bury).
+    #
+    # Within a tier, degree is still the first tiebreak, not name -- tested
+    # against "Trump": once org/person tiering was fixed, pure alphabetical
+    # sorting within the person-name tier put "Maryanne Trump Barry" (surname
+    # Barry) and a stray org ahead of Donald Trump, since alphabetical order
+    # has no notion of who's actually well-known. Phonebook order (surname,
+    # given name) is the final tiebreak only when degree is also equal.
+    # Both fields are already loaded on each entry, so neither costs anything.
     results.sort(key=lambda x: (-x[0], -x[1].get("degree", 0), _name_sort_key(x[1]["canonical"])))
     return [r[1] for r in results[:50]]
 
