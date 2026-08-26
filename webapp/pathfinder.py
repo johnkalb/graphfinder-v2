@@ -662,8 +662,23 @@ def _find_entry(query):
             if canon_lower not in seen:
                 seen.add(canon_lower)
                 results.append((score, entry))
-    results.sort(key=lambda x: (-x[0], -x[1].get("degree", 0), x[1]["canonical"]))
+    # Relevance score and hub-degree stay the dominant sort keys (an exact
+    # or prefix match, or a well-known name, should still win) -- phonebook
+    # order (surname, then given name) is only the tiebreak among entries
+    # that are otherwise equally relevant, instead of raw "First Last"
+    # string comparison, which doesn't group same-surname people together.
+    results.sort(key=lambda x: (-x[0], -x[1].get("degree", 0), _name_sort_key(x[1]["canonical"])))
     return [r[1] for r in results[:50]]
+
+def _name_sort_key(canon):
+    """(last_name, rest_of_name) for phonebook-style ordering -- a plain
+    space-token split (last token = surname), not true name parsing, but
+    consistent with the token-counting heuristics already used elsewhere
+    in this file (e.g. looks_like_person in build_scored_edges.py)."""
+    parts = canon.lower().split()
+    if not parts:
+        return ("", "")
+    return (parts[-1], " ".join(parts[:-1]))
 
 def _viability_band(p):
     if p >= 0.5:
@@ -2463,6 +2478,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     outline: none; transition: border-color 0.2s; }
   .autocomplete-wrap input:focus { border-color: #58a6ff; }
   .autocomplete-wrap input::placeholder { color: #484f58; }
+  .search-spinner { position: absolute; right: 1rem; top: 50%; margin-top: -0.45em; }
   .dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0;
                background: #1c2128; border: 1px solid #30363d; border-top: none;
                border-radius: 0 0 6px 6px; max-height: 280px; overflow-y: auto;
@@ -2611,6 +2627,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <h2>Person A</h2>
     <div class="autocomplete-wrap">
       <input id="src-input" type="text" placeholder="Type any name…" autocomplete="off" spellcheck="false">
+      <span class="search-spinner psi-spinner" id="src-search-spinner" style="display:none;"></span>
       <div id="src-dropdown" class="dropdown"></div>
     </div>
     <div id="src-selected"></div>
@@ -2620,6 +2637,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <h2>Person B</h2>
     <div class="autocomplete-wrap">
       <input id="tgt-input" type="text" placeholder="Type any name…" autocomplete="off" spellcheck="false">
+      <span class="search-spinner psi-spinner" id="tgt-search-spinner" style="display:none;"></span>
       <div id="tgt-dropdown" class="dropdown"></div>
     </div>
     <div id="tgt-selected"></div>
@@ -2827,6 +2845,7 @@ let searchTimeout = null;
 ['src', 'tgt'].forEach(prefix => {
   const input = document.getElementById(prefix + '-input');
   const dropdown = document.getElementById(prefix + '-dropdown');
+  const spinner = document.getElementById(prefix + '-search-spinner');
   let highlightedIdx = -1;
   let currentResults = [];
   let searchGen = 0;  // guards against an earlier, slower query's response landing after a later one's and clobbering the dropdown with stale results
@@ -2837,17 +2856,26 @@ let searchTimeout = null;
     updateSelected(prefix);
     updateButton();
     clearTimeout(searchTimeout);
+    spinner.style.display = 'none';
     if (val.length < 2) { dropdown.classList.remove('show'); currentResults = []; searchGen++; return; }
     const myGen = ++searchGen;
     searchTimeout = setTimeout(async () => {
+      // Shown once the debounce pause fires (not on every keystroke) so it
+      // doesn't flicker while actively typing -- only once we're actually
+      // waiting on the server.
+      spinner.style.display = 'inline-block';
       try {
         const res = await fetch('/api/search?q=' + encodeURIComponent(val));
         const data = await res.json();
         if (myGen !== searchGen) return;  // a newer keystroke already started a different query
+        spinner.style.display = 'none';
         currentResults = data;
         highlightedIdx = -1;
         renderDropdown(prefix, data);
-      } catch(e) { console.error('Search failed:', e); }
+      } catch(e) {
+        if (myGen === searchGen) spinner.style.display = 'none';
+        console.error('Search failed:', e);
+      }
     }, 150);
   });
 
