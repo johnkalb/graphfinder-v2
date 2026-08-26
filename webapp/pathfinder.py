@@ -2560,6 +2560,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 font-weight: 400; margin-left: 0.4rem; cursor: pointer; }
   .add-me-btn:hover { background: #1f6feb22 !important; }
   .add-me-btn:disabled { opacity: 0.5; cursor: default; }
+  .psi-spinner { display: inline-block; width: 0.9em; height: 0.9em; border: 2px solid #30363d;
+                 border-top-color: #58a6ff; border-radius: 50%; vertical-align: -0.15em;
+                 margin-right: 0.4em; animation: psi-spin 0.7s linear infinite; }
+  @keyframes psi-spin { to { transform: rotate(360deg); } }
   
   /* Modal system for User Submissions */
   .modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -2824,6 +2828,7 @@ let searchTimeout = null;
   const dropdown = document.getElementById(prefix + '-dropdown');
   let highlightedIdx = -1;
   let currentResults = [];
+  let searchGen = 0;  // guards against an earlier, slower query's response landing after a later one's and clobbering the dropdown with stale results
 
   input.addEventListener('input', function() {
     const val = this.value.trim();
@@ -2831,11 +2836,13 @@ let searchTimeout = null;
     updateSelected(prefix);
     updateButton();
     clearTimeout(searchTimeout);
-    if (val.length < 2) { dropdown.classList.remove('show'); currentResults = []; return; }
+    if (val.length < 2) { dropdown.classList.remove('show'); currentResults = []; searchGen++; return; }
+    const myGen = ++searchGen;
     searchTimeout = setTimeout(async () => {
       try {
         const res = await fetch('/api/search?q=' + encodeURIComponent(val));
         const data = await res.json();
+        if (myGen !== searchGen) return;  // a newer keystroke already started a different query
         currentResults = data;
         highlightedIdx = -1;
         renderDropdown(prefix, data);
@@ -3508,6 +3515,38 @@ async function submitAddMe(btn) {
     + `Casual or stale contacts (people you haven't really talked to in a long time) don't belong here; this is meant for real, current relationships.\n\n`
     + `This will be recorded with your login email as the source and submitted for review.`
   )) return;
+  await doAddMeSubmit(btn);
+}
+
+async function selectAllAddMe() {
+  // One consolidated confirmation instead of a native confirm() per person
+  // -- looping submitAddMe() directly would pop up N separate dialogs,
+  // which defeats the point of a one-click "select all".
+  const selectAllBtn = document.getElementById('select-all-btn');
+  // :not(#select-all-btn) -- this button reuses .add-me-btn for its
+  // styling, so a plain '.add-me-btn' query would include itself and try
+  // to submit a match with no data-name.
+  const buttons = Array.from(document.querySelectorAll('.add-me-btn:not(#select-all-btn)'));
+  if (!buttons.length) return;
+  const names = buttons.map(b => b.dataset.name);
+  if (!confirm(
+    `Add connections with all ${buttons.length} matched people?\n\n`
+    + `Only confirm for people who'd actually take your call today -- not casual or stale contacts. `
+    + `Each will be recorded with your login email as the source and submitted for review:\n\n`
+    + names.join('\n')
+  )) return;
+  if (selectAllBtn) selectAllBtn.remove();
+  // Sequential, not parallel -- a large contact list could have dozens of
+  // matches, and hammering /api/contacts/add-me all at once isn't necessary
+  // for something the user is already waiting on with the confirmation
+  // dialog just shown.
+  for (const btn of buttons) {
+    await doAddMeSubmit(btn);
+  }
+}
+
+async function doAddMeSubmit(btn) {
+  const name = btn.dataset.name;
   btn.disabled = true;
   btn.textContent = 'Submitting…';
   // Any previous failure notice for THIS button (a retry) -- clear it before
@@ -3752,7 +3791,10 @@ async function checkContacts(names, emptyMessage) {
   btn.disabled = true;
   result.style.display = 'inline-block';
   result.style.color = '';
-  result.textContent = '';
+  // This can take a while (chunked OPRF round-trips over potentially
+  // thousands of contacts) -- show a visible in-progress state instead of
+  // leaving the result area blank with only the disabled button as a cue.
+  result.innerHTML = `<span class="psi-spinner"></span> Checking ${names.length} contact${names.length === 1 ? '' : 's'}…`;
   try {
     let RistrettoPoint;
     try {
@@ -3932,14 +3974,18 @@ async function checkContacts(names, emptyMessage) {
     if (!matchedContacts.length) {
       result.innerHTML = `Checked ${names.length} contact${names.length === 1 ? '' : 's'} privately \u2014 no matches found` + warningHtml;
     } else {
+      const addableCount = matchedContacts.filter(c => bestByContact[c].tier !== 'possible').length;
       const rows = matchedContacts.map(contact => {
         const m = bestByContact[contact];
         const addBtn = m.tier === 'possible' ? '' :
           ` <button class="add-me-btn" data-name="${escHtml(m.name)}" onclick="submitAddMe(this)">+ Add me</button>`;
         return `<div>${escHtml(contact)} \u2192 <strong>${escHtml(m.name)}</strong> <span style="color:#8b949e">(${tierLabel[m.tier]})</span>${addBtn}</div>`;
       }).join('');
+      const selectAllBtn = addableCount > 1
+        ? ` <button id="select-all-btn" class="add-me-btn" onclick="selectAllAddMe()">\u2713 Add all ${addableCount} matches</button>`
+        : '';
       addMeSubmittedCount = 0;
-      result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>`
+      result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>${selectAllBtn}`
         + `<div class="psi-note" style="margin:6px 0;">Only use "+ Add me" for people who\u2019d actually take your call today \u2014 not a casual or stale contact you just happen to have saved.</div>`
         + rows + warningHtml;
     }
