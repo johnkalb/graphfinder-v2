@@ -114,6 +114,7 @@ except ImportError:
 
 _graph: Optional[nx.Graph] = None
 _search_index = None
+_search_index_meta = None  # [(canon_lower, parts, is_person), ...], same order/length as _search_index -- kept separate so these internal fields never leak into /api/search's JSON response (which returns _search_index entries directly)
 _canonical_map = None
 _labels = None
 _deceased = None  # {lowercase name: death date} -- Wikidata P570, authoritative
@@ -153,7 +154,7 @@ def _load_deceased():
 
 def _load_search():
     """Load just the search index — fast, independent of graph."""
-    global _search_index, _canonical_map, _labels
+    global _search_index, _search_index_meta, _canonical_map, _labels
     spath = DATA_DIR / "search_index.json.gz"
     if _search_index is None and spath.exists():
         import gzip
@@ -168,6 +169,21 @@ def _load_search():
         # but there's no reason to also pay the filtering cost on every
         # request when it only needs to happen once per process lifetime.
         _search_index = [e for e in loaded if not _is_placeholder_entity(e.get("canonical", ""))]
+        # Precompute per-entry derived fields once here rather than in
+        # _find_entry() (called on every keystroke) -- same reasoning as the
+        # placeholder filter above. _looks_like_person() in particular does a
+        # regex search + digit scan per candidate; doing that on every
+        # request for a chunk of ~765K entries measurably added to an
+        # already-slow (2-3s) linear scan. Pure caching, no ranking change.
+        # Kept in a separate parallel list (_search_index_meta), not stored
+        # on the entry dicts themselves -- /api/search returns _search_index
+        # entries directly, and anything added to them gets serialized into
+        # the JSON response.
+        _search_index_meta = []
+        for e in _search_index:
+            canon = e["canonical"]
+            canon_lower = canon.lower()
+            _search_index_meta.append((canon_lower, canon_lower.split(), _looks_like_person(canon)))
     cpath = DATA_DIR / "canonical_map.json"
     if _canonical_map is None and cpath.exists():
         with open(cpath, "r", encoding="utf-8") as f:
@@ -642,21 +658,22 @@ def _find_entry(query):
     seen = set()
     if not _search_index:
         return []
-    for entry in _search_index:
+    for entry, (canon_lower, parts, is_person) in zip(_search_index, _search_index_meta):
         canon = entry["canonical"]
         # No placeholder check here -- _search_index is already filtered
-        # once at load time in _load_search().
-        canon_lower = canon.lower()
-        parts = canon_lower.split()
+        # once at load time in _load_search(). canon_lower/parts/is_person
+        # are also precomputed there (in the parallel _search_index_meta,
+        # not on entry itself -- see _load_search()), not per-request.
         # Also search aliases
         alias_matches = []
         for a in entry.get("aliases", []):
             if q in a.lower():
                 alias_matches.append(a.lower())
+        token_prefix_match = any(p.startswith(q) for p in parts)
         score = None
         if q == canon_lower:
             score = 100
-        elif any(p.startswith(q) for p in parts) and _looks_like_person(canon):
+        elif token_prefix_match and is_person:
             # A real person's name matched by surname or given name (e.g.
             # "trump" matching "Donald Trump") ranks above an organization
             # whose full name merely starts with the same word (e.g. "Trump
@@ -667,7 +684,7 @@ def _find_entry(query):
             score = 95
         elif canon_lower.startswith(q):
             score = 92
-        elif any(p.startswith(q) for p in parts):
+        elif token_prefix_match:
             # A query matching the start of ANY name token (e.g. a surname)
             # is as good as matching the start of the whole string -- for
             # non-person entries (orgs/committees), which the tier above
@@ -2960,11 +2977,18 @@ let searchTimeout = null;
       const sciBadge = item.sci ? ' <span style="font-size:0.75rem; color:#58a6ff; background:#1f6feb22; padding:1px 5px; border-radius:10px; margin-left:5px; font-weight:600;" title="Social Capital Index (percentile rank)">' + item.sci + '</span>' : '';
       if (item.aliases && item.aliases.length > 0)
         aliasHtml = '<span class="alias">also: ' + escHtml(item.aliases.join(', ')) + '</span>';
+      // Disambiguation aid for common names (e.g. many different "Cohen"s):
+      // raw connection count reads more concretely at a glance than the SCI
+      // percentile alone -- "2 connections" vs "497 connections" is more
+      // immediately meaningful than "48" vs "100".
+      const degreeBadge = item.degree
+        ? '<span class="sub">' + item.degree + ' connection' + (item.degree === 1 ? '' : 's') + '</span>'
+        : '';
       return '<div class="dropdown-item" data-index="' + i + '" data-name="' + escHtml(displayName) + '"'
         + ' onmousedown="selectItem(\'' + prefix + '\', ' + i + ')"'
         + ' onmouseover="highlightIdx(\'' + prefix + '\', ' + i + ')">'
         + '<span class="name">' + escHtml(displayName) + sciBadge + '</span>'
-        + '<span class="sub">' + (item.count > 1 ? '×' + item.count : '') + '</span>'
+        + degreeBadge
         + aliasHtml
         + '</div>';
     }).join('');
