@@ -175,14 +175,20 @@ def search_gdelt_comention(name_a, name_b, timeout=25, maxrecords=5):
             for a in articles if a.get("url")]
 
 
-def search_gdelt_single(name, timeout=25, maxrecords=6):
+def search_gdelt_single(name, timeout=12, maxrecords=6):
     """Live GDELT DOC 2.0 query for recent articles mentioning ONE name --
     powers the identity card's "recent news" action (help a user tell two
     same-named people apart). Same rate-limit discipline and
     transient-error contract as search_gdelt_comention: returns a list of
     {url, title, seendate} dicts (most recent first), [] on a genuine
     empty result, and raises GdeltTransientError on a 429/network failure
-    so a blip is never mistaken for "no coverage"."""
+    so a blip is never mistaken for "no coverage".
+
+    timeout=12 (vs 25 for search_gdelt_comention): this one is on an
+    interactive path -- a user clicked "show recent news" and is watching
+    a spinner -- so it's better to give up and show "temporarily
+    unavailable / retry" than to hang for 25s+. The co-mention search is
+    fire-and-forget on /api/path/fallback, so it can afford to wait."""
     import requests
     t0 = time.time()
     with _gdelt_lock:
