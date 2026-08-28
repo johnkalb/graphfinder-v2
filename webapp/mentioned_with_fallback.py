@@ -175,6 +175,70 @@ def search_gdelt_comention(name_a, name_b, timeout=25, maxrecords=5):
             for a in articles if a.get("url")]
 
 
+def search_gdelt_single(name, timeout=25, maxrecords=6):
+    """Live GDELT DOC 2.0 query for recent articles mentioning ONE name --
+    powers the identity card's "recent news" action (help a user tell two
+    same-named people apart). Same rate-limit discipline and
+    transient-error contract as search_gdelt_comention: returns a list of
+    {url, title, seendate} dicts (most recent first), [] on a genuine
+    empty result, and raises GdeltTransientError on a 429/network failure
+    so a blip is never mistaken for "no coverage"."""
+    import requests
+    t0 = time.time()
+    with _gdelt_lock:
+        wait = _GDELT_MIN_INTERVAL - (time.time() - _gdelt_last_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        params = {"query": f'"{name}"', "mode": "artlist", "maxrecords": maxrecords,
+                  "format": "json", "sort": "datedesc"}
+        try:
+            r = requests.get(GDELT_DOC_API, params=params, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            logger.warning("GDELT single-name request failed after %.1fs: %s", time.time() - t0, e)
+            raise GdeltTransientError(f"request failed: {e}")
+        finally:
+            _gdelt_last_call[0] = time.time()
+    elapsed = time.time() - t0
+    if r.status_code != 200:
+        logger.warning("GDELT single-name HTTP %s after %.1fs, body: %s", r.status_code, elapsed, r.text[:300])
+        raise GdeltTransientError(f"HTTP {r.status_code}: {r.text[:200]}")
+    try:
+        data = r.json()
+    except Exception as e:
+        logger.warning("GDELT single-name unparseable JSON after %.1fs: %s -- body: %s", elapsed, e, r.text[:300])
+        raise GdeltTransientError(f"bad response: {e}")
+    articles = data.get("articles") or []
+    logger.info("GDELT single-name search for %r: %d articles in %.1fs", name, len(articles), elapsed)
+    return [{"url": a.get("url", ""), "title": a.get("title", ""), "seendate": a.get("seendate", "")}
+            for a in articles if a.get("url")]
+
+
+_single_news_cache = {}  # name_lower -> (fetched_at_epoch, [articles])
+_SINGLE_NEWS_TTL = 6 * 3600
+
+
+def get_single_name_news(name, max_articles=5):
+    """Cached wrapper around search_gdelt_single. In-process TTL cache only
+    (no DB, unlike mentioned_with_cache): the DOC API is free and not
+    spend-capped, so a redeploy dropping this cache just costs a re-fetch,
+    not money. On a transient failure with a warm cache entry, the stale
+    entry is served rather than surfacing an error. Returns
+    {"articles": [...], "unavailable": bool}."""
+    key = name.strip().lower()
+    now = time.time()
+    hit = _single_news_cache.get(key)
+    if hit and now - hit[0] < _SINGLE_NEWS_TTL:
+        return {"articles": hit[1][:max_articles], "unavailable": False}
+    try:
+        articles = search_gdelt_single(name)
+    except GdeltTransientError:
+        if hit:
+            return {"articles": hit[1][:max_articles], "unavailable": False}
+        return {"articles": [], "unavailable": True}
+    _single_news_cache[key] = (now, articles)
+    return {"articles": articles[:max_articles], "unavailable": False}
+
+
 def _get_anthropic_key():
     return os.environ.get("ANTHROPIC_API_KEY")
 

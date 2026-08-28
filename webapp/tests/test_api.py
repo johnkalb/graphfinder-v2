@@ -389,6 +389,65 @@ def test_methodology_response_time_under_500ms(client):
 
 
 # ==========================================================================
+# 8. GET /api/entity  (identity card for name disambiguation)
+# ==========================================================================
+
+def test_entity_known_person_returns_connections(client):
+    r = client.get("/api/entity", params={"name": "Donald Trump"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["found"] is True
+    assert body["name"]
+    assert body["total_connections"] > 0
+    assert isinstance(body["connections"], list) and len(body["connections"]) > 0
+    c0 = body["connections"][0]
+    for field in ("name", "label", "prob", "is_org"):
+        assert field in c0
+    # connections come back strongest-first
+    probs = [c["prob"] for c in body["connections"]]
+    assert probs == sorted(probs, reverse=True)
+
+
+def test_entity_unknown_name_returns_found_false(client):
+    r = client.get("/api/entity", params={"name": "Zzzz Notarealperson 99999"})
+    assert r.status_code == 200
+    assert r.json() == {"found": False}
+
+
+def test_entity_empty_name_returns_found_false(client):
+    r = client.get("/api/entity", params={"name": "   "})
+    assert r.status_code == 200
+    assert r.json()["found"] is False
+
+
+def test_entity_limit_param_caps_connections(client):
+    r = client.get("/api/entity", params={"name": "Donald Trump", "limit": 3})
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["connections"]) <= 3
+    # total is the real degree, not the truncated list length
+    assert body["total_connections"] >= len(body["connections"])
+
+
+def test_entity_response_time_under_2s(client):
+    t0 = time.perf_counter()
+    r = client.get("/api/entity", params={"name": "Donald Trump"})
+    elapsed = time.perf_counter() - t0
+    assert r.status_code == 200
+    assert elapsed < 2.0, f"/api/entity took {elapsed:.3f}s (target < 2s, graph-only)"
+
+
+def test_entity_news_bad_name_shape_is_safe(client):
+    # No network assertion (GDELT is live); just that the endpoint answers
+    # with the documented shape and never 500s.
+    r = client.get("/api/entity/news", params={"name": ""})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["articles"] == []
+    assert "unavailable" in body
+
+
+# ==========================================================================
 # Fuzz testing (Hypothesis property-based tests)
 # ==========================================================================
 #
