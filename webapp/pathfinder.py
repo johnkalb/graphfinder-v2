@@ -619,6 +619,20 @@ def _get_node_sci(name: str) -> int:
                 _node_sci_map[entry["canonical"].lower()] = entry.get("sci", 1)
     return _node_sci_map.get(name.lower(), 1)
 
+_entry_by_canon = None
+def _get_search_entry(name: str):
+    """Search-index entry (aliases, sci, degree) for a canonical name --
+    O(1) dict lookup built once, same lazy pattern as _node_sci_map. Used
+    by /api/entity so the identity card can show aliases/SCI without a
+    linear scan of the ~1.8M-entry index on every call."""
+    global _entry_by_canon
+    if _entry_by_canon is None:
+        _load_search()
+        _entry_by_canon = {}
+        for entry in (_search_index or []):
+            _entry_by_canon.setdefault(entry["canonical"].lower(), entry)
+    return _entry_by_canon.get(name.lower())
+
 # Confirmed, unambiguous unresolved-ID placeholder patterns leaking out of
 # ingestion pipelines (whose source scripts aren't in this repo to fix at
 # the root -- see the entity-type-system follow-up for the real fix).
@@ -1812,6 +1826,102 @@ async def category_info(cat: str = Query(default="")):
         "desc": desc,
     }
 
+@app.get("/api/entity")
+async def entity_info(name: str = Query(default=""), limit: int = Query(default=12, ge=1, le=40)):
+    """Identity card for a single name: who this person is connected to,
+    so a user can tell two same-named people apart before running a path
+    (e.g. which "Louis Cohen"). Graph-only and instant -- no network
+    calls. Live news headlines are a separate opt-in round-trip
+    (/api/entity/news), never fetched inline here."""
+    q = name.strip()
+    if not q:
+        return {"found": False}
+    node = _resolve_name(q)
+    if not node:
+        return {"found": False}
+    label = _get_label(node)
+    entry = _get_search_entry(label) or _get_search_entry(node) or {}
+
+    conns = []
+    total = 0
+    # igraph is the production backend (PATHFINDER_BACKEND default). Only
+    # it exposes a cheap per-node incidence scan; other backends just get
+    # the header fields (name/sci/aliases) with an empty connection list.
+    if _PATHFINDER_BACKEND == "igraph":
+        _load_igraph()
+        if _igraph_graph is not None:
+            idx = _igraph_name_to_idx.get(node)
+            if idx is None:
+                idx = _igraph_name_to_idx.get(label)
+            if idx is not None:
+                # Collapse parallel edges to one row per neighbour, keeping
+                # the highest-probability relation (same "best category"
+                # rule the pathfinder uses when decoding a step).
+                best = {}
+                for eid in _igraph_graph.incident(idx):
+                    e = _igraph_graph.es[eid]
+                    other = e.target if e.source == idx else e.source
+                    if other == idx:
+                        continue  # skip any self-loop
+                    oname = _igraph_nodes[other]
+                    p = float(_igraph_prob[eid])
+                    if oname not in best or p > best[oname][0]:
+                        mask = int(_igraph_cats_mask[eid])
+                        cats = [_igraph_cats_vocab[b] for b in range(len(_igraph_cats_vocab)) if mask & (1 << b)]
+                        rel = max(cats, key=lambda c: _CATEGORY_PROB.get(c, 0.0)) if cats else None
+                        best[oname] = (p, rel)
+                total = len(best)
+                for oname, (p, rel) in sorted(best.items(), key=lambda kv: -kv[1][0])[:limit]:
+                    olabel = _get_label(oname)
+                    rel_label = None
+                    if rel:
+                        rel_label = (_CATEGORY_DESC.get(rel) or (None,))[0] \
+                            or (RELATION_INFO.get(rel) or {}).get("title") \
+                            or rel.replace("_", " ").title()
+                    conns.append({
+                        "name": oname,
+                        "label": olabel,
+                        "relation": rel,
+                        "relation_label": rel_label,
+                        "prob": round(p, 4),
+                        "is_org": not _looks_like_person(olabel),
+                        "sci": _get_node_sci(olabel),
+                    })
+
+    return {
+        "found": True,
+        "name": label,
+        "node": node,
+        "sci": entry.get("sci", _get_node_sci(label)),
+        "degree": entry.get("degree", total),
+        "aliases": entry.get("aliases", []),
+        "total_connections": total,
+        "connections": conns,
+    }
+
+
+@app.get("/api/entity/news")
+async def entity_news(name: str = Query(default="")):
+    """Opt-in live GDELT headline lookup for one name -- the "get more
+    information" action on the identity card. Its own round-trip because
+    the GDELT DOC query can take several seconds (same reasoning as
+    /api/narrative and /api/path/fallback); /api/entity never calls it."""
+    q = name.strip()
+    if not q:
+        return {"name": q, "articles": [], "unavailable": False}
+    import asyncio
+    loop = asyncio.get_event_loop()
+    res = await loop.run_in_executor(None, mentioned_with_fallback.get_single_name_news, q)
+    return {
+        "name": q,
+        "articles": [
+            {"url": a["url"], "title": a["title"], "date": (a.get("seendate") or "")[:8]}
+            for a in res.get("articles", [])
+        ],
+        "unavailable": res.get("unavailable", False),
+    }
+
+
 @app.get("/api/methodology")
 async def methodology():
     return {"text": _METHODOLOGY}
@@ -2580,11 +2690,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                border-radius: 0 0 6px 6px; max-height: 280px; overflow-y: auto;
                z-index: 100; }
   .dropdown.show { display: block; }
-  .dropdown-item { padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; }
+  .dropdown-item { position: relative; padding: 0.6rem 2.2rem 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; }
   .dropdown-item:hover, .dropdown-item.highlighted { background: #30363d; }
   .dropdown-item .name { color: #e6edf3; }
   .dropdown-item .sub { color: #8b949e; font-size: 0.8rem; margin-left: 0.5rem; }
   .dropdown-item .alias { display: block; color: #8b949e; font-size: 0.75rem; margin-top: 0.15rem; }
+  .dropdown-item .whois-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    color: #58a6ff; font-size: 1rem; line-height: 1; cursor: pointer; opacity: 0.55; padding: 4px 6px; }
+  .dropdown-item .whois-btn:hover { opacity: 1; }
+  #whois-modal { max-width: 460px; max-height: 82vh; overflow-y: auto; }
+  #whois-modal .wi-hdr { font-weight: 600; color: #e6edf3; font-size: 1.05rem; }
+  #whois-modal .wi-meta { color: #8b949e; font-size: 0.8rem; margin: 0.35rem 0 0.9rem; }
+  #whois-modal .wi-alias { color: #8b949e; font-size: 0.8rem; margin-bottom: 0.9rem; }
+  #whois-modal .wi-conn { display: flex; justify-content: space-between; gap: 0.75rem;
+    padding: 0.35rem 0; border-top: 1px solid #21262d; font-size: 0.85rem; }
+  #whois-modal .wi-conn:first-of-type { border-top: none; }
+  #whois-modal .wi-conn .wi-rel { color: #8b949e; white-space: nowrap; font-size: 0.78rem; }
+  #whois-modal .wi-conn .wi-org { color: #d29922; }
+  #whois-modal .wi-sec { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: #6e7681; margin: 1rem 0 0.3rem; }
+  #whois-modal .wi-news-btn { margin-top: 1rem; }
+  #whois-modal .wi-news a { display: block; color: #58a6ff; font-size: 0.82rem; margin-top: 0.4rem; }
   .selected-tag { display: inline-flex; align-items: center; background: #1f6feb22;
                    border: 1px solid #1f6feb44; border-radius: 6px; padding: 0.4rem 0.8rem;
                    margin: 0.5rem 0; font-size: 0.9rem; color: #58a6ff; }
@@ -2931,6 +3057,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
     </form>
   </div>
+
+  <!-- Identity / "Who is this?" Modal -->
+  <div id="whois-modal" class="modal">
+    <span class="modal-close" onclick="closeWhoisModal()">✕</span>
+    <div id="whois-body">Loading…</div>
+  </div>
 </div>
 
 <script>
@@ -3034,6 +3166,8 @@ let searchTimeout = null;
         + '<span class="name">' + escHtml(displayName) + sciBadge + '</span>'
         + degreeBadge
         + aliasHtml
+        + '<span class="whois-btn" title="Who is this? Show connections"'
+        + ' onmousedown="event.stopPropagation();event.preventDefault();showWhois(\'' + prefix + '\',' + i + ')">&#9432;</span>'
         + '</div>';
     }).join('');
     dd.classList.add('show');
@@ -3465,12 +3599,99 @@ function closeAllModals() {
   document.getElementById('modal-overlay').classList.remove('show');
   document.getElementById('suggest-modal').classList.remove('show');
   document.getElementById('dispute-modal').classList.remove('show');
-  
+  document.getElementById('whois-modal').classList.remove('show');
+
   // Clean up any AI parsing state
   document.getElementById('ai-parsed-results').style.display = 'none';
   document.getElementById('suggest-ai-form').reset();
   document.getElementById('suggest-form').reset();
   document.getElementById('suggest-manual-form').reset();
+}
+
+// --- Identity / "Who is this?" card -------------------------------------
+// ⓘ on each search-result row opens this: a graph-only snapshot of who the
+// name is connected to, so a user can tell two same-named people apart
+// (e.g. which "Louis Cohen") BEFORE running a path. Live news headlines
+// are a deliberate second click (/api/entity/news) -- that GDELT query
+// costs a few seconds and most identity checks don't need it.
+window.showWhois = function(prefix, idx) {
+  const dd = document.getElementById(prefix + '-dropdown');
+  const items = dd.querySelectorAll('.dropdown-item');
+  if (idx < 0 || idx >= items.length) return;
+  const name = items[idx].getAttribute('data-name');
+  if (name) openWhoisModal(name);
+};
+
+async function openWhoisModal(name) {
+  const body = document.getElementById('whois-body');
+  document.getElementById('modal-overlay').classList.add('show');
+  document.getElementById('whois-modal').classList.add('show');
+  body.innerHTML = '<div class="wi-hdr">' + escHtml(name) + '</div><div class="wi-meta">Loading connections…</div>';
+  try {
+    const res = await fetch('/api/entity?name=' + encodeURIComponent(name));
+    const d = await res.json();
+    if (!d.found) {
+      body.innerHTML = '<div class="wi-hdr">' + escHtml(name) + '</div><div class="wi-meta">No record found for this name.</div>';
+      return;
+    }
+    const total = d.degree || d.total_connections || 0;
+    let html = '<div class="wi-hdr">' + escHtml(d.name);
+    if (d.sci) html += ' <span style="font-size:0.72rem;color:#58a6ff;background:#1f6feb22;padding:1px 6px;border-radius:10px;font-weight:600;">SCI ' + d.sci + '</span>';
+    html += '</div>';
+    html += '<div class="wi-meta">' + total + ' connection' + (total === 1 ? '' : 's') + ' in the network</div>';
+    if (d.aliases && d.aliases.length) html += '<div class="wi-alias">Also known as: ' + escHtml(d.aliases.join(', ')) + '</div>';
+    const conns = d.connections || [];
+    if (conns.length) {
+      const rowHtml = c => '<div class="wi-conn"><span' + (c.is_org ? ' class="wi-org"' : '') + '>' + escHtml(c.label)
+        + '</span><span class="wi-rel">' + escHtml(c.relation_label || c.relation || '—') + '</span></div>';
+      const orgs = conns.filter(c => c.is_org);
+      const ppl = conns.filter(c => !c.is_org);
+      if (orgs.length) html += '<div class="wi-sec">Organizations</div>' + orgs.map(rowHtml).join('');
+      if (ppl.length) html += '<div class="wi-sec">People</div>' + ppl.map(rowHtml).join('');
+      if (d.total_connections > conns.length)
+        html += '<div class="wi-meta" style="margin-top:0.6rem;">+ ' + (d.total_connections - conns.length) + ' more, strongest shown first</div>';
+    } else {
+      html += '<div class="wi-meta">No connection detail available for this entry.</div>';
+    }
+    const encName = encodeURIComponent(d.name).replace(/'/g, '%27');
+    html += '<button class="secondary-btn wi-news-btn" onclick="loadWhoisNews(this, \'' + encName + '\')">📰 Show recent news headlines</button>';
+    html += '<div class="wi-news" id="wi-news"></div>';
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = '<div class="wi-hdr">' + escHtml(name) + '</div><div class="wi-meta">Could not load identity info.</div>';
+  }
+}
+
+async function loadWhoisNews(btn, encName) {
+  btn.disabled = true;
+  btn.textContent = '📰 Searching news…';
+  const out = document.getElementById('wi-news');
+  try {
+    const res = await fetch('/api/entity/news?name=' + encName);
+    const d = await res.json();
+    if (d.unavailable) {
+      out.innerHTML = '<div class="wi-meta" style="margin-top:0.6rem;">News search is temporarily unavailable — try again shortly.</div>';
+      btn.disabled = false; btn.textContent = '📰 Retry news search';
+      return;
+    }
+    const arts = d.articles || [];
+    if (!arts.length) {
+      out.innerHTML = '<div class="wi-meta" style="margin-top:0.6rem;">No recent news coverage found for this name.</div>';
+      btn.style.display = 'none';
+      return;
+    }
+    out.innerHTML = arts.map(a => '<a href="' + escHtml(a.url) + '" target="_blank" rel="noopener">🔗 '
+      + escHtml(a.title || a.url) + (a.date ? ' (' + escHtml(a.date) + ')' : '') + '</a>').join('');
+    btn.style.display = 'none';
+  } catch (e) {
+    out.innerHTML = '<div class="wi-meta" style="margin-top:0.6rem;">News search failed.</div>';
+    btn.disabled = false; btn.textContent = '📰 Retry news search';
+  }
+}
+
+function closeWhoisModal() {
+  document.getElementById('whois-modal').classList.remove('show');
+  document.getElementById('modal-overlay').classList.remove('show');
 }
 
 function switchSuggestTab(tabName) {
