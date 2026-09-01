@@ -22,7 +22,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
 from relation_categories import categorize
 from link_scoring import score_pair
 
-DB = "data/pipeline_cache.db"
+# Absolute canonical path, NOT the relative "data/pipeline_cache.db" hardlinked
+# copy under this build dir -- that copy shares the main .db file's bytes but
+# has its own separate -wal/-shm sidecars, so a connection here can't
+# coordinate with live harvesters writing via the canonical path. This is the
+# actual root cause behind rebuild_and_deploy.py's "database disk image is
+# malformed" recurrences (2026-08-29, 2026-08-31 x2) -- the checkpoint-before-
+# rebuild mitigation in checkpoint_canonical_db() only narrows the race window
+# (this script's full-table read takes many minutes, during which harvesters
+# keep writing/checkpointing the canonical WAL throughout), it can't close it.
+# Connecting to the canonical path directly uses the same wal/shm every
+# harvester writes through, which is what WAL mode is actually designed to
+# make safe -- see build_group_rankings.py's identical fix, same date.
+DB = os.environ.get("DB_PATH", r"C:\Users\johnk\data\pipeline_cache.db")
 OUT = "webapp/data/graph_scored.json.gz"
 
 # --- cleanup helpers (from working-v2) ---
@@ -60,30 +72,23 @@ def looks_like_person(name):
         return False
     return 2 <= len(name.split()) <= 3
 
-# Build person-name set for conflation detection.
-# Stream every query below straight off the cursor -- never .fetchall().
-# The relationships table is ~86M rows; materializing the full result list
-# (especially the source,target,relation_type scan) held ~12GB and dominated
-# runtime. Iterating the cursor processes each row and discards it.
+# Build person-name set for conflation detection
 conn = sqlite3.connect(DB)
 c = conn.cursor()
-c.arraysize = 10000  # internal fetch batch size for cursor iteration
 persons = set()
 c.execute("SELECT DISTINCT source_name FROM relationships WHERE source_type='PERSON'")
-persons |= {r[0].lower() for r in c if r[0]}
+persons |= {r[0].lower() for r in c.fetchall() if r[0]}
 c.execute("SELECT DISTINCT target_name FROM relationships WHERE target_type='PERSON'")
-persons |= {r[0].lower() for r in c if r[0]}
-print(f"Person names: {len(persons)}", flush=True)
+persons |= {r[0].lower() for r in c.fetchall() if r[0]}
+print(f"Person names: {len(persons)}")
 
 # Gather relations per undirected pair (preserving ALL types)
 pair_rels = defaultdict(set)        # (name_a, name_b) -> set of raw relation strings
 name_canon = {}                     # lowercase -> display name
 c.execute("SELECT source_name, target_name, relation_type FROM relationships")
 n_raw = n_drop = 0
-for s, t, r in c:
+for s, t, r in c.fetchall():
     n_raw += 1
-    if n_raw % 10_000_000 == 0:
-        print(f"  ...scanned {n_raw:,} rows, {len(pair_rels):,} pairs so far", flush=True)
     if not s or not t or s == t:
         continue
     if r in DROP_RELATIONS:

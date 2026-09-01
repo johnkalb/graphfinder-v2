@@ -1,17 +1,49 @@
 """Categorize raw relation strings into ~25 semantic categories. Shared by scoring + analysis."""
 import re
 
+# Not a strict enum of every legitimate relation_type -- that would require
+# enumerating every valid value across all ~42 harvester agents, which isn't
+# safe to do without risking false-rejecting something real. Instead this
+# targets the two SPECIFIC bug patterns already found and fixed this session
+# (2026-08-29/31): FEC embedded the dollar amount into relation_type
+# ("DONATION ($250)"), IRS_990 wrote non-normalized "POSITION (<role>)" text.
+# Both silently broke categorize()'s exact-match logic and went unnoticed for
+# months. New/touched harvesters should call validate_relation_type() before
+# INSERT and log (not necessarily block) anything flagged -- as of 2026-08-31
+# no harvester does yet (none currently imports webapp/ code; the fleet has
+# no established cross-repo import pattern to hang this on). The one live
+# consumer today is audit_relation_types.py (repo root), which applies it
+# retroactively to already-harvested data as a periodic check.
+_RT_HAS_DIGIT = re.compile(r"\d")
+_RT_HAS_PAREN_TEXT = re.compile(r"\([^)]{2,}\)")
+
+
+def validate_relation_type(rt):
+    """Shape-check a relation_type string before it's written to the DB.
+    Returns (is_clean, reasons) -- reasons is a list of short strings
+    explaining what looked suspicious, empty if clean. Never raises; callers
+    decide whether to log-and-continue or reject, this only flags."""
+    reasons = []
+    if not rt:
+        return False, ["empty/None"]
+    if _RT_HAS_DIGIT.search(rt):
+        reasons.append("contains digit (amount/date/ID baked in? relation_type should be a constant)")
+    if _RT_HAS_PAREN_TEXT.search(rt):
+        reasons.append("parenthesized free text (role/detail baked in? should be its own field, not the relation_type)")
+    return (len(reasons) == 0), reasons
+
+
 def categorize(rt):
     r = (rt or "").upper().strip()
     # Same-entity markers — NOT relationships (should merge nodes)
-    if r in ("ALIAS", "FORMER_NAME"):
+    if r in ("ALIAS", "FORMER_NAME", "IDENTITY", "CROSS_REFERENCED"):
         return "SAME_ENTITY"
     # Wikidata time-overlap edges (pass through directly)
     if r == "SAME_ORG_OVERLAP":
         return "SAME_ORG_OVERLAP"
     if r == "SAME_SCHOOL_OVERLAP":
         return "SAME_SCHOOL_OVERLAP"
-    if r == "CO_INVENTOR":
+    if r in ("CO_INVENTOR", "CO_INVENTOR_WITH"):
         return "CO_INVENTOR"
     if r == "PATENT_ASSIGNED_TO":
         return "PATENT_ASSIGNED_TO"
@@ -81,7 +113,7 @@ def categorize(rt):
              "ADVISER", "SENIOR_ADVISOR", "SENIOR_ADVISER", "ADVISORY_COUNCIL_MEMBER"):
         return "ADVISORY"
     # Direct employment
-    if r in ("EMPLOYER", "EMPLOYEE", "EMPLOYED_BY", "PROFESSIONAL"):
+    if r in ("EMPLOYER", "EMPLOYEE", "EMPLOYED_BY", "PROFESSIONAL", "INVENTOR_AT"):
         return "EMPLOYMENT"
     # Financial flows (non-donation)
     if r in ("PAID_BY", "GRANTED_TO", "LP_COMMITMENT", "INVESTOR"):

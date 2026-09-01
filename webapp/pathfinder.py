@@ -125,6 +125,7 @@ _canonical_map = None
 _labels = None
 _deceased = None  # {lowercase name: death date} -- Wikidata P570, authoritative
 _graph_load_error = None  # set if the startup background warm-up load raised
+_crawlie_facts = None  # {"generated_at", "facts": [...]}, from build_crawlie_facts.py
 
 
 def _graph_backend_ready():
@@ -156,6 +157,24 @@ def _load_deceased():
         except Exception:
             _deceased = {}
     return _deceased
+
+
+def _load_crawlie_facts():
+    """Load homepage ticker factoids (build_crawlie_facts.py output). Cheap,
+    small file -- loaded once per process like _load_deceased()."""
+    global _crawlie_facts
+    if _crawlie_facts is not None:
+        return _crawlie_facts
+    _crawlie_facts = {"generated_at": None, "facts": []}
+    fpath = DATA_DIR / "crawlie_facts.json.gz"
+    if fpath.exists():
+        try:
+            import gzip
+            with gzip.open(fpath, "rt", encoding="utf-8") as f:
+                _crawlie_facts = json.load(f)
+        except Exception:
+            _crawlie_facts = {"generated_at": None, "facts": []}
+    return _crawlie_facts
 
 
 def _load_search():
@@ -1679,6 +1698,13 @@ async def contacts_manifest_shards(body: ManifestShardsBatchRequest):
             merged_buckets.update(json.load(f).get("buckets", {}))
     return JSONResponse(content={"buckets": merged_buckets})
 
+@app.get("/api/crawlie")
+async def crawlie():
+    """Homepage ticker factoids. Public, no auth -- same trust level as the
+    already-unauthenticated /api/service/queue."""
+    data = _load_crawlie_facts()
+    return {"facts": data.get("facts", [])}
+
 @app.get("/api/search")
 async def search(request: Request, q: str = Query(default="")):
     if not q or len(q.strip()) < 2:
@@ -2827,12 +2853,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .tab.active { color: #58a6ff; border-color: #58a6ff; }
   .tab-content { display: none; }
   .tab-content.active { display: block; }
+
+  /* Homepage crawlie ticker */
+  #crawlie-ticker { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                    padding: 0.6rem 1rem; margin: 0.75rem 0 1.25rem; font-size: 0.88rem;
+                    color: #c9d1d9; min-height: 1.3em; }
+  #crawlie-text { transition: opacity 0.4s ease; opacity: 1; }
+  #crawlie-text.fading { opacity: 0; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>🔗 Network Pathfinder</h1>
   <p class="sub">Explore <strong>800,000+ relationships</strong> across SEC filings, Epstein documents, GDELT news, IRS foundations, Wikidata, and LittleSis. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
+
+  <div id="crawlie-ticker"><span id="crawlie-text"></span></div>
+
   <div class="hero-actions">
     <button class="secondary-btn" onclick="window.location.href='/faq'">📘 FAQ / Start Here</button>
   </div>
@@ -4356,6 +4392,43 @@ async function checkContacts(names, emptyMessage) {
   } finally { btn.disabled = false; loading.style.display = 'none'; }
 }
 
+// --- Homepage crawlie ticker ---
+window.state = window.state || {};
+window.state.crawlieFacts = [];
+window.state.crawlieIdx = 0;
+
+async function loadCrawlie() {
+  try {
+    const res = await fetch('/api/crawlie');
+    const data = await res.json();
+    window.state.crawlieFacts = data.facts || [];
+    if (window.state.crawlieFacts.length) {
+      renderCrawlie();
+      setInterval(advanceCrawlie, 7000);
+    }
+  } catch (e) {
+    // fail silently -- the ticker is a nice-to-have, never block the page on it
+  }
+}
+
+function renderCrawlie() {
+  const el = document.getElementById('crawlie-text');
+  if (!el || !window.state.crawlieFacts.length) return;
+  el.innerHTML = escHtml(window.state.crawlieFacts[window.state.crawlieIdx]);
+}
+
+function advanceCrawlie() {
+  const el = document.getElementById('crawlie-text');
+  if (!el || !window.state.crawlieFacts.length) return;
+  el.classList.add('fading');
+  setTimeout(() => {
+    window.state.crawlieIdx = (window.state.crawlieIdx + 1) % window.state.crawlieFacts.length;
+    renderCrawlie();
+    el.classList.remove('fading');
+  }, 400);
+}
+
+loadCrawlie();
 initContactCheckUI();
 </script>
 </body>
