@@ -21,6 +21,7 @@ OUT = "webapp/data/crawlie_facts.json.gz"
 
 MIN_DEGREE = 15          # exclude near-isolated stub nodes -- "surprising" divergence there is just noise
 MAX_PAIR_FACTOIDS = 20
+MAX_GROUP_PAIR_FACTOIDS = 8
 TOP_PAGERANK_COUNT = 3
 
 # Curated so generated "surprising rank" sentences reference at least one name
@@ -114,12 +115,36 @@ def surprising_rank_facts(index):
 
 
 def group_facts(groups):
+    # Cross-category PageRank comparisons ("X outranks Y"), mirroring
+    # surprising_rank_facts()'s phrasing for individuals -- a standalone
+    # "reaches N people, Nth percentile" sentence (the original design) reads
+    # as an isolated stat with nothing to anchor it to, which is exactly what
+    # the user found confusing 2026-09-02; a comparison against a DIFFERENT
+    # kind of organization is more legible and mirrors what the ticker
+    # already does for people.
     facts = []
-    for g in groups:
+    ranked = sorted(groups, key=lambda g: g["percentile"], reverse=True)
+    used = set()
+    for g in ranked:
+        if len(facts) >= MAX_GROUP_PAIR_FACTOIDS:
+            break
+        if g["name"] in used:
+            continue
+        candidates = [
+            o for o in ranked
+            if o["name"] not in used and o["name"] != g["name"] and o["category"] != g["category"]
+        ]
+        if not candidates:
+            continue
+        partner = min(candidates, key=lambda o: abs(o["percentile"] - g["percentile"]))
+        higher, lower = (g, partner) if g["percentile"] >= partner["percentile"] else (partner, g)
         facts.append(
-            f"The {g['name']} collectively reaches {g['external_neighbor_count']:,} people "
-            f"outside itself — the {g['percentile']}th percentile of network reach."
+            f"The {higher['name']} (reaches {higher['external_neighbor_count']:,} people outside "
+            f"itself) outranks the {lower['name']} ({lower['external_neighbor_count']:,} people) "
+            f"in PageRank — {higher['category'].replace('_', ' ')} vs {lower['category'].replace('_', ' ')}."
         )
+        used.add(g["name"])
+        used.add(partner["name"])
     return facts
 
 
