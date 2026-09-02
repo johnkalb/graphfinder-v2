@@ -109,9 +109,18 @@ def assemble_board(conn, target_org):
     while private companies and LittleSis-sourced nonprofits still resolve."""
     director_members = set()
     fallback_members = set()
+    # target_type='ORG' is redundant in principle (target_name alone
+    # identifies the org) but critical in practice: it lets SQLite use the
+    # (target_type, target_name) composite index for an equality lookup
+    # instead of a near-full-table scan. Confirmed 2026-09-02 -- omitting it
+    # was always the query's shape, but only became a real cost once this
+    # script grew from 1 group to 18: 18 unindexed scans over 124M+ rows,
+    # stacked on the already-slow graph-copy phase, blew past the pipeline's
+    # 3600s per-step timeout. See check_org_board_coverage.py (repo root) for
+    # the diagnostic that already validated this exact indexed shape is fast.
     cur = conn.execute(
         "SELECT source_name, relation_type, source_data FROM relationships "
-        "WHERE target_name = ? AND source_type = 'PERSON'",
+        "WHERE target_name = ? AND target_type = 'ORG' AND source_type = 'PERSON'",
         (target_org,),
     )
     for source_name, relation_type, source_data in cur:
