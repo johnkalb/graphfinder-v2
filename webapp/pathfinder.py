@@ -2505,7 +2505,13 @@ def _qa_compute(classified: dict):
         b = _qa_find_group(classified.get("group_b"))
         if not a or not b or a["name"] == b["name"]:
             return None
-        higher, lower = (a, b) if a["percentile"] >= b["percentile"] else (b, a)
+        # Rank by raw pagerank, not percentile -- confirmed 2026-09-02 that
+        # nearly all groups land at percentile=100 (a handful of high-reach
+        # synthetic nodes among ~847K real ones all round into the top
+        # bucket), which would make ">=" an arbitrary tiebreak even though
+        # the real pageranks are clearly differentiated. See
+        # build_crawlie_facts.py's group_facts() for the same fix.
+        higher, lower = (a, b) if a["pagerank"] >= b["pagerank"] else (b, a)
         return {"kind": "group_vs_group", "higher_name": higher["name"], "higher_reach": higher["external_neighbor_count"],
                 "lower_name": lower["name"], "lower_reach": lower["external_neighbor_count"]}
 
