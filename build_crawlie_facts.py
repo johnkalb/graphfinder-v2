@@ -122,8 +122,18 @@ def group_facts(groups):
     # the user found confusing 2026-09-02; a comparison against a DIFFERENT
     # kind of organization is more legible and mirrors what the ticker
     # already does for people.
+    # Rank/pair by raw pagerank, NOT percentile: unlike individuals (where
+    # only the coarse 1-100 sci bucket is persisted), each group's real
+    # pagerank float IS available here -- and it turns out to matter. Real
+    # 2026-09-02 output: 17 of 18 groups landed at percentile=100 (a handful
+    # of high-reach synthetic nodes among ~847K real ones all round into the
+    # top bucket), which would make "closest percentile" pairing pick an
+    # essentially arbitrary partner and an arbitrary higher/lower call among
+    # ties -- even though the real pageranks are clearly differentiated (e.g.
+    # Ford Motor Co 0.000108 vs Fox Corp 0.000007, ~15x apart, both "100th
+    # percentile"). Sorting/pairing by the raw float instead fixes this.
     facts = []
-    ranked = sorted(groups, key=lambda g: g["percentile"], reverse=True)
+    ranked = sorted(groups, key=lambda g: g["pagerank"], reverse=True)
     used = set()
     for g in ranked:
         if len(facts) >= MAX_GROUP_PAIR_FACTOIDS:
@@ -136,8 +146,8 @@ def group_facts(groups):
         ]
         if not candidates:
             continue
-        partner = min(candidates, key=lambda o: abs(o["percentile"] - g["percentile"]))
-        higher, lower = (g, partner) if g["percentile"] >= partner["percentile"] else (partner, g)
+        partner = min(candidates, key=lambda o: abs(o["pagerank"] - g["pagerank"]))
+        higher, lower = (g, partner) if g["pagerank"] >= partner["pagerank"] else (partner, g)
         facts.append(
             f"The {higher['name']} (reaches {higher['external_neighbor_count']:,} people outside "
             f"itself) outranks the {lower['name']} ({lower['external_neighbor_count']:,} people) "
