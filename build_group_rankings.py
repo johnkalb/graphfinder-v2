@@ -66,8 +66,30 @@ OUT = "webapp/data/group_rankings.json.gz"
 IRS_BOARD_ROLES = {"DIRECTOR", "DIR", "TRUSTEE", "CO-TRUSTEE", "BOARD MEMBER", "CHAIRMAN", "CHAIR"}
 
 # For non-IRS sources (LittleSis/SEC/AmLaw/etc.), categorize() is reliable --
-# accept the board-equivalent category.
+# accept the board-equivalent category first.
 BOARD_CATEGORIES = {"CO_DIRECTOR"}
+
+# Fallback cascade for orgs with NO CO_DIRECTOR-category matches -- confirmed
+# 2026-09-02 that CO_DIRECTOR-only silently excludes entire org types this
+# dataset legitimately covers differently:
+#   - Nonprofits/foundations sourced via LITTLESIS (not IRS_990) use "TRUSTEE"-
+#     family relation_types, which categorize() maps to ADVISORY, not
+#     CO_DIRECTOR (e.g. Ford Foundation: 8 TRUSTEE + 2 MEMBER_BOARD_OF_TRUSTEES
+#     rows, zero CO_DIRECTOR rows).
+#   - Private companies / hedge funds (Millennium, Point72, Citadel, Anthropic)
+#     have no SEC "board of directors" concept at all in this data -- their
+#     real senior-leadership rows (FOUNDER, CEO, CHAIRMAN_AND_CHIEF_EXECUTIVE_
+#     OFFICER, ...) categorize() maps to CO_EXECUTIVE.
+# CO_EXECUTIVE is deliberately NOT tried first/always: for LittleSis-sourced
+# orgs the bare relation_type "POSITION" (no role text at all -- confirmed via
+# the evidence field, e.g. "David Fife had a position (Position) at Point72" --
+# LittleSis's own source data never captured the actual title) is the single
+# largest bucket for nearly every org checked and ALSO categorizes as
+# CO_EXECUTIVE, so trying it unconditionally would flood small/private orgs
+# with "was affiliated somehow" noise instead of real leadership. Excluding
+# that literal string keeps the fallback meaningful.
+FALLBACK_CATEGORIES = {"ADVISORY", "CO_EXECUTIVE"}
+_UNINFORMATIVE_RELATION_TYPES = {"POSITION"}
 
 
 def irs_role(relation_type):
@@ -79,9 +101,14 @@ def irs_role(relation_type):
 
 
 def assemble_board(conn, target_org):
-    """Return the deduped set of person-names who hold a board-type relation to
-    target_org, per the classification rules in the module docstring."""
-    members = set()
+    """Return the deduped set of person-names who hold a board/leadership-type
+    relation to target_org, per the classification rules in the module
+    docstring. Tries CO_DIRECTOR (real boards) first; only falls back to
+    ADVISORY/CO_EXECUTIVE (trustees / named senior leadership) when that
+    yields nothing, so well-covered public companies keep the cleanest signal
+    while private companies and LittleSis-sourced nonprofits still resolve."""
+    director_members = set()
+    fallback_members = set()
     cur = conn.execute(
         "SELECT source_name, relation_type, source_data FROM relationships "
         "WHERE target_name = ? AND source_type = 'PERSON'",
@@ -93,11 +120,14 @@ def assemble_board(conn, target_org):
         if source_data in ("IRS_990_TEOS", "IRS_990"):
             role = irs_role(relation_type)
             if role in IRS_BOARD_ROLES:
-                members.add(source_name)
-        else:
-            if categorize(relation_type) in BOARD_CATEGORIES:
-                members.add(source_name)
-    return members
+                director_members.add(source_name)
+            continue
+        cat = categorize(relation_type)
+        if cat in BOARD_CATEGORIES:
+            director_members.add(source_name)
+        elif cat in FALLBACK_CATEGORIES and (relation_type or "").strip().upper() not in _UNINFORMATIVE_RELATION_TYPES:
+            fallback_members.add(source_name)
+    return director_members or fallback_members
 
 
 def main():
@@ -167,6 +197,7 @@ def main():
 
         groups.append({
             "name": name,
+            "category": gdef.get("category", "other"),
             "synthetic_name": synthetic_name,
             "member_count": len(members),
             "external_neighbor_count": len(external),

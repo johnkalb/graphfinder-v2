@@ -126,6 +126,7 @@ _labels = None
 _deceased = None  # {lowercase name: death date} -- Wikidata P570, authoritative
 _graph_load_error = None  # set if the startup background warm-up load raised
 _crawlie_facts = None  # {"generated_at", "facts": [...]}, from build_crawlie_facts.py
+_group_rankings = None  # [{"name","category","member_count","external_neighbor_count","pagerank","percentile","members"}, ...]
 
 
 def _graph_backend_ready():
@@ -175,6 +176,55 @@ def _load_crawlie_facts():
         except Exception:
             _crawlie_facts = {"generated_at": None, "facts": []}
     return _crawlie_facts
+
+
+def _load_group_rankings():
+    """Load group PageRank data (build_group_rankings.py output). Cheap,
+    small file -- loaded once per process like _load_crawlie_facts()."""
+    global _group_rankings
+    if _group_rankings is not None:
+        return _group_rankings
+    _group_rankings = []
+    fpath = DATA_DIR / "group_rankings.json.gz"
+    if fpath.exists():
+        try:
+            import gzip
+            with gzip.open(fpath, "rt", encoding="utf-8") as f:
+                _group_rankings = json.load(f)
+        except Exception:
+            _group_rankings = []
+    return _group_rankings
+
+
+def _load_user_submitted_facts():
+    """Live-appended Q&A worker answers (see _qa_worker_tick()) -- a plain
+    (not gzipped) JSON file since it's written incrementally, one answer at a
+    time, rather than rebuilt wholesale like crawlie_facts.json.gz. Read
+    fresh every call (not cached) since it can change between nightly
+    rebuilds -- it's small (capped at a few hundred short sentences) so this
+    is cheap."""
+    fpath = DATA_DIR / "user_submitted_facts.json"
+    if not fpath.exists():
+        return []
+    try:
+        with open(fpath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _append_user_submitted_fact(sentence: str):
+    facts = _load_user_submitted_facts()
+    facts.append({"sentence": sentence, "answered_at": datetime.now(timezone.utc).isoformat()})
+    # Unbounded growth would eventually bloat /api/crawlie's response and the
+    # ticker's in-memory array; cap to the most recent N, same order of
+    # magnitude as the nightly-generated fact count.
+    facts = facts[-200:]
+    fpath = DATA_DIR / "user_submitted_facts.json"
+    tmp = fpath.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(facts, f, ensure_ascii=False)
+    os.replace(tmp, fpath)
 
 
 def _load_search():
@@ -355,6 +405,7 @@ async def startup():
     _load_search()
     import asyncio
     asyncio.create_task(_warm_up_graph())
+    asyncio.create_task(_qa_worker_loop())
     # Configure the encrypted, prefix-sharded manifest only when production
     # secrets and the generated shard directory are present. Never log or
     # return the server secret. The server never loads shard contents into
@@ -1701,9 +1752,13 @@ async def contacts_manifest_shards(body: ManifestShardsBatchRequest):
 @app.get("/api/crawlie")
 async def crawlie():
     """Homepage ticker factoids. Public, no auth -- same trust level as the
-    already-unauthenticated /api/service/queue."""
+    already-unauthenticated /api/service/queue. Merges the nightly-rebuilt
+    crawlie_facts.json.gz with user_submitted_facts.json (live-appended by
+    the Q&A worker, see _qa_worker_tick()) at READ time -- see that file's
+    module docstring for why the two are kept separate on disk."""
     data = _load_crawlie_facts()
-    return {"facts": data.get("facts", [])}
+    user_facts = [f["sentence"] for f in _load_user_submitted_facts()]
+    return {"facts": data.get("facts", []) + user_facts}
 
 @app.get("/api/search")
 async def search(request: Request, q: str = Query(default="")):
@@ -2258,6 +2313,356 @@ class DisputeRequest(BaseModel):
 
 class AddMeRequest(BaseModel):
     person_name: str = Field(..., min_length=2, max_length=100)
+
+class QuestionRequest(BaseModel):
+    question: str = Field(..., min_length=5, max_length=500)
+    email: Optional[str] = None
+
+@app.post("/api/ask-question")
+async def ask_question(req: QuestionRequest, request: Request):
+    """Free-text PageRank/comparison questions, answered asynchronously by
+    the Q&A worker (_qa_worker_tick(), a background loop kicked off from
+    startup()) -- not live. Deliberately skips
+    _notify_operator_of_new_submission() (unlike suggest/dispute): this queue
+    is worked by the worker, not a human reviewer, so an operator email per
+    question would just be noise."""
+    try:
+        email = _request_user_email(request) or req.email
+        db_path = _test_department_db_path()
+        conn = db.connect(db_path)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email)
+            VALUES ('qa_question', 'new', 'normal', ?, ?, ?)
+        """, (req.question.strip()[:100], req.question.strip(), email))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": (
+            "Thanks! We'll compute a real answer and add it to the ticker within 24 hours"
+            + (" and email it to you." if email else ". Leave an email next time to get it sent directly.")
+        )}
+    except Exception:
+        logger.exception("ask-question failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
+
+
+# --- Q&A worker: background asyncio loop, started from startup() ---------
+#
+# Runs inside this same deployed process rather than as a separate local
+# script + Windows Task Scheduler job (the original design) -- confirmed
+# 2026-09-02 that this local machine has neither ANTHROPIC_API_KEY nor SMTP
+# credentials configured (only the deployed app does), so a local worker
+# would need its own new secrets-management story for no real benefit. This
+# way it reuses the exact credentials and data-loading already working here.
+#
+# Two-call compute-then-phrase pattern (same principle as
+# mentioned_with_fallback.py / _generate_path_narrative()): Call 1 classifies
+# the free-text question into a fixed template + extracts name(s); the
+# answer's actual number(s) ALWAYS come from real code reading
+# search_index.json.gz / group_rankings.json.gz, never from the LLM, so a
+# hallucinated PageRank claim can never go out under the site's name. A
+# failed lookup (name not found) is treated as unanswerable even when
+# classification "succeeded" -- covers a hallucinated/misspelled name from
+# Call 1. Call 2 (only if answerable) phrases the computed fact(s) as one
+# ticker-voice sentence.
+QA_HAIKU_MODEL = "claude-haiku-4-5"
+QA_MONTHLY_CALL_CAP = 1000  # ~500 questions at up to 2 calls each
+QA_WORKER_INTERVAL_SECONDS = 600  # not live -- a 10min poll is plenty
+QA_BATCH_SIZE = 5  # bound cost/time per tick
+
+
+def _qa_classify(question: str, group_names: list) -> Optional[dict]:
+    """Call 1. Returns None on any failure (no API key, network error, bad
+    JSON) -- caller treats that the same as UNANSWERABLE."""
+    from mentioned_with_fallback import _get_anthropic_key
+    api_key = _get_anthropic_key()
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    group_list = "\n".join(f"- {g}" for g in group_names)
+    prompt = (
+        f'A visitor to a network-analysis site asked: "{question}"\n\n'
+        f"The site can answer PageRank/network-reach questions about individual people (by "
+        f"name) and about these organizations (match ONLY to one of these exact names -- do "
+        f"not invent one that isn't listed):\n{group_list}\n\n"
+        f'Classify the question into exactly one template and respond with ONLY a JSON '
+        f"object, no other text:\n"
+        f'  {{"template": "TOP_PAGERANK"}}\n'
+        f'  {{"template": "PERSON_LOOKUP", "person": "<name>"}}\n'
+        f'  {{"template": "GROUP_LOOKUP", "group": "<exact org name from the list>"}}\n'
+        f'  {{"template": "PERSON_VS_PERSON", "person_a": "<name>", "person_b": "<name>"}}\n'
+        f'  {{"template": "GROUP_VS_GROUP", "group_a": "<exact org name>", "group_b": "<exact org name>"}}\n'
+        f'  {{"template": "PERSON_VS_GROUP", "person": "<name>", "group": "<exact org name>"}}\n'
+        f'  {{"template": "UNANSWERABLE", "reason": "<one short sentence>"}}\n'
+        f"Use UNANSWERABLE if the question isn't about PageRank/influence/network reach of a "
+        f"person or one of the listed orgs, or doesn't name anyone/anything specific enough."
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=QA_HAIKU_MODEL, max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = next((b.text for b in response.content if b.type == "text"), "").strip()
+        if text.startswith("```"):
+            text = text.strip("`").lstrip("json").strip()
+        return json.loads(text)
+    except Exception:
+        logger.exception("qa-worker: classify call failed")
+        return None
+
+
+def _qa_find_group(name: Optional[str]) -> Optional[dict]:
+    name_l = (name or "").strip().lower()
+    if not name_l:
+        return None
+    groups = _load_group_rankings()
+    for g in groups:
+        if g["name"].lower() == name_l:
+            return g
+    for g in groups:
+        if name_l in g["name"].lower() or g["name"].lower() in name_l:
+            return g
+    return None
+
+
+def _qa_find_person(name: Optional[str]) -> Optional[dict]:
+    """_find_entry()'s top hit, gated by a confidence check specific to this
+    caller. _find_entry() intentionally has a permissive slow-path tier (any
+    partial token overlap) tuned for typeahead-as-you-type UX, where a loose
+    match still helps a human scanning a dropdown -- but a Q&A answer is
+    unattended and goes out under the site's name, so it needs a much
+    stronger bar. Confirmed via smoke test 2026-09-02: an unresolvable
+    classifier query ("Not A Real Person Xyz123") matched a run-on data-
+    artifact "name" ("Credit Abuse Resistance Education Corp., ... founded
+    by person reporting...") purely because both strings contain the word
+    "person" -- exactly the false-positive this guards against."""
+    q = (name or "").strip().lower()
+    if not q:
+        return None
+    matches = _find_entry(name.strip())
+    if not matches:
+        return None
+    top = matches[0]
+    canon_l = top["canonical"].lower()
+    if canon_l == q:
+        return top
+    if len(canon_l.split()) > 5:
+        return None  # real person/org names aren't run-on sentences
+    q_tokens = set(q.split())
+    canon_tokens = set(canon_l.split())
+    if not q_tokens:
+        return None
+    overlap = len(q_tokens & canon_tokens) / len(q_tokens)
+    return top if overlap >= 0.5 else None
+
+
+def _qa_compute(classified: dict):
+    """Dispatch on the classified template to real code (never the LLM).
+    Returns a small dict of computed facts for _qa_phrase() to embed, or
+    None if unanswerable (bad template, or any referenced name/org doesn't
+    resolve)."""
+    template = classified.get("template")
+
+    if template == "TOP_PAGERANK":
+        _load_search()
+        people = [
+            (e, meta) for e, meta in zip(_search_index, _search_index_meta)
+            if meta[2]  # meta = (canon_lower, tokens, is_person)
+        ]
+        if not people:
+            return None
+        top = max(people, key=lambda pm: (pm[0]["sci"], pm[0]["degree"]))[0]
+        return {"kind": "top_pagerank", "name": top["canonical"]}
+
+    if template == "PERSON_LOOKUP":
+        p = _qa_find_person(classified.get("person"))
+        if not p:
+            return None
+        return {"kind": "person_lookup", "name": p["canonical"], "sci": p["sci"], "degree": p["degree"]}
+
+    if template == "GROUP_LOOKUP":
+        g = _qa_find_group(classified.get("group"))
+        if not g:
+            return None
+        return {"kind": "group_lookup", "name": g["name"], "percentile": g["percentile"],
+                "reach": g["external_neighbor_count"]}
+
+    if template == "PERSON_VS_PERSON":
+        a = _qa_find_person(classified.get("person_a"))
+        b = _qa_find_person(classified.get("person_b"))
+        if not a or not b or a["canonical"] == b["canonical"]:
+            return None
+        higher, lower = (a, b) if a["sci"] >= b["sci"] else (b, a)
+        return {"kind": "person_vs_person", "higher_name": higher["canonical"], "higher_degree": higher["degree"],
+                "lower_name": lower["canonical"], "lower_degree": lower["degree"]}
+
+    if template == "GROUP_VS_GROUP":
+        a = _qa_find_group(classified.get("group_a"))
+        b = _qa_find_group(classified.get("group_b"))
+        if not a or not b or a["name"] == b["name"]:
+            return None
+        higher, lower = (a, b) if a["percentile"] >= b["percentile"] else (b, a)
+        return {"kind": "group_vs_group", "higher_name": higher["name"], "higher_reach": higher["external_neighbor_count"],
+                "lower_name": lower["name"], "lower_reach": lower["external_neighbor_count"]}
+
+    if template == "PERSON_VS_GROUP":
+        p = _qa_find_person(classified.get("person"))
+        g = _qa_find_group(classified.get("group"))
+        if not p or not g:
+            return None
+        return {"kind": "person_vs_group", "person_name": p["canonical"], "person_sci": p["sci"],
+                "group_name": g["name"], "group_percentile": g["percentile"]}
+
+    return None
+
+
+def _qa_phrase(fact: dict, style_anchor_facts: list) -> Optional[str]:
+    """Call 2. Embeds the already-computed fact dict as literal context (the
+    LLM only phrases, never invents numbers) plus 1-2 existing ticker
+    sentences as a style anchor. Returns None on any failure -- caller falls
+    back to a plain, ungenerated sentence built from the fact dict directly
+    (see _qa_process_one()), so an LLM outage never blocks an answer."""
+    from mentioned_with_fallback import _get_anthropic_key
+    api_key = _get_anthropic_key()
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    anchors = "\n".join(f"- {s}" for s in style_anchor_facts[:2])
+    prompt = (
+        f"Write ONE short, factual sentence for a homepage news-ticker, in the same voice as "
+        f"these existing examples:\n{anchors}\n\n"
+        f"Use ONLY these facts (do not add, guess, or round any number not given):\n{json.dumps(fact)}\n\n"
+        f"Respond with ONLY the sentence, no quotes, no preamble."
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=QA_HAIKU_MODEL, max_tokens=100,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = next((b.text for b in response.content if b.type == "text"), "").strip().strip('"')
+        return text or None
+    except Exception:
+        logger.exception("qa-worker: phrase call failed")
+        return None
+
+
+def _qa_fallback_sentence(fact: dict) -> str:
+    """Plain-English sentence built directly from the fact dict, used when
+    _qa_phrase() is unavailable/fails -- never blocks an answer on the LLM."""
+    kind = fact["kind"]
+    if kind == "top_pagerank":
+        return f"{fact['name']} currently has the highest PageRank in the entire network."
+    if kind == "person_lookup":
+        return f"{fact['name']} has {fact['degree']:,} contacts and ranks in the {fact['sci']}th percentile by PageRank."
+    if kind == "group_lookup":
+        return f"The {fact['name']} reaches {fact['reach']:,} people outside itself — the {fact['percentile']}th percentile of network reach."
+    if kind == "person_vs_person":
+        return (f"{fact['higher_name']} ({fact['higher_degree']:,} contacts) outranks "
+                f"{fact['lower_name']} ({fact['lower_degree']:,} contacts) in PageRank.")
+    if kind == "group_vs_group":
+        return (f"The {fact['higher_name']} (reaches {fact['higher_reach']:,} people) outranks "
+                f"the {fact['lower_name']} ({fact['lower_reach']:,} people) in PageRank.")
+    if kind == "person_vs_group":
+        return (f"{fact['person_name']} (percentile {fact['person_sci']}) compares to the "
+                f"{fact['group_name']} (percentile {fact['group_percentile']}) in PageRank.")
+    return "Answer computed."
+
+
+async def _qa_process_one(item: dict, conn):
+    """Process a single service_items row end to end: classify, compute,
+    phrase, update the row, email if requested, append to the live ticker
+    feed on success. All LLM calls are best-effort -- any failure degrades
+    to a plain fallback sentence or a decline, never leaves the item stuck
+    in 'new' forever (marked 'resolved' either way)."""
+    import asyncio
+    question = item["body"]
+    submitter_email = item["submitter_email"]
+    group_names = [g["name"] for g in _load_group_rankings()]
+
+    loop = asyncio.get_event_loop()
+    classified = await loop.run_in_executor(None, _qa_classify, question, group_names)
+
+    resolution_note = None
+    answered = False
+    if classified and classified.get("template") != "UNANSWERABLE":
+        cache_conn = db.connect(str(DATA_DIR / "mentioned_with_cache.db"))
+        from mentioned_with_fallback import _check_and_increment_spend_cap
+        under_cap = _check_and_increment_spend_cap(cache_conn, QA_MONTHLY_CALL_CAP, period_prefix="qa:")
+        cache_conn.close()
+        fact = await loop.run_in_executor(None, _qa_compute, classified)
+        if fact and under_cap:
+            crawlie_data = _load_crawlie_facts()
+            phrased = await loop.run_in_executor(None, _qa_phrase, fact, crawlie_data.get("facts", []))
+            resolution_note = phrased or _qa_fallback_sentence(fact)
+            answered = True
+        elif fact:
+            resolution_note = _qa_fallback_sentence(fact)
+            answered = True
+
+    if not answered:
+        reason = (classified or {}).get("reason") if classified else None
+        resolution_note = (
+            "We couldn't compute a specific answer to this one"
+            + (f" ({reason})" if reason else "")
+            + " -- try naming a specific person or one of the organizations we track."
+        )
+
+    conn.execute("""
+        UPDATE service_items SET status='resolved', reviewed_by='qa-worker',
+        reviewed_at=CURRENT_TIMESTAMP, resolution_note=? WHERE id=?
+    """, (resolution_note, item["id"]))
+    conn.commit()
+
+    if answered:
+        _append_user_submitted_fact(resolution_note)
+    if submitter_email:
+        subject = "Your sixdegrees.net question has an answer" if answered else "About your sixdegrees.net question"
+        html_body = f"<p><strong>Your question:</strong> {question}</p><p><strong>Answer:</strong> {resolution_note}</p>"
+        try:
+            send_email(submitter_email, subject, html_body)
+        except Exception:
+            logger.exception("qa-worker: email send failed for item_id=%s", item["id"])
+
+
+async def _qa_worker_tick():
+    """One poll of the qa_question queue -- called periodically by
+    _qa_worker_loop(). A small bounded batch per tick (QA_BATCH_SIZE), not
+    the whole queue, so one slow LLM call can't stall the loop indefinitely."""
+    try:
+        db_path = _test_department_db_path()
+        conn = db.connect(db_path)
+        rows = conn.execute(
+            "SELECT * FROM service_items WHERE item_type='qa_question' AND status='new' "
+            "ORDER BY created_at ASC LIMIT ?", (QA_BATCH_SIZE,)
+        ).fetchall()
+        for row in rows:
+            item = dict(row)
+            try:
+                await _qa_process_one(item, conn)
+            except Exception:
+                logger.exception("qa-worker: failed processing item_id=%s", item.get("id"))
+        conn.close()
+    except Exception:
+        logger.exception("qa-worker: tick failed")
+
+
+async def _qa_worker_loop():
+    """Background loop kicked off from startup() -- see module note above
+    _qa_classify() for why this runs in-process instead of a separate local
+    script + scheduled task."""
+    import asyncio
+    while True:
+        await asyncio.sleep(QA_WORKER_INTERVAL_SECONDS)
+        await _qa_worker_tick()
+
 
 @app.post("/api/suggest-link")
 async def suggest_link(req: SuggestionRequest, request: Request):
@@ -2860,6 +3265,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     color: #c9d1d9; min-height: 1.3em; }
   #crawlie-text { transition: opacity 0.4s ease; opacity: 1; }
   #crawlie-text.fading { opacity: 0; }
+
+  #qa-ask-box { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+                margin: 0 0 1.25rem; font-size: 0.85rem; color: #8b949e; }
+  #qa-ask-label { flex: 0 0 auto; }
+  #qa-ask-box input { background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+                       border-radius: 6px; padding: 0.5rem 0.8rem; font-size: 0.9rem; outline: none; }
+  #qa-ask-box input:focus { border-color: #58a6ff; }
+  #qa-ask-input { flex: 1 1 260px; min-width: 200px; }
+  #qa-ask-email { flex: 0 1 200px; min-width: 140px; }
+  #qa-ask-status { flex: 1 1 100%; font-size: 0.8rem; }
+  #qa-ask-status.ok { color: #3fb950; }
+  #qa-ask-status.err { color: #f85149; }
 </style>
 </head>
 <body>
@@ -2868,6 +3285,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <p class="sub">Explore <strong>800,000+ relationships</strong> across SEC filings, Epstein documents, GDELT news, IRS foundations, Wikidata, and LittleSis. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
 
   <div id="crawlie-ticker"><span id="crawlie-text"></span></div>
+
+  <div id="qa-ask-box">
+    <span id="qa-ask-label">Got a comparison or PageRank question of your own?</span>
+    <input id="qa-ask-input" type="text" maxlength="500" placeholder="e.g. how does Elon Musk's PageRank compare to Bill Gates?">
+    <input id="qa-ask-email" type="email" maxlength="200" placeholder="email (optional, to get the answer)">
+    <button id="qa-ask-btn" class="secondary-btn" onclick="submitQaQuestion()">Ask</button>
+    <span id="qa-ask-status"></span>
+  </div>
 
   <div class="hero-actions">
     <button class="secondary-btn" onclick="window.location.href='/faq'">📘 FAQ / Start Here</button>
@@ -4426,6 +4851,43 @@ function advanceCrawlie() {
     renderCrawlie();
     el.classList.remove('fading');
   }, 400);
+}
+
+async function submitQaQuestion() {
+  const input = document.getElementById('qa-ask-input');
+  const emailInput = document.getElementById('qa-ask-email');
+  const status = document.getElementById('qa-ask-status');
+  const btn = document.getElementById('qa-ask-btn');
+  const question = input.value.trim();
+  status.className = '';
+  if (question.length < 5) {
+    status.textContent = 'Ask a real question — a few more words please.';
+    status.className = 'err';
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/ask-question', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: question, email: emailInput.value.trim() || null })
+    });
+    const d = await res.json();
+    if (d.success) {
+      status.textContent = d.message;
+      status.className = 'ok';
+      input.value = '';
+      emailInput.value = '';
+    } else {
+      status.textContent = 'Error: ' + (d.error || 'submission failed');
+      status.className = 'err';
+    }
+  } catch (e) {
+    status.textContent = 'Network error: ' + e.message;
+    status.className = 'err';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 loadCrawlie();

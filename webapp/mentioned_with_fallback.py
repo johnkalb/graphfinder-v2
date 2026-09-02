@@ -99,12 +99,16 @@ def _set_cached(conn, pair_key, name_a, name_b, result):
     conn.commit()
 
 
-def _check_and_increment_spend_cap(conn, monthly_cap=MONTHLY_CALL_CAP):
+def _check_and_increment_spend_cap(conn, monthly_cap=MONTHLY_CALL_CAP, period_prefix=""):
     """Atomically checks and increments this month's Haiku call count.
     Returns True (and has incremented) if under cap, False (unchanged) if
     the cap is already reached -- callers must still do the free GDELT
-    search either way, just skip the LLM classification when this is False."""
-    period = datetime.datetime.utcnow().strftime("%Y-%m")
+    search either way, just skip the LLM classification when this is False.
+
+    period_prefix distinguishes independent callers sharing the same
+    llm_spend_tracker table/period-month key (e.g. "qa:" for the Q&A worker,
+    see pathfinder.py) so one feature's budget never collides with another's."""
+    period = period_prefix + datetime.datetime.utcnow().strftime("%Y-%m")
     cur = conn.cursor()
     cur.execute("SELECT call_count FROM llm_spend_tracker WHERE period = ?", (period,))
     row = cur.fetchone()
