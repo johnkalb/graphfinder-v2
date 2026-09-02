@@ -153,7 +153,18 @@ def main():
         ed = json.load(f)
     nodes = ed["nodes"]
     edges = ed["edges"]
-    name_to_idx = {name: i for i, name in enumerate(nodes)}
+    # Lowercase-keyed, matching build_scored_edges.py's own node-identity
+    # convention: nodes are deduped by name.lower() there (nid()'s dedup key),
+    # so this is safe/unambiguous -- each lowercase key maps to exactly one
+    # node. Confirmed real bug 2026-09-02: a case-sensitive name_to_idx here
+    # silently failed to match ANY of Goldman Sachs's 15 CO_DIRECTOR members
+    # (assemble_board() returns raw DB source_name casing, e.g. "David
+    # Greenwald", while the graph's canonical node for that same person can be
+    # a totally different casing from whichever source_data row got scanned
+    # first in build_scored_edges.py, e.g. "DAVID GREENWALD" from an all-caps
+    # SEC filing) -- every group with any casing mismatch silently produced
+    # "no external neighbors found" instead of real results.
+    name_to_idx = {name.lower(): i for i, name in enumerate(nodes)}
 
     print("Building graph copy for group-node injection...", flush=True)
     g2 = nx.Graph()
@@ -180,15 +191,20 @@ def main():
             print(f"  skipping group {name!r}: no members resolved", flush=True)
             continue
 
-        # Union of external neighbors, excluding intra-group edges.
+        # Union of external neighbors, excluding intra-group edges. Compare
+        # by lowercase throughout (see name_to_idx comment above) -- members
+        # are raw DB casing, node names are the graph's canonical casing, and
+        # a fellow board member with mismatched casing must still be excluded
+        # as intra-group rather than miscounted as "external".
+        members_lower = {m.lower() for m in members}
         external = set()
         for member in members:
-            idx = name_to_idx.get(member)
+            idx = name_to_idx.get(member.lower())
             if idx is None:
                 continue
             for neighbor_idx in neighbors_by_idx.get(idx, ()):
                 neighbor_name = nodes[neighbor_idx]
-                if neighbor_name not in members:
+                if neighbor_name.lower() not in members_lower:
                     external.add(neighbor_name)
 
         if not external:
