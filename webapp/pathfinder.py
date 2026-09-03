@@ -2374,8 +2374,7 @@ QA_BATCH_SIZE = 5  # bound cost/time per tick
 def _qa_classify(question: str, group_names: list) -> Optional[dict]:
     """Call 1. Returns None on any failure (no API key, network error, bad
     JSON) -- caller treats that the same as UNANSWERABLE."""
-    from mentioned_with_fallback import _get_anthropic_key
-    api_key = _get_anthropic_key()
+    api_key = mentioned_with_fallback._get_anthropic_key()
     if not api_key:
         return None
     try:
@@ -2532,8 +2531,7 @@ def _qa_phrase(fact: dict, style_anchor_facts: list) -> Optional[str]:
     sentences as a style anchor. Returns None on any failure -- caller falls
     back to a plain, ungenerated sentence built from the fact dict directly
     (see _qa_process_one()), so an LLM outage never blocks an answer."""
-    from mentioned_with_fallback import _get_anthropic_key
-    api_key = _get_anthropic_key()
+    api_key = mentioned_with_fallback._get_anthropic_key()
     if not api_key:
         return None
     try:
@@ -2600,8 +2598,7 @@ async def _qa_process_one(item: dict, conn):
     answered = False
     if classified and classified.get("template") != "UNANSWERABLE":
         cache_conn = db.connect(str(DATA_DIR / "mentioned_with_cache.db"))
-        from mentioned_with_fallback import _check_and_increment_spend_cap
-        under_cap = _check_and_increment_spend_cap(cache_conn, QA_MONTHLY_CALL_CAP, period_prefix="qa:")
+        under_cap = mentioned_with_fallback._check_and_increment_spend_cap(cache_conn, QA_MONTHLY_CALL_CAP, period_prefix="qa:")
         cache_conn.close()
         fact = await loop.run_in_executor(None, _qa_compute, classified)
         if fact and under_cap:
