@@ -172,6 +172,75 @@ def fetch_full_obituary(link: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Newspaper-platform fetch (Seattle Times / Star Tribune, etc.)
+# ---------------------------------------------------------------------------
+# A SECOND, deliberately different source from Dignity Memorial: real
+# newspaper obituary sections, editorially/economically pre-filtered for
+# significance (staff-written notable-death pieces, or paid placements
+# families chose to pay for) rather than indexing every funeral regardless
+# of prominence. robots.txt checked live 2026-09-03 -- most major-metro
+# papers (Chicago Tribune, Houston Chronicle, Boston Globe, LA Times,
+# Dallas Morning News, Miami Herald, Tampa Bay Times, confirmed directly)
+# route through Legacy.com, already ruled out. Seattle Times and the
+# Minneapolis Star Tribune share a different, genuinely permissive vendor
+# platform (identical robots.txt template on both -- only search/admin/
+# edit/create/claim paths disallowed, not individual obituary pages).
+# Different tech stack from Dignity Memorial too: the obituary text is
+# server-rendered directly into plain HTML (a stable `id="obituaryDescription"`
+# div), not a __NEXT_DATA__ JSON blob -- so this needs its own fetch/parse
+# function, but feeds into the SAME extract_family_links()/extract_org_links()
+# below, which operate on raw text regardless of where it came from.
+#
+# No sitemap declared in robots.txt for this platform, and its own search
+# endpoint is explicitly disallowed -- individual obituary URLs for a
+# broad-crawl sample are sourced via an independent external search engine
+# (WebSearch, site:-scoped) rather than the site's own disallowed search,
+# then only the allowed individual pages are fetched. Same reasoning
+# already applied to Dignity Memorial's site:-scoped searches earlier in
+# this investigation.
+_OBIT_DESC_RE = re.compile(
+    r'<div id="obituaryDescription"[^>]*>\s*<p>(.*?)</p>\s*</div>',
+    re.DOTALL,
+)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(fragment: str) -> str:
+    text = _HTML_TAG_RE.sub(" ", fragment)
+    text = re.sub(r"&#x27;|&#39;", "'", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&nbsp;", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def fetch_newspaper_obituary(url: str) -> Optional[dict]:
+    """Fetch one individual obituary page from the Seattle Times/Star
+    Tribune-style platform. Returns {"text", "name"} or None. No structured
+    Subject/birth/death fields available the way Dignity Memorial's JSON
+    has them -- `name` is parsed from the <title> tag ("X Obituary | YYYY -
+    YYYY | Seattle Times"), best-effort."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        if r.status_code != 200:
+            return None
+    except requests.RequestException:
+        return None
+
+    m = _OBIT_DESC_RE.search(r.text)
+    if not m:
+        return None
+    text = _strip_html(m.group(1))
+    if not text:
+        return None
+
+    name = None
+    title_m = re.search(r"<title>([^<]+?)\s+Obituary\s*\|", r.text)
+    if title_m:
+        name = title_m.group(1).strip()
+    return {"text": text, "name": name}
+
+
+# ---------------------------------------------------------------------------
 # Family relationship extraction
 # ---------------------------------------------------------------------------
 
@@ -188,11 +257,13 @@ _REL_LABELS = [
     # former spouse
     "former wife", "former husband", "former spouse", "ex-wife", "ex-husband",
     # core + plurals
+    "great grandchildren", "great-grandchildren", "great grandchild",
     "grandchildren", "grandchild", "grandson", "grandsons",
     "granddaughter", "granddaughters",
     "wife", "husband", "daughters", "daughter", "sons", "son",
-    "sisters", "sister", "brothers", "brother",
+    "children", "sisters", "sister", "brothers", "brother",
     "mother", "father", "parents", "siblings", "sibling",
+    "nephews", "nephew", "nieces", "niece",
 ]
 _LABEL_ALTERNATION = "|".join(sorted(_REL_LABELS, key=len, reverse=True))
 _LABEL_FINDITER = re.compile(
@@ -276,18 +347,38 @@ def extract_family_links(obituary_text: str) -> list[dict]:
     """Returns [{"relation_type": "SPOUSE"|"FAMILY", "relative_name": ...,
     "role": "wife"|"son"|..., "predeceased": bool}, ...]. Dedupes on
     (relative_name.lower(), predeceased) -- some obituaries mention the same
-    relative in more than one "survived by" sentence."""
+    relative in more than one "survived by" sentence.
+
+    Known structural limitation, not fixed here: a flat "label near name"
+    scan can't tell "his wife Kirsten" meaning a previously-mentioned SON's
+    wife from "her husband" meaning the deceased's own spouse -- both just
+    look like a bare wife/husband label. Confirmed via a real test run
+    (Mary Stumph's sons' wives Kirsten/Mary got flagged as SPOUSE of Mary
+    Stumph herself). Partial mitigation: only the label instance BEFORE any
+    child-generation label (son/daughter/children) appears in the same
+    clause is trusted as SPOUSE -- a wife/husband label after one is almost
+    always a nested in-law, downgraded to generic FAMILY instead. This
+    doesn't recover the correct relationship (Gregory's wife is still not
+    linked to Gregory), it only stops mislabeling that person as the
+    deceased's own spouse -- a real relationship graph parse would be
+    needed to do better, out of scope for this slice.
+    """
     links = []
     seen = set()
+    _CHILD_GEN_LABELS = {"son", "sons", "daughter", "daughters", "children"}
 
     def _add(clause, predeceased):
+        seen_child_gen_label = False
         for role, name in _extract_clause_people(clause):
             key = (name.lower(), predeceased)
+            is_spouse = role in _SPOUSE_LABELS and not seen_child_gen_label
+            if role in _CHILD_GEN_LABELS:
+                seen_child_gen_label = True
             if key in seen:
                 continue
             seen.add(key)
             links.append({
-                "relation_type": "SPOUSE" if role in _SPOUSE_LABELS else "FAMILY",
+                "relation_type": "SPOUSE" if is_spouse else "FAMILY",
                 "relative_name": name, "role": role, "predeceased": predeceased,
             })
 
