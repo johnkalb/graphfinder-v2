@@ -3100,6 +3100,150 @@ async def get_service_metrics():
         logger.exception("service/metrics failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "failed to load metrics (see server logs)"})
 
+def _parse_db_timestamp(value):
+    """ops_metrics.db's `timestamp` column comes back as a plain string in
+    SQLite mode but a native datetime.datetime in Postgres mode
+    (RealDictCursor's default) -- handle both rather than assume one, unlike
+    the existing datetime.fromisoformat(x) call a few routes up this file,
+    which would raise TypeError on a real datetime object."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(value))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _get_analytics_summary(recent_sample_limit: int = 5000):
+    """Anonymous visitor-tracking summary (see the session-cookie + request
+    logging in the top-of-file middleware). Total counts are fast SQL
+    aggregates regardless of table size; the top-paths/recent-activity
+    breakdown works from a bounded sample of the most recent events (their
+    `metadata` is a JSON string parsed here in Python -- deliberately not a
+    DB-side JSON extraction, since that syntax differs between SQLite and
+    Postgres and this table is queried from both locally and in production)."""
+    db_path = DATA_DIR / "ops_metrics.db"
+    conn = db.connect(str(db_path))
+    c = conn.cursor()
+
+    c.execute("SELECT COUNT(*) AS n FROM anonymous_events")
+    total_events = dict(c.fetchone())["n"]
+    c.execute("SELECT COUNT(DISTINCT session_id) AS n FROM anonymous_events")
+    unique_sessions = dict(c.fetchone())["n"]
+    c.execute("SELECT MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts FROM anonymous_events")
+    row = dict(c.fetchone())
+    first_event = _parse_db_timestamp(row["first_ts"])
+    last_event = _parse_db_timestamp(row["last_ts"])
+
+    c.execute("SELECT session_id, event_type, metadata, timestamp FROM anonymous_events "
+              "ORDER BY id DESC LIMIT ?", (recent_sample_limit,))
+    recent = [dict(r) for r in c.fetchall()]
+    conn.close()
+
+    now = datetime.now(timezone.utc)
+    path_counts: dict = {}
+    sessions_24h = set()
+    sessions_7d = set()
+    events_24h = 0
+    for r in recent:
+        ts = _parse_db_timestamp(r["timestamp"])
+        try:
+            meta = json.loads(r["metadata"]) if r["metadata"] else {}
+        except (ValueError, TypeError):
+            meta = {}
+        path = meta.get("path", "(unknown)")
+        path_counts[path] = path_counts.get(path, 0) + 1
+        if ts is not None:
+            age = now - ts
+            if age.total_seconds() <= 86400:
+                events_24h += 1
+                sessions_24h.add(r["session_id"])
+            if age.total_seconds() <= 7 * 86400:
+                sessions_7d.add(r["session_id"])
+
+    top_paths = sorted(path_counts.items(), key=lambda kv: -kv[1])[:20]
+
+    return {
+        "total_events": total_events,
+        "unique_sessions": unique_sessions,
+        "first_event": first_event.isoformat() if first_event else None,
+        "last_event": last_event.isoformat() if last_event else None,
+        "sample_size": len(recent),
+        "sample_is_full_table": len(recent) < recent_sample_limit,
+        "events_last_24h": events_24h,
+        "unique_sessions_last_24h": len(sessions_24h),
+        "unique_sessions_last_7d": len(sessions_7d),
+        "top_paths": [{"path": p, "count": n} for p, n in top_paths],
+    }
+
+
+@app.get("/api/analytics")
+async def get_analytics():
+    try:
+        return {"success": True, "analytics": _get_analytics_summary()}
+    except Exception:
+        logger.exception("analytics summary failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "failed to load analytics (see server logs)"})
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_page():
+    try:
+        a = _get_analytics_summary()
+    except Exception:
+        logger.exception("analytics page failed")
+        return HTMLResponse("<h1>Analytics unavailable</h1><p>See server logs.</p>", status_code=500)
+
+    rows_html = "".join(
+        f"<tr><td>{html.escape(p['path'])}</td><td>{p['count']:,}</td></tr>" for p in a["top_paths"]
+    ) or "<tr><td colspan='2'>No data yet</td></tr>"
+    sample_note = (
+        "" if a["sample_is_full_table"]
+        else f"<p class='sub'>Path breakdown is based on the {a['sample_size']:,} most recent events, not the full history.</p>"
+    )
+    html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Traffic Analytics</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          background: #0d1117; color: #e6edf3; padding: 2rem 1rem; }}
+  .container {{ max-width: 800px; margin: 0 auto; }}
+  h1 {{ font-size: 1.6rem; color: #58a6ff; margin-bottom: 0.25rem; }}
+  p.sub {{ color: #8b949e; font-size: 0.85rem; margin-bottom: 1.5rem; }}
+  .stat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                gap: 0.75rem; margin-bottom: 2rem; }}
+  .stat {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; }}
+  .stat .n {{ font-size: 1.6rem; font-weight: 600; color: #58a6ff; }}
+  .stat .label {{ color: #8b949e; font-size: 0.8rem; margin-top: 0.25rem; }}
+  table {{ width: 100%; border-collapse: collapse; background: #161b22; border: 1px solid #30363d;
+           border-radius: 8px; overflow: hidden; }}
+  th, td {{ text-align: left; padding: 0.5rem 0.9rem; border-bottom: 1px solid #21262d; font-size: 0.88rem; }}
+  th {{ color: #8b949e; font-weight: 600; background: #1c2128; }}
+  td:last-child, th:last-child {{ text-align: right; }}
+  tr:last-child td {{ border-bottom: none; }}
+</style></head>
+<body><div class="container">
+  <h1>📊 Traffic Analytics</h1>
+  <p class="sub">Anonymous session-cookie tracking, captured since {html.escape(a['first_event'] or 'n/a')}. Last event: {html.escape(a['last_event'] or 'n/a')}.</p>
+  <div class="stat-grid">
+    <div class="stat"><div class="n">{a['total_events']:,}</div><div class="label">Total events (all time)</div></div>
+    <div class="stat"><div class="n">{a['unique_sessions']:,}</div><div class="label">Unique sessions (all time)</div></div>
+    <div class="stat"><div class="n">{a['events_last_24h']:,}</div><div class="label">Events, last 24h</div></div>
+    <div class="stat"><div class="n">{a['unique_sessions_last_24h']:,}</div><div class="label">Unique sessions, last 24h</div></div>
+    <div class="stat"><div class="n">{a['unique_sessions_last_7d']:,}</div><div class="label">Unique sessions, last 7d</div></div>
+  </div>
+  <h2 style="font-size:1.1rem;color:#c9d1d9;margin-bottom:0.5rem;">Top paths</h2>
+  {sample_note}
+  <table><thead><tr><th>Path</th><th>Requests</th></tr></thead><tbody>{rows_html}</tbody></table>
+</div></body></html>"""
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(HTML_TEMPLATE, headers={"Cache-Control": "no-cache"})
