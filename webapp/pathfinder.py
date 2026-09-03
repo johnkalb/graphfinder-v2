@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import networkx as nx
 import igraph as ig
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, ConfigDict
 import base64
 import pysodium
@@ -2808,20 +2808,27 @@ async def add_me(req: AddMeRequest, request: Request):
         return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
 
 @app.get("/api/service/queue")
-async def get_service_queue(status: Optional[str] = "new", limit: int = 25, sort: str = "created_at"):
+async def get_service_queue(status: Optional[str] = "new", item_type: Optional[str] = None,
+                             limit: int = 25, sort: str = "created_at"):
     try:
         db_path = _test_department_db_path()
         conn = db.connect(db_path)
         c = conn.cursor()
-        
+
         if sort not in {"created_at", "priority", "id"}:
             sort = "created_at"
-            
+
+        clauses, params = [], []
         if status:
-            c.execute(f"SELECT * FROM service_items WHERE status = ? ORDER BY {sort} DESC LIMIT ?", (status, limit))
-        else:
-            c.execute(f"SELECT * FROM service_items ORDER BY {sort} DESC LIMIT ?", (limit,))
-            
+            clauses.append("status = ?")
+            params.append(status)
+        if item_type:
+            clauses.append("item_type = ?")
+            params.append(item_type)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        params.append(limit)
+        c.execute(f"SELECT * FROM service_items {where}ORDER BY {sort} DESC LIMIT ?", params)
+
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
         return {"success": True, "queue": rows}
@@ -3189,46 +3196,40 @@ async def get_analytics():
         return JSONResponse(status_code=500, content={"success": False, "error": "failed to load analytics (see server logs)"})
 
 
-@app.get("/analytics", response_class=HTMLResponse)
-async def analytics_page():
+@app.get("/analytics")
+async def analytics_page_redirect():
+    """Analytics got merged into the unified /admin dashboard (traffic +
+    service queue in one place) -- this old URL just forwards there now."""
+    return RedirectResponse(url="/admin")
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """Unified admin dashboard: traffic analytics + the service queue
+    (suggestions/disputes/Q&A questions/legal-review items) in one page,
+    merging what used to be the separate /analytics page and the raw
+    /api/service/queue JSON endpoint. Gated (unlike the old /analytics,
+    which was public) since the queue surfaces real submitter emails and
+    question text, not just aggregate path counts."""
+    denied = _require_admin(request)
+    if denied:
+        return HTMLResponse("<h1>403</h1><p>Admin authorization required -- log in as an allowlisted admin.</p>",
+                             status_code=403)
     try:
         a = _get_analytics_summary()
     except Exception:
-        logger.exception("analytics page failed")
-        return HTMLResponse("<h1>Analytics unavailable</h1><p>See server logs.</p>", status_code=500)
+        logger.exception("admin page: analytics summary failed")
+        a = None
 
-    rows_html = "".join(
-        f"<tr><td>{html.escape(p['path'])}</td><td>{p['count']:,}</td></tr>" for p in a["top_paths"]
-    ) or "<tr><td colspan='2'>No data yet</td></tr>"
-    sample_note = (
-        "" if a["sample_is_full_table"]
-        else f"<p class='sub'>Path breakdown is based on the {a['sample_size']:,} most recent events, not the full history.</p>"
-    )
-    page_html = f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Traffic Analytics</title>
-<style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          background: #0d1117; color: #e6edf3; padding: 2rem 1rem; }}
-  .container {{ max-width: 800px; margin: 0 auto; }}
-  h1 {{ font-size: 1.6rem; color: #58a6ff; margin-bottom: 0.25rem; }}
-  p.sub {{ color: #8b949e; font-size: 0.85rem; margin-bottom: 1.5rem; }}
-  .stat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-                gap: 0.75rem; margin-bottom: 2rem; }}
-  .stat {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; }}
-  .stat .n {{ font-size: 1.6rem; font-weight: 600; color: #58a6ff; }}
-  .stat .label {{ color: #8b949e; font-size: 0.8rem; margin-top: 0.25rem; }}
-  table {{ width: 100%; border-collapse: collapse; background: #161b22; border: 1px solid #30363d;
-           border-radius: 8px; overflow: hidden; }}
-  th, td {{ text-align: left; padding: 0.5rem 0.9rem; border-bottom: 1px solid #21262d; font-size: 0.88rem; }}
-  th {{ color: #8b949e; font-weight: 600; background: #1c2128; }}
-  td:last-child, th:last-child {{ text-align: right; }}
-  tr:last-child td {{ border-bottom: none; }}
-</style></head>
-<body><div class="container">
-  <h1>📊 Traffic Analytics</h1>
+    if a:
+        rows_html = "".join(
+            f"<tr><td>{html.escape(p['path'])}</td><td>{p['count']:,}</td></tr>" for p in a["top_paths"]
+        ) or "<tr><td colspan='2'>No data yet</td></tr>"
+        sample_note = (
+            "" if a["sample_is_full_table"]
+            else f"<p class='sub'>Path breakdown is based on the {a['sample_size']:,} most recent events, not the full history.</p>"
+        )
+        analytics_html = f"""
   <p class="sub">Anonymous session-cookie tracking, captured since {html.escape(a['first_event'] or 'n/a')}. Last event: {html.escape(a['last_event'] or 'n/a')}.</p>
   <div class="stat-grid">
     <div class="stat"><div class="n">{a['total_events']:,}</div><div class="label">Total events (all time)</div></div>
@@ -3237,10 +3238,168 @@ async def analytics_page():
     <div class="stat"><div class="n">{a['unique_sessions_last_24h']:,}</div><div class="label">Unique sessions, last 24h</div></div>
     <div class="stat"><div class="n">{a['unique_sessions_last_7d']:,}</div><div class="label">Unique sessions, last 7d</div></div>
   </div>
-  <h2 style="font-size:1.1rem;color:#c9d1d9;margin-bottom:0.5rem;">Top paths</h2>
+  <h3>Top paths</h3>
   {sample_note}
-  <table><thead><tr><th>Path</th><th>Requests</th></tr></thead><tbody>{rows_html}</tbody></table>
-</div></body></html>"""
+  <table><thead><tr><th>Path</th><th>Requests</th></tr></thead><tbody>{rows_html}</tbody></table>"""
+    else:
+        analytics_html = "<p class='sub'>Analytics unavailable -- see server logs.</p>"
+
+    page_html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          background: #0d1117; color: #e6edf3; padding: 2rem 1rem; }}
+  .container {{ max-width: 1100px; margin: 0 auto; }}
+  h1 {{ font-size: 1.6rem; color: #58a6ff; margin-bottom: 0.25rem; }}
+  h2 {{ font-size: 1.2rem; color: #c9d1d9; margin: 2.5rem 0 0.75rem; }}
+  h3 {{ font-size: 1.1rem; color: #c9d1d9; margin: 1.5rem 0 0.5rem; }}
+  p.sub {{ color: #8b949e; font-size: 0.85rem; margin-bottom: 1.5rem; }}
+  .stat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                gap: 0.75rem; margin-bottom: 1rem; }}
+  .stat {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; }}
+  .stat .n {{ font-size: 1.6rem; font-weight: 600; color: #58a6ff; }}
+  .stat .label {{ color: #8b949e; font-size: 0.8rem; margin-top: 0.25rem; }}
+  table {{ width: 100%; border-collapse: collapse; background: #161b22; border: 1px solid #30363d;
+           border-radius: 8px; overflow: hidden; }}
+  th, td {{ text-align: left; padding: 0.5rem 0.9rem; border-bottom: 1px solid #21262d; font-size: 0.85rem;
+            vertical-align: top; }}
+  th {{ color: #8b949e; font-weight: 600; background: #1c2128; }}
+  tr:last-child td {{ border-bottom: none; }}
+  .truncate {{ max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .controls {{ display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }}
+  select, button, input[type=text] {{ background: #161b22; color: #e6edf3; border: 1px solid #30363d;
+            border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; }}
+  button {{ cursor: pointer; }}
+  button:hover {{ border-color: #58a6ff; }}
+  button.danger:hover {{ border-color: #f85149; }}
+  .note-input {{ width: 130px; }}
+  .actions {{ display: flex; gap: 0.3rem; flex-wrap: wrap; }}
+  .badge {{ display: inline-block; padding: 0.1rem 0.5rem; border-radius: 10px; font-size: 0.75rem; }}
+  .badge.new, .badge.needs_review {{ background: #3d2d00; color: #d29922; }}
+  .badge.approved, .badge.resolved {{ background: #0d3320; color: #3fb950; }}
+  .badge.rejected {{ background: #3d0d0d; color: #f85149; }}
+  .badge.archived {{ background: #21262d; color: #8b949e; }}
+  #queue-status {{ font-size: 0.8rem; color: #8b949e; margin-left: 0.5rem; }}
+</style></head>
+<body><div class="container">
+  <h1>🛠️ Admin</h1>
+  <p class="sub">Traffic analytics + the service queue (suggestions, disputes, Q&amp;A questions, legal review), in one place.</p>
+
+  <h2>📊 Traffic Analytics</h2>
+  {analytics_html}
+
+  <h2>📋 Service Queue</h2>
+  <div class="controls">
+    <label>Status: <select id="q-status" onchange="loadQueue()">
+      <option value="new" selected>new</option>
+      <option value="needs_review">needs_review</option>
+      <option value="approved">approved</option>
+      <option value="rejected">rejected</option>
+      <option value="resolved">resolved</option>
+      <option value="archived">archived</option>
+      <option value="">(any)</option>
+    </select></label>
+    <label>Type: <select id="q-type" onchange="loadQueue()">
+      <option value="" selected>(any)</option>
+      <option value="suggestion">suggestion</option>
+      <option value="dispute">dispute</option>
+      <option value="qa_question">qa_question</option>
+      <option value="legal_review">legal_review</option>
+    </select></label>
+    <label>Limit: <select id="q-limit" onchange="loadQueue()">
+      <option value="25">25</option>
+      <option value="50" selected>50</option>
+      <option value="100">100</option>
+    </select></label>
+    <button onclick="loadQueue()">Refresh</button>
+    <span id="queue-status"></span>
+  </div>
+  <div style="overflow-x:auto;">
+  <table><thead><tr>
+    <th>ID</th><th>Type</th><th>Status</th><th>Subject / body</th><th>Submitter</th><th>Created</th><th>Resolution note</th><th>Actions</th>
+  </tr></thead><tbody id="queue-body"><tr><td colspan="8">Loading...</td></tr></tbody></table>
+  </div>
+</div>
+<script>
+function esc(s) {{
+  const d = document.createElement('div');
+  d.textContent = (s === null || s === undefined) ? '' : String(s);
+  return d.innerHTML;
+}}
+async function loadQueue() {{
+  const status = document.getElementById('q-status').value;
+  const type = document.getElementById('q-type').value;
+  const limit = document.getElementById('q-limit').value;
+  const statusEl = document.getElementById('queue-status');
+  const body = document.getElementById('queue-body');
+  statusEl.textContent = 'loading...';
+  const params = new URLSearchParams({{limit}});
+  if (status) params.set('status', status);
+  if (type) params.set('item_type', type);
+  try {{
+    const res = await fetch('/api/service/queue?' + params.toString(), {{credentials: 'include'}});
+    const d = await res.json();
+    if (!d.success) {{ statusEl.textContent = 'error: ' + (d.error || 'failed'); return; }}
+    const items = d.queue || [];
+    statusEl.textContent = items.length + ' item(s)';
+    if (!items.length) {{
+      body.innerHTML = '<tr><td colspan="8">No items match this filter.</td></tr>';
+      return;
+    }}
+    body.innerHTML = items.map(renderRow).join('');
+  }} catch (e) {{
+    statusEl.textContent = 'error: ' + e;
+  }}
+}}
+function renderRow(item) {{
+  const bodyText = (item.subject || '') + (item.body ? (' — ' + item.body) : '');
+  const canReview = ['new', 'needs_review'].includes(item.status);
+  const actions = canReview ? `
+    <div class="actions">
+      <input class="note-input" type="text" placeholder="note (optional)" id="note-${{item.id}}">
+      <button onclick="doReview(${{item.id}}, 'approved')">Approve</button>
+      <button class="danger" onclick="doReview(${{item.id}}, 'rejected')">Reject</button>
+      <button onclick="doResolve(${{item.id}})">Resolve</button>
+      <button onclick="doNotify(${{item.id}})">Notify</button>
+    </div>` : `<div class="actions"><button onclick="doNotify(${{item.id}})">Notify</button></div>`;
+  return `<tr>
+    <td>${{item.id}}</td>
+    <td>${{esc(item.item_type)}}</td>
+    <td><span class="badge ${{esc(item.status)}}">${{esc(item.status)}}</span></td>
+    <td class="truncate" title="${{esc(bodyText)}}">${{esc(bodyText)}}</td>
+    <td>${{esc(item.submitter_email || '')}}</td>
+    <td>${{esc((item.created_at || '').replace('T', ' ').slice(0, 16))}}</td>
+    <td class="truncate" title="${{esc(item.resolution_note)}}">${{esc(item.resolution_note || '')}}</td>
+    <td>${{actions}}</td>
+  </tr>`;
+}}
+async function doReview(id, status) {{
+  const note = document.getElementById('note-' + id)?.value || null;
+  await postJson(`/api/service/items/${{id}}/review`, {{status, note}});
+  loadQueue();
+}}
+async function doResolve(id) {{
+  const note = document.getElementById('note-' + id)?.value || null;
+  await postJson(`/api/service/items/${{id}}/resolve`, {{resolution_note: note}});
+  loadQueue();
+}}
+async function doNotify(id) {{
+  await postJson(`/api/service/notify/${{id}}`, {{}});
+  loadQueue();
+}}
+async function postJson(url, body) {{
+  const res = await fetch(url, {{method: 'POST', credentials: 'include',
+    headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(body)}});
+  const d = await res.json();
+  if (!d.success) document.getElementById('queue-status').textContent = 'error: ' + (d.error || 'request failed');
+  return d;
+}}
+loadQueue();
+</script>
+</body></html>"""
     return HTMLResponse(page_html, headers={"Cache-Control": "no-cache"})
 
 
