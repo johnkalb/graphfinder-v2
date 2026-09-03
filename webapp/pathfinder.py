@@ -2296,43 +2296,6 @@ async def trigger_legal_review(req: LegalTriggerRequest):
         logger.exception("legal trigger-review failed for %r", req.source_url)
         return JSONResponse(status_code=500, content={"error": "legal review check failed (see server logs)"})
 
-@app.post("/api/debug/qa-email-retry/{item_id}")
-async def debug_qa_email_retry(item_id: int, request: Request, count: int = 1):
-    """TEMPORARY -- re-diagnosing the intermittent qa-worker email-delivery
-    gap (item 74 emailed fine, item 75 silently didn't, same code path, same
-    day). Re-sends a resolved qa_question's real answer email `count` times
-    back to back (off the event loop via run_in_executor, matching the real
-    fix), returning each attempt's raw result + timing -- looking for a
-    rate-limit/timing pattern the single-send debug endpoint used on
-    2026-09-03 couldn't surface. Remove once the cause is confirmed or ruled
-    out enough to stop chasing."""
-    denied = _require_admin(request)
-    if denied:
-        return denied
-    db_path = _test_department_db_path()
-    conn = db.connect(db_path)
-    row = conn.execute("SELECT * FROM service_items WHERE id = ?", (item_id,)).fetchone()
-    conn.close()
-    if not row:
-        return JSONResponse(status_code=404, content={"success": False, "error": "item not found"})
-    item = dict(row)
-    if not item.get("submitter_email"):
-        return JSONResponse(status_code=400, content={"success": False, "error": "item has no submitter_email"})
-
-    import asyncio, time
-    subject = "Your sixdegrees.net question has an answer"
-    html_body = f"<p><strong>Your question:</strong> {item['body']}</p><p><strong>Answer:</strong> {item['resolution_note']}</p>"
-    loop = asyncio.get_event_loop()
-    attempts = []
-    for i in range(max(1, min(count, 5))):
-        t0 = time.time()
-        try:
-            result = await loop.run_in_executor(None, send_email, item["submitter_email"], subject, html_body)
-            attempts.append({"attempt": i + 1, "elapsed_s": round(time.time() - t0, 2), "result": result})
-        except Exception as e:
-            attempts.append({"attempt": i + 1, "elapsed_s": round(time.time() - t0, 2), "exception": repr(e)})
-    return {"item_id": item_id, "submitter_email": item["submitter_email"], "attempts": attempts}
-
 class SuggestionRequest(BaseModel):
     subject: str = Field(..., min_length=2, max_length=100)
     predicate: str = Field(..., min_length=2, max_length=50)
