@@ -2630,7 +2630,15 @@ async def _qa_process_one(item: dict, conn):
         subject = "Your sixdegrees.net question has an answer" if answered else "About your sixdegrees.net question"
         html_body = f"<p><strong>Your question:</strong> {question}</p><p><strong>Answer:</strong> {resolution_note}</p>"
         try:
-            send_email(submitter_email, subject, html_body)
+            # send_email() does NOT raise on failure (e.g. missing SMTP
+            # creds) -- it returns {"success": False, "error": ...}. Confirmed
+            # 2026-09-02: the try/except alone silently missed this for the
+            # first real test question (DB update + ticker append both
+            # succeeded, no email ever arrived, no exception logged either).
+            result = send_email(submitter_email, subject, html_body)
+            if not result.get("success"):
+                logger.warning("qa-worker: email send returned failure for item_id=%s: %s",
+                                item["id"], result.get("error"))
         except Exception:
             logger.exception("qa-worker: email send failed for item_id=%s", item["id"])
 
@@ -2678,36 +2686,6 @@ async def _qa_worker_loop():
         await _qa_worker_tick()
         await asyncio.sleep(QA_WORKER_INTERVAL_SECONDS)
 
-
-@app.get("/api/internal/qa-debug-tick")
-async def qa_debug_tick():
-    """TEMPORARY diagnostic endpoint -- 2026-09-02, remove once the
-    qa_question queue is confirmed processing normally in production.
-    _qa_worker_tick() deliberately swallows exceptions (logger.exception,
-    server-side only -- this session has no way to read those logs) so the
-    background loop survives one bad item; this mirrors the same query +
-    processing but returns the real exception/traceback as JSON so a stuck
-    item can actually be diagnosed instead of guessed at."""
-    import traceback
-    try:
-        db_path = _test_department_db_path()
-        conn = db.connect(db_path)
-        rows = conn.execute(
-            "SELECT * FROM service_items WHERE item_type='qa_question' AND status='new' "
-            "ORDER BY created_at ASC LIMIT ?", (QA_BATCH_SIZE,)
-        ).fetchall()
-        results = []
-        for row in rows:
-            item = dict(row)
-            try:
-                await _qa_process_one(item, conn)
-                results.append({"id": item["id"], "success": True})
-            except Exception as e:
-                results.append({"id": item["id"], "success": False, "error": str(e), "traceback": traceback.format_exc()})
-        conn.close()
-        return {"success": True, "row_count": len(rows), "results": results}
-    except Exception as e:
-        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.post("/api/suggest-link")
