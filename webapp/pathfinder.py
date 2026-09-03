@@ -2296,31 +2296,6 @@ async def trigger_legal_review(req: LegalTriggerRequest):
         logger.exception("legal trigger-review failed for %r", req.source_url)
         return JSONResponse(status_code=500, content={"error": "legal review check failed (see server logs)"})
 
-@app.post("/api/debug/test-email")
-async def debug_test_email(request: Request, to: Optional[str] = None):
-    """TEMPORARY -- re-diagnosing why the Q&A worker's answer email never
-    arrived for the 2026-09-02 test question, even though this exact same
-    send_email() was confirmed working end-to-end via Zoho SMTP on
-    2026-08-12 (see git history for that debug round). Calls send_email()
-    directly and returns its raw result, since qa-worker's failure path only
-    logs a warning server-side with no way to read it from here. `to`
-    defaults to the caller's own admin email if not given. Remove once the
-    real cause is confirmed."""
-    denied = _require_admin(request)
-    if denied:
-        return denied
-    target = to or _request_user_email(request)
-    result = send_email(target, "[sixdegrees] SMTP test", "<p>Test email from debug_test_email.</p>", "Test email.")
-    return {
-        "target": target,
-        "smtp_host": os.environ.get("SMTP_HOST", "smtp.gmail.com"),
-        "smtp_port": os.environ.get("SMTP_PORT", "587"),
-        "smtp_user_configured": bool(os.environ.get("SMTP_USER")),
-        "smtp_pass_configured": bool(os.environ.get("SMTP_PASS")),
-        "from_addr": os.environ.get("TESTER_INVITE_FROM", "tester-support@sixdegrees.net"),
-        "result": result,
-    }
-
 class SuggestionRequest(BaseModel):
     subject: str = Field(..., min_length=2, max_length=100)
     predicate: str = Field(..., min_length=2, max_length=50)
