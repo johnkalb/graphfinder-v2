@@ -2682,6 +2682,37 @@ async def _qa_worker_loop():
         await asyncio.sleep(QA_WORKER_INTERVAL_SECONDS)
 
 
+@app.get("/api/internal/qa-debug-tick")
+async def qa_debug_tick():
+    """TEMPORARY diagnostic endpoint -- 2026-09-02, remove once the
+    qa_question queue is confirmed processing normally in production.
+    _qa_worker_tick() deliberately swallows exceptions (logger.exception,
+    server-side only -- this session has no way to read those logs) so the
+    background loop survives one bad item; this mirrors the same query +
+    processing but returns the real exception/traceback as JSON so a stuck
+    item can actually be diagnosed instead of guessed at."""
+    import traceback
+    try:
+        db_path = _test_department_db_path()
+        conn = db.connect(db_path)
+        rows = conn.execute(
+            "SELECT * FROM service_items WHERE item_type='qa_question' AND status='new' "
+            "ORDER BY created_at ASC LIMIT ?", (QA_BATCH_SIZE,)
+        ).fetchall()
+        results = []
+        for row in rows:
+            item = dict(row)
+            try:
+                await _qa_process_one(item, conn)
+                results.append({"id": item["id"], "success": True})
+            except Exception as e:
+                results.append({"id": item["id"], "success": False, "error": str(e), "traceback": traceback.format_exc()})
+        conn.close()
+        return {"success": True, "row_count": len(rows), "results": results}
+    except Exception as e:
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
 @app.post("/api/suggest-link")
 async def suggest_link(req: SuggestionRequest, request: Request):
     try:
