@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 SEARCH_INDEX = "webapp/data/search_index.json.gz"
 GROUP_RANKINGS = "webapp/data/group_rankings.json.gz"
+CENTRALITY_EXTRAS = "webapp/data/centrality_extras.json.gz"
 OUT = "webapp/data/crawlie_facts.json.gz"
 
 MIN_DEGREE = 15          # exclude near-isolated stub nodes -- "surprising" divergence there is just noise
@@ -64,6 +65,19 @@ def load_group_rankings():
             return json.load(f)
     except FileNotFoundError:
         return []
+
+
+def load_centrality_extras():
+    # build_centrality_extras.py is allowed to fail without aborting the
+    # pipeline (see its own module docstring -- it's a ~20min approximate
+    # computation, strictly less load-bearing than PageRank itself), so this
+    # file may legitimately not exist yet on a given run. Same
+    # graceful-absence handling as load_group_rankings().
+    try:
+        with gzip.open(CENTRALITY_EXTRAS, "rt", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"top_degree": [], "bridges": []}
 
 
 def surprising_rank_facts(index):
@@ -180,11 +194,49 @@ def top_pagerank_facts(index):
     return facts
 
 
+def top_degree_facts(extras):
+    # Raw connection count -- a genuinely different measure from PageRank
+    # ("who you know" vs. "how many you know"), already computed and
+    # person-filtered by build_centrality_extras.py; this function just
+    # phrases it.
+    facts = []
+    top = extras.get("top_degree", [])
+    if not top:
+        return facts
+    facts.append(
+        f"{top[0]['name']} has the most direct contacts in the entire network: {top[0]['degree']:,}."
+    )
+    if len(top) > 1:
+        rest = ", ".join(f"{e['name']} ({e['degree']:,})" for e in top[1:10])
+        facts.append(f"By raw connection count, the top 10 are led by {top[0]['name']}, then {rest}.")
+    return facts
+
+
+def bridge_facts(extras):
+    # "Bridges" = high-betweenness people -- who sits on the most shortest
+    # paths between OTHER people, a structural-broker measure distinct from
+    # both PageRank (importance) and degree (popularity). See
+    # build_centrality_extras.py's module docstring for the approximation
+    # this is built on (sampled, unweighted betweenness) and how
+    # community_a/community_b are derived (Louvain partition, each labeled
+    # by its own highest-degree member since a numeric community has no name
+    # of its own).
+    facts = []
+    for b in extras.get("bridges", []):
+        facts.append(
+            f"{b['name']} is one of the network's biggest bridges — connecting the world of "
+            f"{b['community_a']} with the world of {b['community_b']}."
+        )
+    return facts
+
+
 def main():
     index = load_search_index()
     groups = load_group_rankings()
+    extras = load_centrality_extras()
 
-    facts = top_pagerank_facts(index) + group_facts(groups) + surprising_rank_facts(index)
+    facts = (top_pagerank_facts(index) + group_facts(groups) + surprising_rank_facts(index)
+             + top_degree_facts(extras) + bridge_facts(extras))
 
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
