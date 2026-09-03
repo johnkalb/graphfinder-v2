@@ -2663,11 +2663,23 @@ async def _qa_worker_tick():
 async def _qa_worker_loop():
     """Background loop kicked off from startup() -- see module note above
     _qa_classify() for why this runs in-process instead of a separate local
-    script + scheduled task."""
+    script + scheduled task.
+
+    Tick FIRST, then sleep -- deliberately not sleep-then-tick. Confirmed
+    2026-09-02: a real submitted question sat untouched (status='new',
+    reviewed_at=null) for 24+ min in production, well past two 10-min
+    cycles under any reasonable startup-alignment. App Platform apparently
+    doesn't guarantee this process stays continuously warm between requests
+    (this project already has a documented "send a warm-up request after
+    deploy" pattern for exactly that reason) -- a sleep-first loop needs a
+    full uninterrupted 600s of uptime before its very first tick, which a
+    process that gets recycled between requests may never accumulate. A
+    short-lived process still gets one real chance to drain the queue this
+    way, on every cold start."""
     import asyncio
     while True:
-        await asyncio.sleep(QA_WORKER_INTERVAL_SECONDS)
         await _qa_worker_tick()
+        await asyncio.sleep(QA_WORKER_INTERVAL_SECONDS)
 
 
 @app.post("/api/suggest-link")
