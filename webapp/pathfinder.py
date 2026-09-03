@@ -3204,7 +3204,7 @@ async def analytics_page():
         "" if a["sample_is_full_table"]
         else f"<p class='sub'>Path breakdown is based on the {a['sample_size']:,} most recent events, not the full history.</p>"
     )
-    html = f"""<!DOCTYPE html>
+    page_html = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Traffic Analytics</title>
@@ -3241,7 +3241,7 @@ async def analytics_page():
   {sample_note}
   <table><thead><tr><th>Path</th><th>Requests</th></tr></thead><tbody>{rows_html}</tbody></table>
 </div></body></html>"""
-    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(page_html, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/", response_class=HTMLResponse)
