@@ -15,12 +15,51 @@ Pipeline:
   4. Categorize -> dedup -> noisy-OR score
   5. Emit scored edge list
 """
-import sqlite3, json, gzip, os, re, sys
-from collections import defaultdict
+import sqlite3, json, gzip, os, re, sys, unicodedata
+from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
 from relation_categories import categorize
 from link_scoring import score_pair
+
+
+# --- name canonicalization (2026-09-10) -----------------------------------
+# The graph fragments the same person across spelling variants: "Meghan
+# O'Sullivan" / "Meghan OSullivan" were two separate nodes, her board/donation
+# edges attaching to one and stray edges to the other. Root cause: endpoints
+# were matched by bare name.lower() only. This collapses variants that are
+# identical after removing PUNCTUATION and DIACRITICS ONLY -- apostrophes,
+# periods, hyphens, commas, parenthetical nicknames, accents.
+#
+# Deliberately does NOT touch:
+#   * generational suffixes (Jr / Sr / II / III / IV) -- these DISAMBIGUATE.
+#     A measured test merge that stripped them fused five John Jacob Astors
+#     (incl. the Titanic one) and President Benjamin Harrison with the
+#     Declaration signer into single nodes. Suffixes stay.
+#   * middle initials ("John A Smith" vs "John Smith") -- real false-merge
+#     risk without structural corroboration; left for a later, gated pass.
+# So this is a small (~6K nodes, ~1%), zero-judgement-call merge.
+_COMBINING = dict.fromkeys(range(0x300, 0x370))  # combining diacritical marks block
+_CK_KEEP = re.compile(r"[^\w ]|_")
+_CK_WS = re.compile(r"\s+")
+_ck_cache = {}  # ~8M distinct names but ~150M+ rows -> memoize hard
+
+
+def canon_key(name):
+    """Merge key: lowercase, strip diacritics to base latin, drop everything
+    that isn't a letter/digit/space. Non-latin scripts are preserved (\\w is
+    unicode-aware) so they key on themselves rather than collapsing to a
+    degenerate empty string. If the strip leaves <2 chars (pure punctuation),
+    fall back to the raw lowercased form so junk like "-" can't become a
+    merge magnet."""
+    hit = _ck_cache.get(name)
+    if hit is not None:
+        return hit
+    s = unicodedata.normalize("NFKD", name.lower()).translate(_COMBINING)
+    s = _CK_WS.sub(" ", _CK_KEEP.sub("", s)).strip()
+    out = s if len(s) >= 2 else name.lower().strip()
+    _ck_cache[name] = out
+    return out
 
 # Absolute canonical path, NOT the relative "data/pipeline_cache.db" hardlinked
 # copy under this build dir -- that copy shares the main .db file's bytes but
@@ -35,7 +74,7 @@ from link_scoring import score_pair
 # harvester writes through, which is what WAL mode is actually designed to
 # make safe -- see build_group_rankings.py's identical fix, same date.
 DB = os.environ.get("DB_PATH", r"C:\Users\johnk\data\pipeline_cache.db")
-OUT = "webapp/data/graph_scored.json.gz"
+OUT = os.environ.get("SCORED_OUT", "webapp/data/graph_scored.json.gz")
 
 # --- cleanup helpers (from working-v2) ---
 # MENTIONED_WITH (GDELT news co-mention, scored NEWS_COMENTION=0.10) dropped
@@ -76,18 +115,34 @@ def looks_like_person(name):
 conn = sqlite3.connect(DB)
 c = conn.cursor()
 persons = set()
-c.execute("SELECT DISTINCT source_name FROM relationships WHERE source_type='PERSON'")
+# INDEXED BY: on the loaded live DB the planner sometimes ignores the
+# (source_type, source_name) covering index for this DISTINCT and does a
+# scan -- forcing it keeps these two to seconds instead of many minutes.
+c.execute("SELECT DISTINCT source_name FROM relationships INDEXED BY idx_relationships_source_type_name WHERE source_type='PERSON'")
 persons |= {r[0].lower() for r in c.fetchall() if r[0]}
-c.execute("SELECT DISTINCT target_name FROM relationships WHERE target_type='PERSON'")
+c.execute("SELECT DISTINCT target_name FROM relationships INDEXED BY idx_relationships_target_type_name WHERE target_type='PERSON'")
 persons |= {r[0].lower() for r in c.fetchall() if r[0]}
 print(f"Person names: {len(persons)}")
 
-# Gather relations per undirected pair (preserving ALL types)
-pair_rels = defaultdict(set)        # (name_a, name_b) -> set of raw relation strings
-name_canon = {}                     # lowercase -> display name
+# Gather relations per undirected pair (preserving ALL types).
+# Pair keys are canon_key()'d so punctuation/diacritic variants of one person
+# land on ONE node. display_votes[key] tallies the raw display forms seen for
+# that key so the node label can be the most common (and, tie-broken, the
+# richest -- most non-alnum chars, i.e. the one that kept its apostrophes).
+pair_rels = defaultdict(set)        # (key_a, key_b) -> set of raw relation strings
+display_votes = defaultdict(Counter)  # canon_key -> Counter(raw display form -> count)
+def _stream(cur, n=250_000):
+    """Batched fetch -- a plain .fetchall() here materialises ~35 GB of Python
+    string tuples for the ~150M-row table and thrashes on a loaded machine."""
+    while True:
+        b = cur.fetchmany(n)
+        if not b:
+            return
+        yield from b
+
 c.execute("SELECT source_name, target_name, relation_type FROM relationships")
-n_raw = n_drop = 0
-for s, t, r in c.fetchall():
+n_raw = n_drop = n_selfmerge = 0
+for s, t, r in _stream(c):
     n_raw += 1
     if not s or not t or s == t:
         continue
@@ -102,20 +157,34 @@ for s, t, r in c.fetchall():
         if s_person and t_person:
             n_drop += 1
             continue
-    key = tuple(sorted([sl, tl]))
-    pair_rels[key].add(r)
-    name_canon.setdefault(sl, s)
-    name_canon.setdefault(tl, t)
+    sk, tk = canon_key(s), canon_key(t)
+    if sk == tk:                    # different raw strings, same person -> not an edge
+        n_selfmerge += 1
+        display_votes[sk][s] += 1
+        display_votes[sk][t] += 1
+        continue
+    pair_rels[tuple(sorted([sk, tk]))].add(r)
+    display_votes[sk][s] += 1
+    display_votes[tk][t] += 1
 conn.close()
-print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}")
+print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}, "
+      f"self-loops after canonicalization: {n_selfmerge}")
 print(f"Unique scorable pairs: {len(pair_rels)}")
+
+def best_display(key):
+    votes = display_votes.get(key)
+    if not votes:
+        return key
+    # most frequent form; tie-break toward the form with the most punctuation
+    # (kept its apostrophes/periods) then the longest
+    return max(votes, key=lambda d: (votes[d], sum(not ch.isalnum() and not ch.isspace() for ch in d), len(d)))
 
 # --- Merge Wikidata time-overlap edges (if harvested) ---
 # Only connect people who ALREADY exist as graph nodes, so we densify the
 # existing network rather than appending disconnected Wikidata names.
 OVERLAP_FILE = "qid_overlap_edges.jsonl"
 if os.path.exists(OVERLAP_FILE):
-    existing = set(name_canon.keys())  # lowercase names already in the graph
+    existing = set(display_votes.keys())  # canon keys already in the graph
     n_ov = n_ov_kept = 0
     with open(OVERLAP_FILE, "r", encoding="utf-8") as f:
         for line in f:
@@ -124,7 +193,7 @@ if os.path.exists(OVERLAP_FILE):
                 e = json.loads(line)
             except ValueError:
                 continue
-            al, bl = e["a"].lower(), e["b"].lower()
+            al, bl = canon_key(e["a"]), canon_key(e["b"])
             # require BOTH endpoints to already be graph nodes
             if al in existing and bl in existing and al != bl:
                 key = tuple(sorted([al, bl]))
@@ -136,11 +205,11 @@ if os.path.exists(OVERLAP_FILE):
 # Score each pair
 node_ids = {}
 nodes = []
-def nid(name_lower):
-    if name_lower not in node_ids:
-        node_ids[name_lower] = len(nodes)
-        nodes.append(name_canon.get(name_lower, name_lower))
-    return node_ids[name_lower]
+def nid(key):
+    if key not in node_ids:
+        node_ids[key] = len(nodes)
+        nodes.append(best_display(key))
+    return node_ids[key]
 
 edges = []
 multi = 0
@@ -155,6 +224,19 @@ for (a, b), rels in pair_rels.items():
 
 print(f"Scored edges: {len(edges)}  (pairs with multiple relation types: {multi})")
 
+# aliases: for each node that had >1 raw display form, the alternates (so the
+# search index / UI can show "also known as"). Keyed by node index.
+aliases = {}
+for key, idx in node_ids.items():
+    forms = display_votes.get(key)
+    if forms and len(forms) > 1:
+        chosen = nodes[idx]
+        alts = sorted(f for f in forms if f != chosen)
+        if alts:
+            aliases[idx] = alts
+n_merged = sum(len(v) for v in aliases.values())
+print(f"Canonicalized: {len(aliases)} nodes carry aliases ({n_merged} variant strings folded in)")
+
 with gzip.open(OUT, "wt", encoding="utf-8") as f:
-    json.dump({"nodes": nodes, "edges": edges}, f, separators=(",", ":"))
+    json.dump({"nodes": nodes, "edges": edges, "aliases": aliases}, f, separators=(",", ":"))
 print(f"Saved {OUT}: {os.path.getsize(OUT)/1024/1024:.1f} MB, {len(nodes)} nodes")
