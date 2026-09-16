@@ -50,6 +50,9 @@ def categorize(rt):
     # Self-reported by the app's authenticated user via "Check My Contacts" -> "Add Me"
     if r == "SELF_ATTESTED_CONTACT":
         return "SELF_ATTESTED"
+    # Self-reported via "Check My Contacts" -> "Check My LinkedIn Connections" -> "Add Me"
+    if r == "LINKEDIN_CONNECTION":
+        return "LINKEDIN"
     # SEC co-directorship (all DIRECTOR(...) title variants + board roles)
     if r.startswith("DIRECTOR") or r in (
         "CO_DIRECTOR", "INDEPENDENT_DIRECTOR", "NON-EXECUTIVE_DIRECTOR",

@@ -2323,6 +2323,11 @@ class DisputeRequest(BaseModel):
 
 class AddMeRequest(BaseModel):
     person_name: str = Field(..., min_length=2, max_length=100)
+    # "contacts" (default, phone contacts / vCard) or "linkedin" (imported
+    # LinkedIn connections) -- anything else falls back to "contacts" rather
+    # than rejecting the request, since this only selects which predicate/
+    # copy to use, not a trust boundary (see add_me() below).
+    source: str = "contacts"
 
 class QuestionRequest(BaseModel):
     question: str = Field(..., min_length=5, max_length=500)
@@ -2805,24 +2810,30 @@ async def add_me(req: AddMeRequest, request: Request):
         row = c.execute("SELECT name FROM testers WHERE email = ?", (email,)).fetchone()
         display_name = (row["name"] if row and row["name"] else email.split("@")[0]).strip()
 
+        is_linkedin = req.source == "linkedin"
+        predicate = "LINKEDIN_CONNECTION" if is_linkedin else "SELF_ATTESTED_CONTACT"
+        body_label = "LinkedIn connection" if is_linkedin else "Self-reported contact"
+        snippet = ("Submitted via Check My Contacts → Check My LinkedIn Connections → Add Me."
+                   if is_linkedin else "Submitted via Check My Contacts → Add Me.")
+
         meta = json.dumps({
             "subject": display_name,
-            "predicate": "SELF_ATTESTED_CONTACT",
+            "predicate": predicate,
             "object": obj_canonical,
             "source_name": f"Self-reported by {email}",
             "source_url": None,
-            "snippet": "Submitted via Check My Contacts → Add Me.",
+            "snippet": snippet,
         })
         c.execute("""
             INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
             VALUES ('suggestion', 'new', 'normal', ?, ?, ?, ?)
-        """, (f"Add Me: {display_name} ↔ {obj_canonical}", "Self-reported contact", email, meta))
+        """, (f"Add Me: {display_name} ↔ {obj_canonical}", body_label, email, meta))
 
         conn.commit()
         conn.close()
         try:
             _notify_operator_of_new_submission(
-                "Add Me", f"{display_name} ↔ {obj_canonical}", "Self-reported contact", email)
+                "Add Me", f"{display_name} ↔ {obj_canonical}", body_label, email)
         except Exception as e:
             print(f"[operator-notify] Error sending operator alert: {e}")
         return {"success": True, "message": "Submitted for review."}
@@ -2900,11 +2911,13 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
             snippet = meta.get("snippet")
             
             # Check if subject and object exist in graph. Self-attested "Add Me" claims
-            # are the one exception: subject is the reporting user's own name, which is
-            # expected NOT to already be a graph node -- build_scored_edges.py mints a
-            # new node for it from the relationships row written below.
+            # (phone contacts AND imported LinkedIn connections -- both go through this
+            # same self-reported flow, see AddMeRequest.source in add_me()) are the one
+            # exception: subject is the reporting user's own name, which is expected NOT
+            # to already be a graph node -- build_scored_edges.py mints a new node for it
+            # from the relationships row written below.
             obj_canonical = _resolve_name(obj)
-            if predicate == "SELF_ATTESTED_CONTACT":
+            if predicate in ("SELF_ATTESTED_CONTACT", "LINKEDIN_CONNECTION"):
                 subject_canonical = subject.strip() if subject else None
             else:
                 subject_canonical = _resolve_name(subject)
@@ -2928,7 +2941,7 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
                         "snippet": snippet
                     }])
                     
-                    tgt_type = 'PERSON' if predicate in {'FAMILY', 'COMMUNICATED_WITH', 'ASSOCIATED_WITH', 'TRANSACTED_WITH', 'SELF_ATTESTED_CONTACT'} else 'ORG'
+                    tgt_type = 'PERSON' if predicate in {'FAMILY', 'COMMUNICATED_WITH', 'ASSOCIATED_WITH', 'TRANSACTED_WITH', 'SELF_ATTESTED_CONTACT', 'LINKEDIN_CONNECTION'} else 'ORG'
                     
                     prod_cur.execute("""
                         INSERT OR IGNORE INTO relationships 
@@ -3711,11 +3724,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div id="results" class="results"></div>
   
   <div class="psi-section" id="psi-section" style="display:none;">
-    <button id="psi-btn">🔒 Check My Contacts</button>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <button id="psi-btn">🔒 Check My Contacts</button>
+      <button id="linkedin-btn" onclick="document.getElementById('linkedin-instructions').style.display='block'">💼 Check My LinkedIn Connections</button>
+    </div>
     <span id="psi-loading" style="display:none;"></span>
     <span id="psi-result" style="display:none;"></span>
     <p class="psi-note" id="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
+    <div id="linkedin-instructions" style="display:none;" class="psi-note">
+      LinkedIn doesn't let apps read your connections directly, so this needs one export step on their side first (your connections are still hashed in your browser and never sent in plaintext):
+      <ol style="margin:6px 0 6px 1.2rem; padding:0;">
+        <li>On LinkedIn: <strong>Settings &amp; Privacy → Data privacy → Get a copy of your data</strong></li>
+        <li>Choose <strong>"Connections"</strong> and request the archive — it's usually emailed within a few minutes</li>
+        <li>Download it, unzip it, then come back and select <strong>Connections.csv</strong> below</li>
+      </ol>
+      <button class="secondary-btn" style="padding:0.4rem 0.9rem; font-size:0.85rem;" onclick="window.open('https://www.linkedin.com/mypreferences/d/download-my-data', '_blank')">Open LinkedIn data export ↗</button>
+      <button class="secondary-btn" style="padding:0.4rem 0.9rem; font-size:0.85rem;" onclick="document.getElementById('linkedin-file').click()">I have Connections.csv — select it</button>
+    </div>
     <input type="file" id="psi-file" accept=".vcf,.csv,.txt" style="display:none" onchange="doOPRF(this)">
+    <input type="file" id="linkedin-file" accept=".csv" style="display:none" onchange="doLinkedInImport(this)">
   </div>
 
   <div class="footer-meta" style="margin-top: 2rem; border-top: 1px solid #30363d; padding-top: 1.5rem; text-align: center;">
@@ -4696,9 +4723,11 @@ let addMeSubmittedCount = 0;
 
 async function submitAddMe(btn) {
   const name = btn.dataset.name;
+  const source = btn.dataset.source || 'contacts';
+  const sourceText = source === 'linkedin' ? 'a LinkedIn connection' : 'someone whose contact info happens to be in your phone';
   if (!confirm(
     `Add a connection between you and ${name}?\n\n`
-    + `Only confirm if they would actually take your call today -- not just someone whose contact info happens to be in your phone. `
+    + `Only confirm if they would actually take your call today -- not just ${sourceText}. `
     + `Casual or stale contacts (people you haven't really talked to in a long time) don't belong here; this is meant for real, current relationships.\n\n`
     + `This will be recorded with your login email as the source and submitted for review.`
   )) return;
@@ -4734,6 +4763,7 @@ async function selectAllAddMe() {
 
 async function doAddMeSubmit(btn) {
   const name = btn.dataset.name;
+  const source = btn.dataset.source || 'contacts';
   btn.disabled = true;
   btn.textContent = 'Submitting…';
   // Any previous failure notice for THIS button (a retry) -- clear it before
@@ -4748,7 +4778,7 @@ async function doAddMeSubmit(btn) {
     const res = await fetch('/api/contacts/add-me', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ person_name: name }),
+      body: JSON.stringify({ person_name: name, source: source }),
       signal: controller.signal,
     });
     const data = await res.json();
@@ -4904,16 +4934,24 @@ function contactPsiLshBandTokens(name) {
   return tokens;
 }
 
-// Three input paths, chosen once at page load by initContactCheckUI():
-//   - Contact Picker API present (Chrome/Edge on Android): native picker,
-//     no file/export step at all.
-//   - Any other mobile browser (iOS Safari/WebKit, and Android browsers that
-//     don't implement the Contact Picker API -- Samsung Internet, Firefox
-//     Android, etc.): the file-upload flow below. Every mobile OS's own
-//     Contacts app can export a .vcf via its share sheet, so this always
-//     works even though it's an extra step compared to the native picker.
-//   - Desktop browsers: feature hidden entirely -- there's no contacts file
-//     to pick and no picker API to call.
+// Two independent input paths under the same "Check My Contacts" section,
+// chosen once at page load by initContactCheckUI():
+//   Phone contacts (psi-btn) -- mobile-only, since there's no meaningful
+//   phone-contacts source on desktop:
+//     - Contact Picker API present (Chrome/Edge on Android): native picker,
+//       no file/export step at all.
+//     - Any other mobile browser (iOS Safari/WebKit, and Android browsers
+//       that don't implement the Contact Picker API -- Samsung Internet,
+//       Firefox Android, etc.): the file-upload flow below. Every mobile
+//       OS's own Contacts app can export a .vcf via its share sheet, so
+//       this always works even though it's an extra step vs. the native
+//       picker.
+//     - Desktop: psi-btn hidden -- there's no contacts file to pick and no
+//       picker API to call.
+//   LinkedIn connections (linkedin-btn) -- shown on every platform
+//   (including desktop, where people most often manage a LinkedIn data
+//   export from), since it's just a CSV upload either way; see
+//   doLinkedInImport() below.
 function initContactCheckUI() {
   const section = document.getElementById('psi-section');
   const btn = document.getElementById('psi-btn');
@@ -4927,21 +4965,28 @@ function initContactCheckUI() {
   const isMobile = isIOS || /Android|Mobi/.test(navigator.userAgent);
   const baseNote = 'Your contacts are hashed in your browser and never sent in plaintext.';
 
+  // The section itself is always visible now (LinkedIn import works on any
+  // platform); only the phone-contacts button is conditional.
+  section.style.display = '';
+
   if (hasContactPicker) {
-    section.style.display = '';
+    btn.style.display = '';
     btn.onclick = pickContactsNative;
     note.textContent = baseNote;
   } else if (isMobile) {
     // This browser can't hand contacts to a website directly (only Chrome/
     // Edge on Android support the Contact Picker API) -- the button opens
     // the OS file picker instead, so contacts have to be exported first.
-    section.style.display = '';
+    btn.style.display = '';
     btn.onclick = () => document.getElementById('psi-file').click();
     note.textContent = baseNote + (isIOS
       ? ' Your browser needs a file: in Contacts, tap Share → Export vCard, then select that file here.'
       : ' Your browser can’t share contacts with websites directly — export them first (Contacts app → Settings/Menu → Export → .vcf), then select that file here.');
+  } else {
+    // Desktop: no phone-contacts source available -- hide just that button,
+    // LinkedIn import stays visible.
+    btn.style.display = 'none';
   }
-  // Neither: leave psi-section hidden (desktop browsers only, now).
 }
 
 async function doOPRF(input) {
@@ -4952,6 +4997,57 @@ async function doOPRF(input) {
     .map(line => line.includes(':') ? line.slice(line.indexOf(':') + 1).trim() : line)
     .filter(name => name.length > 3);
   await checkContacts(names, 'No contacts found in file');
+}
+
+// Minimal RFC 4180 CSV line splitter (handles quoted fields, including
+// commas and escaped "" inside a quoted field) -- LinkedIn's export quotes
+// company/position names that routinely contain commas ("Acme, Inc."), so a
+// plain line.split(',') would misalign columns on exactly the rows that
+// matter most.
+function csvSplitLine(line) {
+  const fields = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') inQuotes = false;
+      else cur += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { fields.push(cur); cur = ''; }
+    else cur += c;
+  }
+  fields.push(cur);
+  return fields;
+}
+
+async function doLinkedInImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const lines = (await file.text()).split(/\r?\n/).filter(l => l.trim());
+  // LinkedIn's Connections.csv starts with several "Notes:" preamble lines
+  // explaining the export before the real header row -- find the header by
+  // its known columns rather than assuming a fixed line number, so a future
+  // LinkedIn export-format tweak (extra/fewer notes lines) doesn't silently
+  // break this.
+  const headerIdx = lines.findIndex(l => /first\s*name/i.test(l) && /last\s*name/i.test(l));
+  if (headerIdx === -1) {
+    const result = document.getElementById('psi-result');
+    result.style.display = 'inline-block';
+    result.style.color = '#f85149';
+    result.textContent = "Error: this doesn't look like a LinkedIn Connections.csv export (no First Name/Last Name header found).";
+    return;
+  }
+  const header = csvSplitLine(lines[headerIdx]).map(h => h.trim().toLowerCase());
+  const firstIdx = header.findIndex(h => h.includes('first'));
+  const lastIdx = header.findIndex(h => h.includes('last'));
+  const names = lines.slice(headerIdx + 1)
+    .map(line => {
+      const cols = csvSplitLine(line);
+      return `${(cols[firstIdx] || '').trim()} ${(cols[lastIdx] || '').trim()}`.trim();
+    })
+    .filter(name => name.length > 3);
+  await checkContacts(names, 'No connections found in file', 'linkedin');
 }
 
 async function pickContactsNative() {
@@ -4972,7 +5068,7 @@ async function pickContactsNative() {
   await checkContacts(names, 'No named contacts selected');
 }
 
-async function checkContacts(names, emptyMessage) {
+async function checkContacts(names, emptyMessage, source = 'contacts') {
   const btn = document.getElementById('psi-btn');
   const result = document.getElementById('psi-result');
   const loading = document.getElementById('psi-loading');
@@ -5173,7 +5269,7 @@ async function checkContacts(names, emptyMessage) {
       const rows = matchedContacts.map(contact => {
         const m = bestByContact[contact];
         const addBtn = m.tier === 'possible' ? '' :
-          ` <button class="add-me-btn" data-name="${escHtml(m.name)}" onclick="submitAddMe(this)">+ Add me</button>`;
+          ` <button class="add-me-btn" data-name="${escHtml(m.name)}" data-source="${source}" onclick="submitAddMe(this)">+ Add me</button>`;
         return `<div>${escHtml(contact)} \u2192 <strong>${escHtml(m.name)}</strong> <span style="color:#8b949e">(${tierLabel[m.tier]})</span>${addBtn}</div>`;
       }).join('');
       const selectAllBtn = addableCount > 1
