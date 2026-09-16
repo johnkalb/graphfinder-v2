@@ -3735,7 +3735,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       LinkedIn doesn't let apps read your connections directly, so this needs one export step on their side first (your connections are still hashed in your browser and never sent in plaintext):
       <ol style="margin:6px 0 6px 1.2rem; padding:0;">
         <li>On LinkedIn: <strong>Settings &amp; Privacy → Data privacy → Get a copy of your data</strong></li>
-        <li>Choose <strong>"Connections"</strong> and request the archive — it's usually emailed within a few minutes</li>
+        <li>Choose <strong>"Connections"</strong> and request the archive — LinkedIn emails it to you, sometimes within minutes but it can take up to 24 hours</li>
         <li>Download it, unzip it, then come back and select <strong>Connections.csv</strong> below</li>
       </ol>
       <button class="secondary-btn" style="padding:0.4rem 0.9rem; font-size:0.85rem;" onclick="window.open('https://www.linkedin.com/mypreferences/d/download-my-data', '_blank')">Open LinkedIn data export ↗</button>
