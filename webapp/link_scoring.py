@@ -49,6 +49,12 @@ CATEGORY_PROB = {
     "CO_INVENTOR": 0.68,
     "PATENT_ASSIGNED_TO": 0.55,
     "SELF_ATTESTED": 0.10,
+    # Below SELF_ATTESTED -- a LinkedIn connection is a lower real-world bar
+    # than someone actively self-reporting from their phone contacts (a cold
+    # connect request from a stranger counts the same as a close colleague
+    # on LinkedIn), so it's treated as weaker evidence even though both are
+    # human-reviewed before ever reaching this scoring step.
+    "LINKEDIN": 0.08,
     "OTHER": 0.05,
 }
 
@@ -87,6 +93,7 @@ CATEGORY_DESC = {
     "CO_INVENTOR": ("Co-Inventor", "Both people are named as inventors on the same patent. This is usually a meaningful professional collaboration and stronger than a generic co-mention."),
     "PATENT_ASSIGNED_TO": ("Patent Assigned To", "An inventor is listed on a patent assigned to the organization. This often indicates a real professional or institutional relationship, but does not necessarily prove ordinary employment."),
     "SELF_ATTESTED": ("Self-Reported Contact", "The user reported this contact from their own phone/address book. Unverified and self-interested (a single party attesting to their own connection) — treated as one of the weakest signals and expected to be the category most often disputed."),
+    "LINKEDIN": ("LinkedIn Connection", "The user reported this as a LinkedIn connection. Unverified and self-interested like a self-reported contact, but treated as weaker still — a LinkedIn connection can be as casual as an accepted cold request, not necessarily a real acquaintance."),
     "OTHER": ("Other", "An uncategorized relationship. Treated as very weak evidence."),
 }
 
