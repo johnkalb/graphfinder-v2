@@ -23,7 +23,9 @@ def main():
     secret_b64 = os.environ.get("CONTACT_PSI_SERVER_SECRET")
     if not secret_b64:
         raise SystemExit("CONTACT_PSI_SERVER_SECRET is required")
-    records = json.loads(Path(args.records).read_text())
+    # explicit utf-8: names routinely contain non-ASCII characters (accents,
+    # etc.) that aren't valid in Windows' default cp1252 read_text() encoding
+    records = json.loads(Path(args.records).read_text(encoding="utf-8"))
     secret = base64.b64decode(secret_b64)
     built, entries = manifest.build_manifest(records, secret, args.key_version)
     shard_sizes = manifest.save_sharded_manifest(built, args.output_dir, args.shard_hex_chars)
