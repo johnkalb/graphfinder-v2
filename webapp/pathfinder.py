@@ -9,6 +9,7 @@ import networkx as nx
 import igraph as ig
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict
 import base64
 import pysodium
@@ -1789,7 +1790,18 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
         if _graph_load_error:
             return {"error": "graph_unavailable", "detail": _graph_load_error}
         return {"error": "warming_up", "detail": "Graph is still loading at startup -- try again shortly."}
-    res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+    # 2026-09-18: run_in_threadpool -- _find_path_dispatch is a synchronous,
+    # CPU-bound k-shortest-paths computation (0.5-2s+ for hub-heavy pairs,
+    # confirmed live). Called bare inside this async handler, it blocked the
+    # entire worker's event loop for that whole duration; under just a
+    # handful of concurrent requests, response times measured 5-7s instead
+    # of the same queries' 0.5-2s in isolation (confirmed: 6 concurrent
+    # requests, wall clock 6.8s vs. sum of individual times 33.7s -- almost
+    # fully serialized on 2 workers). Offloading to a thread lets other
+    # requests on the same worker keep making progress while this runs.
+    res = await run_in_threadpool(
+        _find_path_dispatch, src_name.strip(), tgt_name.strip(), include_deceased=include_deceased
+    )
     _log_tester_usage(
         request,
         "path_found" if "paths" in res and len(res.get("paths", [])) > 0 else "path_not_found",
