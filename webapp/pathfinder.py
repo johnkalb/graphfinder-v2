@@ -1789,15 +1789,7 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
         if _graph_load_error:
             return {"error": "graph_unavailable", "detail": _graph_load_error}
         return {"error": "warming_up", "detail": "Graph is still loading at startup -- try again shortly."}
-    # TEMP DIAGNOSTIC 2026-09-18 -- remove once the concurrency investigation
-    # is done. Logs which OS process handles each request so we can tell
-    # whether concurrent requests are actually distributed across separate
-    # uvicorn worker processes or all landing on one.
-    import os as _os_diag, time as _time_diag
-    _t0_diag = _time_diag.time()
-    print(f"PATH_DIAG pid={_os_diag.getpid()} START src={src_name!r} tgt={tgt_name!r} t={_t0_diag:.3f}", flush=True)
     res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
-    print(f"PATH_DIAG pid={_os_diag.getpid()} DONE src={src_name!r} tgt={tgt_name!r} elapsed={_time_diag.time()-_t0_diag:.3f}", flush=True)
     _log_tester_usage(
         request,
         "path_found" if "paths" in res and len(res.get("paths", [])) > 0 else "path_not_found",
