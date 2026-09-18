@@ -1,6 +1,8 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
 import os, pickle, json, sqlite3, hashlib, re, html, bisect
+import asyncio
+import concurrent.futures
 import logging
 from pathlib import Path
 from typing import Optional
@@ -135,6 +137,9 @@ _canonical_map = None
 _labels = None
 _deceased = None  # {lowercase name: death date} -- Wikidata P570, authoritative
 _graph_load_error = None  # set if the startup background warm-up load raised
+_path_process_pool = None  # ProcessPoolExecutor for CPU-bound pathfinding, created only after
+                           # the graph is loaded (see _warm_up_graph()) so forked workers inherit
+                           # it via copy-on-write instead of reloading it themselves
 _crawlie_facts = None  # {"generated_at", "facts": [...]}, from build_crawlie_facts.py
 _group_rankings = None  # [{"name","category","member_count","external_neighbor_count","pagerank","percentile","members"}, ...]
 
@@ -379,6 +384,30 @@ def load_data():
     _load_search()
     _load_graph()
 
+def _create_path_process_pool():
+    """Create the pathfinding process pool. MUST be called after the graph
+    is loaded into this (parent) process's memory -- pool workers are
+    forked (Linux default start method), which copies the parent's memory
+    via copy-on-write at fork time. Forking before the graph loads would
+    give each worker an empty graph with no way to populate it (workers
+    only ever call _find_path_dispatch(), never the loader).
+
+    Why a process pool and not a thread pool: /api/path's k-shortest-paths
+    call is CPU-bound (igraph's C extension) but never releases the GIL for
+    its duration -- confirmed by a live diagnostic (2026-09-18): 4 requests
+    fired concurrently at production all showed the SAME pid, executing
+    back-to-back (elapsed times summed to ~wall clock, zero overlap) even
+    though the container has 4 dedicated vCPUs. A thread pool doesn't fix
+    this (still one GIL); separate processes each get their own
+    interpreter/GIL and can genuinely run in parallel across cores."""
+    global _path_process_pool
+    import concurrent.futures
+    import multiprocessing
+    ctx = multiprocessing.get_context("fork")
+    _path_process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=4, mp_context=ctx)
+    logger.info("path process pool created (4 workers, fork)")
+
+
 async def _warm_up_graph():
     """Loads the active backend's graph in a background task, kicked off
     from startup() rather than run inline there -- run_in_executor offloads
@@ -394,6 +423,7 @@ async def _warm_up_graph():
     try:
         if _PATHFINDER_BACKEND == "igraph":
             await loop.run_in_executor(None, _load_igraph)
+            _create_path_process_pool()
         elif _PATHFINDER_BACKEND == "pgrouting":
             pass  # graph lives in Postgres; nothing to warm up in-process
         else:
@@ -1789,7 +1819,22 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
         if _graph_load_error:
             return {"error": "graph_unavailable", "detail": _graph_load_error}
         return {"error": "warming_up", "detail": "Graph is still loading at startup -- try again shortly."}
-    res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+    # 2026-09-18: route through the process pool (see _create_path_process_pool())
+    # when available -- this is CPU-bound work that never released the GIL
+    # under threading, confirmed live (see that function's docstring).
+    # Falls back to a direct call for the pgrouting backend (I/O-bound, no
+    # pool needed) or if the pool hasn't finished warming up yet.
+    if _path_process_pool is not None:
+        loop = asyncio.get_event_loop()
+        try:
+            res = await loop.run_in_executor(
+                _path_process_pool, _find_path_dispatch, src_name.strip(), tgt_name.strip(), 6, 3, include_deceased
+            )
+        except concurrent.futures.process.BrokenProcessPool:
+            logger.exception("path process pool broken -- falling back to inline call for this request")
+            res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+    else:
+        res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
     _log_tester_usage(
         request,
         "path_found" if "paths" in res and len(res.get("paths", [])) > 0 else "path_not_found",
