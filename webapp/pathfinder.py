@@ -3,6 +3,7 @@ Serves full-name search and shortest-path queries against the deduplicated socia
 import os, pickle, json, sqlite3, hashlib, re, html, bisect
 import asyncio
 import concurrent.futures
+import functools
 import logging
 from pathlib import Path
 from typing import Optional
@@ -807,7 +808,23 @@ def _find_entry(query):
     q = _re.sub(r"\s+", " ", q).strip(" .,")
     if not _search_index or not q:
         return []
+    return _find_entry_cached(q)
 
+
+# 2026-09-21: distinctive names (few/no matches in the fast-path indexes
+# below) fall through to the O(n) slow-path scan every one of ~1.2M search
+# entries -- measured 10-12s locally for "obama"/"musk" (see profiling in
+# this session). Most real traffic is many different users re-searching the
+# same popular names, so caching _find_entry's result by normalized query
+# string turns every repeat after the first into a dict lookup. Bounded
+# (not unbounded) since autocomplete generates one query per keystroke --
+# maxsize chosen generously above realistic distinct-query volume without
+# risking unbounded growth over a long-running process. Safe to share cached
+# list/dict references across calls: callers only ever read them (JSON
+# serialization), same as the uncached function already returned references
+# into _search_index rather than copies.
+@functools.lru_cache(maxsize=4096)
+def _find_entry_cached(q):
     # Fast path: three small bisect range-scans (exact / any-token-prefix /
     # full-string-prefix) instead of scanning every one of ~774K entries --
     # cut a 2-3s linear scan down to single-digit milliseconds for any query
@@ -846,10 +863,9 @@ def _find_entry(query):
         for i, (entry, (canon_lower, parts, _is_p)) in enumerate(zip(_search_index, _search_index_meta)):
             if i in scores:
                 continue
-            alias_matches = [a.lower() for a in entry.get("aliases", []) if q in a.lower()]
             if q in canon_lower:
                 scores[i] = 50
-            elif alias_matches:
+            elif any(q in a.lower() for a in entry.get("aliases", ())):
                 scores[i] = 40
             else:
                 canon_parts = set(parts)
@@ -3965,8 +3981,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <!-- Identity / "Who is this?" Modal -->
-  <div id="whois-modal" class="modal">
-    <span class="modal-close" onclick="closeWhoisModal()">✕</span>
+  <div id="whois-modal" class="modal" role="dialog" aria-modal="true" aria-label="Identity card">
+    <span class="modal-close" id="whois-close-btn" role="button" tabindex="0"
+      onclick="closeWhoisModal()"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();closeWhoisModal();}">✕</span>
     <div id="whois-body">Loading…</div>
   </div>
 </div>
@@ -4072,8 +4090,9 @@ let searchTimeout = null;
         + '<span class="name">' + escHtml(displayName) + sciBadge + '</span>'
         + degreeBadge
         + aliasHtml
-        + '<span class="whois-btn" title="Who is this? Show connections"'
-        + ' onmousedown="event.stopPropagation();event.preventDefault();showWhois(\'' + prefix + '\',' + i + ')">&#9432;</span>'
+        + '<span class="whois-btn" title="Who is this? Show connections" tabindex="0" role="button"'
+        + ' onmousedown="event.stopPropagation();event.preventDefault();showWhois(\'' + prefix + '\',' + i + ')"'
+        + ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();showWhois(\'' + prefix + '\',' + i + ')}">&#9432;</span>'
         + '</div>';
     }).join('');
     dd.classList.add('show');
@@ -4506,6 +4525,7 @@ function closeAllModals() {
   document.getElementById('suggest-modal').classList.remove('show');
   document.getElementById('dispute-modal').classList.remove('show');
   document.getElementById('whois-modal').classList.remove('show');
+  restoreWhoisFocus();
 
   // Clean up any AI parsing state
   document.getElementById('ai-parsed-results').style.display = 'none';
@@ -4514,24 +4534,51 @@ function closeAllModals() {
   document.getElementById('suggest-manual-form').reset();
 }
 
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('whois-modal').classList.contains('show')) {
+    closeWhoisModal();
+  }
+});
+
 // --- Identity / "Who is this?" card -------------------------------------
 // ⓘ on each search-result row opens this: a graph-only snapshot of who the
 // name is connected to, so a user can tell two same-named people apart
 // (e.g. which "Louis Cohen") BEFORE running a path. Live news headlines
 // are a deliberate second click (/api/entity/news) -- that GDELT query
 // costs a few seconds and most identity checks don't need it.
+//
+// Focus management (2026-09-21): this modal is a plain <div>, not a native
+// <dialog>, so it gets none of <dialog>.showModal()'s free behavior --
+// moving focus in on open and restoring it to whatever triggered the modal
+// on close. whoisTriggerEl below tracks that trigger manually so keyboard
+// users land back where they started, matching the old "insert page, focus
+// returns to caller on close" pattern this was modeled on.
+let whoisTriggerEl = null;
+let whoisTriggerFallback = null;
+
 window.showWhois = function(prefix, idx) {
   const dd = document.getElementById(prefix + '-dropdown');
   const items = dd.querySelectorAll('.dropdown-item');
   if (idx < 0 || idx >= items.length) return;
   const name = items[idx].getAttribute('data-name');
-  if (name) openWhoisModal(name);
+  if (name) {
+    whoisTriggerEl = items[idx].querySelector('.whois-btn') || document.activeElement;
+    // The dropdown auto-hides ~200ms after its input blurs (see the
+    // input 'blur' listener above), which happens the moment focus moves
+    // to the ⓘ button to open this modal -- so by close time whoisTriggerEl
+    // is very likely sitting inside a display:none ancestor and physically
+    // can't be focused again (confirmed via Playwright test, 2026-09-21).
+    // Fall back to the visible search input it belongs to.
+    whoisTriggerFallback = document.getElementById(prefix + '-input');
+    openWhoisModal(name);
+  }
 };
 
 async function openWhoisModal(name) {
   const body = document.getElementById('whois-body');
   document.getElementById('modal-overlay').classList.add('show');
   document.getElementById('whois-modal').classList.add('show');
+  document.getElementById('whois-close-btn').focus();
   body.innerHTML = '<div class="wi-hdr">' + escHtml(name) + '</div><div class="wi-meta">Loading connections…</div>';
   try {
     const res = await fetch('/api/entity?name=' + encodeURIComponent(name));
@@ -4598,6 +4645,19 @@ async function loadWhoisNews(btn, encName) {
 function closeWhoisModal() {
   document.getElementById('whois-modal').classList.remove('show');
   document.getElementById('modal-overlay').classList.remove('show');
+  restoreWhoisFocus();
+}
+
+function restoreWhoisFocus() {
+  if (whoisTriggerEl && document.contains(whoisTriggerEl)) whoisTriggerEl.focus();
+  // focus() on an element with a display:none ancestor (the dropdown, by
+  // now auto-hidden) is a silent no-op -- verify it actually took, and if
+  // not, land on the visible search input instead of leaving focus on body.
+  if (document.activeElement !== whoisTriggerEl && whoisTriggerFallback) {
+    whoisTriggerFallback.focus();
+  }
+  whoisTriggerEl = null;
+  whoisTriggerFallback = null;
 }
 
 function switchSuggestTab(tabName) {
