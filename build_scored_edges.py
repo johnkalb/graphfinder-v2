@@ -15,7 +15,7 @@ Pipeline:
   4. Categorize -> dedup -> noisy-OR score
   5. Emit scored edge list
 """
-import sqlite3, json, gzip, os, re, sys, unicodedata
+import json, gzip, os, re, sys, unicodedata
 from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
@@ -61,19 +61,22 @@ def canon_key(name):
     _ck_cache[name] = out
     return out
 
-# Absolute canonical path, NOT the relative "data/pipeline_cache.db" hardlinked
-# copy under this build dir -- that copy shares the main .db file's bytes but
-# has its own separate -wal/-shm sidecars, so a connection here can't
-# coordinate with live harvesters writing via the canonical path. This is the
-# actual root cause behind rebuild_and_deploy.py's "database disk image is
-# malformed" recurrences (2026-08-29, 2026-08-31 x2) -- the checkpoint-before-
-# rebuild mitigation in checkpoint_canonical_db() only narrows the race window
-# (this script's full-table read takes many minutes, during which harvesters
-# keep writing/checkpointing the canonical WAL throughout), it can't close it.
-# Connecting to the canonical path directly uses the same wal/shm every
-# harvester writes through, which is what WAL mode is actually designed to
-# make safe -- see build_group_rankings.py's identical fix, same date.
-DB = os.environ.get("DB_PATH", r"C:\Users\johnk\data\pipeline_cache.db")
+# NOTE (2026-09-16): was sqlite3.connect() against a local pipeline_cache.db
+# path, with a long comment here about WAL/checkpoint races being the "actual
+# root cause" of recurring "database disk image is malformed" failures
+# (2026-08-29, 2026-08-31, then again 2026-09-14/15/16 -- three days straight,
+# confirmed via the task log, which is what surfaced this in the first
+# place). That diagnosis was already superseded once: the whole project
+# migrated off SQLite to Postgres specifically because of this exact failure
+# class (see [[project_postgres_migration]], [[project_db_corruption_2026_09_11]])
+# -- this script was simply missed in that migration, so it kept reading a
+# local SQLite file nothing has actually written through since, which the
+# WAL-checkpoint mitigation could never fully fix (narrows the race, can't
+# close it, per the comment it replaced). Moved to Postgres like everything
+# else rather than patching the SQLite path again.
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL must be set -- this script is Postgres-only")
 OUT = os.environ.get("SCORED_OUT", "webapp/data/graph_scored.json.gz")
 
 # --- cleanup helpers (from working-v2) ---
@@ -111,16 +114,20 @@ def looks_like_person(name):
         return False
     return 2 <= len(name.split()) <= 3
 
-# Build person-name set for conflation detection
-conn = sqlite3.connect(DB)
+import psycopg2
+
+# Build person-name set for conflation detection. A plain (client-side
+# buffering) cursor is fine here -- bounded by the number of DISTINCT PERSON
+# names (~millions), not the ~165M raw row count -- Postgres uses the
+# existing idx_relationships_source_type/idx_relationships_target_type
+# indexes (confirmed via EXPLAIN; no SQLite-style INDEXED BY hint needed or
+# supported).
+conn = psycopg2.connect(DATABASE_URL)
 c = conn.cursor()
 persons = set()
-# INDEXED BY: on the loaded live DB the planner sometimes ignores the
-# (source_type, source_name) covering index for this DISTINCT and does a
-# scan -- forcing it keeps these two to seconds instead of many minutes.
-c.execute("SELECT DISTINCT source_name FROM relationships INDEXED BY idx_relationships_source_type_name WHERE source_type='PERSON'")
+c.execute("SELECT DISTINCT source_name FROM relationships WHERE source_type='PERSON'")
 persons |= {r[0].lower() for r in c.fetchall() if r[0]}
-c.execute("SELECT DISTINCT target_name FROM relationships INDEXED BY idx_relationships_target_type_name WHERE target_type='PERSON'")
+c.execute("SELECT DISTINCT target_name FROM relationships WHERE target_type='PERSON'")
 persons |= {r[0].lower() for r in c.fetchall() if r[0]}
 print(f"Person names: {len(persons)}")
 
@@ -133,14 +140,25 @@ pair_rels = defaultdict(set)        # (key_a, key_b) -> set of raw relation stri
 display_votes = defaultdict(Counter)  # canon_key -> Counter(raw display form -> count)
 def _stream(cur, n=250_000):
     """Batched fetch -- a plain .fetchall() here materialises ~35 GB of Python
-    string tuples for the ~150M-row table and thrashes on a loaded machine."""
+    string tuples for the ~165M-row table and thrashes on a loaded machine."""
     while True:
         b = cur.fetchmany(n)
         if not b:
             return
         yield from b
 
-c.execute("SELECT source_name, target_name, relation_type FROM relationships")
+# Named (server-side) cursor: an ordinary psycopg2 cursor buffers the ENTIRE
+# result set into client memory as soon as execute() runs -- the exact ~35GB
+# problem the batched _stream() helper above was written to avoid, just
+# moved from "after the fetch" to "during execute()", and now also paying to
+# transfer all of it over the network first. A named cursor is a real
+# server-side cursor: itersize controls how many rows come over per
+# round-trip, so _stream()'s fetchmany() loop streams from the server
+# exactly like it did against SQLite.
+stream_cur = conn.cursor(name="build_scored_edges_stream")
+stream_cur.itersize = 250_000
+stream_cur.execute("SELECT source_name, target_name, relation_type FROM relationships")
+c = stream_cur
 n_raw = n_drop = n_selfmerge = 0
 for s, t, r in _stream(c):
     n_raw += 1

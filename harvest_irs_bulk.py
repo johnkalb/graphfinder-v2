@@ -43,20 +43,32 @@ def search_organizations(keyword, limit=50):
     return results[:limit]
 
 def get_filing_details(ein):
-    """Get latest filing object_id for an EIN."""
+    """Get latest filing object_id for an EIN.
+
+    NOTE (2026-09-16): was reading data["filings"] and data["name"] at the
+    top level -- ProPublica's real response has neither key (confirmed
+    directly: only "organization", "filings_with_data",
+    "filings_without_data", "data_source", "api_version" exist at the top
+    level), so this always silently returned None. Dead code in practice --
+    main() never calls this helper, it inlines the correct
+    organization.latest_object_id lookup instead -- but fixed properly
+    since the Robin Hood Foundation / Overbrook Foundation backfill
+    (2026-09-16) needed a working version of exactly this helper."""
     try:
         r = requests.get(PROPUBLICA_ORG.format(ein=ein), headers=HEADERS, timeout=15)
         r.raise_for_status()
         data = r.json()
-        filings = data.get("filings", [])
-        if filings:
-            latest = filings[0]
+        org = data.get("organization", {})
+        object_id = org.get("latest_object_id", "")
+        if object_id:
+            filings = data.get("filings_with_data", [])
+            latest = filings[0] if filings else {}
             return {
-                "name": data.get("name", ""),
+                "name": org.get("name", ""),
                 "ein": ein,
-                "object_id": latest.get("object_id", ""),
+                "object_id": object_id,
                 "tax_prd": latest.get("tax_prd", ""),
-                "url": latest.get("url", ""),
+                "url": latest.get("pdf_url", ""),
             }
     except Exception as e:
         print(f"  Filing details error for {ein}: {e}")
@@ -90,8 +102,13 @@ def download_and_parse_xml(xml_url, org_name):
 
     # Extract officers — IRS 990-PF uses BusinessOfficerGrp
     ns = "http://www.irs.gov/efile"
-    
-    # BusinessOfficerGrp (990-PF)
+
+    # BusinessOfficerGrp (990-PF) -- this is only the ONE person who signed
+    # the return (e.g. the Treasurer), not the full board. Confirmed missing
+    # the rest of the board directly (2026-09-16): Overbrook Foundation's
+    # real 990-PF filing (EIN 13-6088860) has an 18-person board including
+    # its chair, Joyce Fensterstock, in OfficerDirTrstKeyEmplGrp below --
+    # BusinessOfficerGrp alone only ever captured its President/CEO.
     for grp in root.iter(f"{{{ns}}}BusinessOfficerGrp"):
         name = ""
         title = ""
@@ -103,7 +120,25 @@ def download_and_parse_xml(xml_url, org_name):
                 title = child.text.strip() if child.text else ""
         if name:
             people.append({"name": name, "type": "PERSON", "role": title or "Officer"})
-    
+
+    # OfficerDirTrstKeyEmplGrp (990-PF) -- the REAL full board: officers,
+    # directors, trustees, and key employees, each with a title (chair,
+    # v-chair/treasurer, director, etc). Present alongside BusinessOfficerGrp
+    # in every 990-PF filing checked, not a substitute for it -- both are
+    # kept (BusinessOfficerGrp's single entry is harmless to also capture
+    # here if it duplicates, deduped below by name).
+    for grp in root.iter(f"{{{ns}}}OfficerDirTrstKeyEmplGrp"):
+        name = ""
+        title = ""
+        for child in grp:
+            ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if ctag == "PersonNm":
+                name = (child.text or "").strip()
+            elif ctag == "TitleTxt":
+                title = (child.text or "").strip()
+        if name and name not in [p["name"] for p in people]:
+            people.append({"name": name, "type": "PERSON", "role": title or "Officer/Director/Trustee"})
+
     # Also try Form990PartVI (standard 990)
     for partvi in root.iter(f"{{{ns}}}Form990PartVI"):
         for grp in partvi.iter(f"{{{ns}}}PersonnelDataGrp"):
@@ -113,6 +148,23 @@ def download_and_parse_xml(xml_url, org_name):
                     name = child.text.strip() if child.text else ""
                     if name:
                         people.append({"name": name, "type": "PERSON", "role": "Director/Trustee"})
+
+    # Form990PartVIISectionAGrp -- the REAL tag for a modern (non-PF) Form 990's
+    # Part VII Section A ("Officers, Directors, Trustees, Key Employees, and
+    # Highest Compensated Employees"). Confirmed against a live filing
+    # (US Chamber of Commerce, EIN 530045720): 109 named directors/officers,
+    # none of which the tag names above caught (PersonTitleTxt below is also
+    # wrong for this schema -- it's TitleTxt here, kept both for safety).
+    for grp in root.iter(f"{{{ns}}}Form990PartVIISectionAGrp"):
+        name = title = ""
+        for child in grp:
+            ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if ctag == "PersonNm":
+                name = (child.text or "").strip()
+            elif ctag in ("TitleTxt", "PersonTitleTxt"):
+                title = (child.text or "").strip()
+        if name and name not in [p["name"] for p in people]:
+            people.append({"name": name, "type": "PERSON", "role": title or "Officer/Director"})
     
     # General Officer/Director/Trustee elements (used in some 990s)
     for tag_name in ["Officer", "Director", "Trustee", "KeyEmployee"]:

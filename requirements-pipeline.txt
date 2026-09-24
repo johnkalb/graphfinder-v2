@@ -1,0 +1,7 @@
+# Harvest/pipeline-only dependencies -- NOT installed by the webapp's
+# DigitalOcean build (which uses requirements.txt). torch alone is several GB.
+# Used by src/data/gdelt_classify.py (REBEL relation extraction + article fetch).
+-r requirements.txt
+torch>=2.10.0
+transformers>=4.57.6
+trafilatura>=2.2.0
