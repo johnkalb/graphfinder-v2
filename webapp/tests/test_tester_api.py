@@ -51,6 +51,8 @@ import pathfinder as pf  # noqa: E402
 
 pytestmark = pytest.mark.timeout(30)
 
+ADMIN_HEADERS = {"Cf-Access-Authenticated-User-Email": "john.kalb@gmail.com"}
+
 
 # --------------------------------------------------------------------------
 # Session-scoped fixtures: isolated data dir + one shared TestClient.
@@ -563,12 +565,13 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
-def _make_test_cf_access_jwt(email, private_key, kid="test-kid-1", exp_delta=3600):
+def _make_test_cf_access_jwt(email, private_key, kid="test-kid-1", exp_delta=3600, aud=None):
     from cryptography.hazmat.primitives.asymmetric import padding
     from cryptography.hazmat.primitives import hashes
     import time as _time
     header_b64 = _b64url(json.dumps({"alg": "RS256", "kid": kid, "typ": "JWT"}).encode())
-    payload_b64 = _b64url(json.dumps({"email": email, "exp": int(_time.time()) + exp_delta}).encode())
+    payload_b64 = _b64url(json.dumps({"email": email, "exp": int(_time.time()) + exp_delta,
+                                      "aud": [aud or pf._CF_ACCESS_AUD]}).encode())
     signing_input = f"{header_b64}.{payload_b64}".encode()
     signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
     return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
@@ -755,7 +758,7 @@ def test_notify_without_admin_header_returns_403(client, tester_data_dir):
 
 
 def test_service_queue_and_review_workflow(client, tester_data_dir):
-    r = client.get("/api/service/queue")
+    r = client.get("/api/service/queue", headers=ADMIN_HEADERS)
     assert r.status_code == 200
     body = r.json()
     assert body["success"] is True
@@ -866,7 +869,7 @@ def test_service_metrics(client):
 
 
 def test_manual_notification(client):
-    r = client.get("/api/service/queue")
+    r = client.get("/api/service/queue", headers=ADMIN_HEADERS)
     queue = r.json()["queue"]
     item_with_email = [i for i in queue if i["submitter_email"] is not None]
     if item_with_email:
