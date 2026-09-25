@@ -8,10 +8,21 @@ user_submitted_facts.json (written live by the Q&A worker, if/when that
 ships) at READ time, so this script never needs to know about that file.
 
 Output: webapp/data/crawlie_facts.json.gz
-  {"generated_at": "<ISO8601>", "facts": ["sentence", ...]}
+  {"generated_at": "<ISO8601>",
+   "facts": ["sentence", ...],                       # homepage ticker
+   "publishable": [{"key", "category", "text"}, ...]} # safe to broadcast
+
+"publishable" is the subset fit for posting outside the Cloudflare gate (the
+Fediverse crawlie account). A post is permanent and copied to other servers,
+so every person it names must be a verified public figure -- a confirmed
+Wikidata identity from qid_resolver_incremental.py's qid_map.jsonl, or one
+of FAMOUS_NAMES -- and no ALL-CAPS filing-style labels ("SERVICE
+EMPLOYEES"). `key` identifies a fact independent of its numbers, so a poster
+can tell a genuinely new fact from last night's with updated counts.
 """
 import gzip
 import json
+import os
 import re
 from datetime import datetime, timezone
 
@@ -19,6 +30,7 @@ SEARCH_INDEX = "webapp/data/search_index.json.gz"
 GROUP_RANKINGS = "webapp/data/group_rankings.json.gz"
 CENTRALITY_EXTRAS = "webapp/data/centrality_extras.json.gz"
 OUT = "webapp/data/crawlie_facts.json.gz"
+QID_MAP = os.environ.get("QID_MAP_PATH", os.path.join(os.path.expanduser("~"), "qid_map.jsonl"))
 
 MIN_DEGREE = 15          # exclude near-isolated stub nodes -- "surprising" divergence there is just noise
 MAX_PAIR_FACTOIDS = 20
@@ -54,6 +66,37 @@ def looks_like_person(name):
     return 2 <= len(name.split()) <= 3
 
 
+def load_verified_people():
+    """Lowercased names with a confirmed Wikidata identity, plus FAMOUS_NAMES.
+    FAMOUS_NAMES is needed because the resolver currently fails to confirm
+    the very top names (Obama, Trump -- attempted, not confirmed, 2026-09-25)."""
+    verified = {n.lower() for n in FAMOUS_NAMES}
+    try:
+        with open(QID_MAP, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    verified.add(json.loads(line)["name"].lower())
+    except FileNotFoundError:
+        print(f"WARNING: {QID_MAP} not found -- publishable facts limited to FAMOUS_NAMES", flush=True)
+    return verified
+
+
+def is_clean_label(name):
+    # ALL-CAPS names are filing-style org labels ("SERVICE EMPLOYEES",
+    # "DELL PRODUCTS L.P.") and all-lowercase ones are unnormalized source
+    # names ("dan patrick") -- fine scrolling past on the ticker, not in a post.
+    letters = [c for c in name if c.isalpha()]
+    return (bool(letters) and not all(c.isupper() for c in letters)
+            and not all(c.islower() for c in letters))
+
+
+def fact(category, text, subjects, people=()):
+    """subjects: names that identify the fact (for its key); people: the
+    individuals it names, which must all be verified for it to be published."""
+    return {"category": category, "text": text,
+            "key": f"{category}:" + "|".join(subjects), "people": list(people)}
+
+
 def load_search_index():
     with gzip.open(SEARCH_INDEX, "rt", encoding="utf-8") as f:
         return json.load(f)
@@ -80,8 +123,12 @@ def load_centrality_extras():
         return {"top_degree": [], "bridges": []}
 
 
-def surprising_rank_facts(index):
-    people = [e for e in index if looks_like_person(e["canonical"]) and e["degree"] >= MIN_DEGREE]
+def surprising_rank_facts(index, allowed=None):
+    # allowed: optional set of lowercased names to restrict subjects to (the
+    # publishable variant) -- otherwise the pool is dominated by obscure,
+    # likely-private people, which is fine for the gated ticker only.
+    people = [e for e in index if looks_like_person(e["canonical"]) and e["degree"] >= MIN_DEGREE
+              and (allowed is None or e["canonical"].lower() in allowed)]
     if len(people) < 2:
         return []
 
@@ -103,7 +150,13 @@ def surprising_rank_facts(index):
     divergence.sort(key=lambda t: t[0], reverse=True)
     pool = [e for _score, e in divergence[:200]]
 
-    famous_by_name = {e["canonical"]: e for e in index if e["canonical"] in FAMOUS_NAMES}
+    if allowed is None:
+        famous_by_name = {e["canonical"]: e for e in index if e["canonical"] in FAMOUS_NAMES}
+    else:
+        # Publishable variant: any verified public figure can be the partner,
+        # each used once -- FAMOUS_NAMES alone pairs nearly every fact with
+        # Gavin Newsom (the only one with a small enough degree).
+        famous_by_name = {e["canonical"]: e for e in people}
 
     facts = []
     used_names = set()
@@ -115,14 +168,23 @@ def surprising_rank_facts(index):
             continue
         # Pair against the closest-degree famous name with meaningfully lower SCI.
         candidates = [f for f in famous_by_name.values()
-                      if f["degree"] >= entry["degree"] and f["sci"] < entry["sci"]]
+                      if f["degree"] >= entry["degree"] and f["sci"] < entry["sci"]
+                      and (allowed is None or (f["canonical"] not in used_names
+                                               and f["degree"] >= 2 * entry["degree"]))]
         if not candidates:
             continue
-        partner = min(candidates, key=lambda f: abs(f["degree"] - entry["degree"]))
-        facts.append(
+        if allowed is None:
+            partner = min(candidates, key=lambda f: abs(f["degree"] - entry["degree"]))
+        else:
+            # Best-connected eligible partner -- the comparison only lands if
+            # the reader recognizes who's being outranked.
+            partner = max(candidates, key=lambda f: f["degree"])
+        facts.append(fact(
+            "who_you_know",
             f"{name} has {entry['degree']:,} contacts and outranks {partner['canonical']} "
-            f"({partner['degree']:,} contacts) in PageRank — it's who you know."
-        )
+            f"({partner['degree']:,} contacts) in PageRank — it's who you know.",
+            [name, partner["canonical"]], [name, partner["canonical"]],
+        ))
         used_names.add(name)
         used_names.add(partner["canonical"])
     return facts
@@ -162,11 +224,14 @@ def group_facts(groups):
             continue
         partner = min(candidates, key=lambda o: abs(o["pagerank"] - g["pagerank"]))
         higher, lower = (g, partner) if g["pagerank"] >= partner["pagerank"] else (partner, g)
-        facts.append(
+        # Groups are hand-curated (build_group_rankings.py), so no people to verify.
+        facts.append(fact(
+            "group_vs_group",
             f"The {higher['name']} (reaches {higher['external_neighbor_count']:,} people outside "
             f"itself) outranks the {lower['name']} ({lower['external_neighbor_count']:,} people) "
-            f"in PageRank — {higher['category'].replace('_', ' ')} vs {lower['category'].replace('_', ' ')}."
-        )
+            f"in PageRank — {higher['category'].replace('_', ' ')} vs {lower['category'].replace('_', ' ')}.",
+            [higher["name"], lower["name"]],
+        ))
         used.add(g["name"])
         used.add(partner["name"])
     return facts
@@ -190,7 +255,11 @@ def top_pagerank_facts(index):
     ordinals = ["most", "second most", "third most"]
     for i, e in enumerate(ranked[:TOP_PAGERANK_COUNT]):
         label = ordinals[i] if i < len(ordinals) else f"{i + 1}th most"
-        facts.append(f"{e['canonical']} is the {label} influential node in the entire network by PageRank.")
+        facts.append(fact(
+            "top_pagerank",
+            f"{e['canonical']} is the {label} influential node in the entire network by PageRank.",
+            [str(i + 1), e["canonical"]], [e["canonical"]],
+        ))
     return facts
 
 
@@ -203,13 +272,32 @@ def top_degree_facts(extras):
     top = extras.get("top_degree", [])
     if not top:
         return facts
-    facts.append(
-        f"{top[0]['name']} has the most direct contacts in the entire network: {top[0]['degree']:,}."
-    )
+    facts.append(fact(
+        "top_degree",
+        f"{top[0]['name']} has the most direct contacts in the entire network: {top[0]['degree']:,}.",
+        [top[0]["name"]], [top[0]["name"]],
+    ))
     if len(top) > 1:
         rest = ", ".join(f"{e['name']} ({e['degree']:,})" for e in top[1:10])
-        facts.append(f"By raw connection count, the top 10 are led by {top[0]['name']}, then {rest}.")
+        facts.append(fact(
+            "top_degree_list",
+            f"By raw connection count, the top 10 are led by {top[0]['name']}, then {rest}.",
+            [e["name"] for e in top[:10]], [e["name"] for e in top[:10]],
+        ))
     return facts
+
+
+def top_degree_public_fact(extras, verified):
+    # Publishable variant of the top-10 list: build_centrality_extras.py's
+    # person filter lets orgs through ("SERVICE EMPLOYEES", "DLA Piper"), so
+    # list only verified public figures rather than drop the fact entirely.
+    top = [e for e in extras.get("top_degree", []) if e["name"].lower() in verified]
+    if len(top) < 3:
+        return []
+    names = ", ".join(f"{e['name']} ({e['degree']:,})" for e in top)
+    return [fact("top_degree_public",
+                 f"Most-connected public figures in the network, by direct contacts: {names}.",
+                 [e["name"] for e in top], [e["name"] for e in top])]
 
 
 def bridge_facts(extras):
@@ -223,31 +311,55 @@ def bridge_facts(extras):
     # of its own).
     facts = []
     for b in extras.get("bridges", []):
-        facts.append(
+        # Community labels are just each community's highest-degree member --
+        # often an org or a private person -- so they count as named people.
+        facts.append(fact(
+            "bridge",
             f"{b['name']} is one of the network's biggest bridges — connecting the world of "
-            f"{b['community_a']} with the world of {b['community_b']}."
-        )
+            f"{b['community_a']} with the world of {b['community_b']}.",
+            [b["name"]], [b["name"], b["community_a"], b["community_b"]],
+        ))
     return facts
+
+
+def is_publishable(f, verified):
+    names = f["people"] + f["key"].split(":", 1)[1].split("|")
+    return (all(p.lower() in verified for p in f["people"])
+            and all(is_clean_label(n) for n in names if not n.isdigit()))
 
 
 def main():
     index = load_search_index()
     groups = load_group_rankings()
     extras = load_centrality_extras()
+    verified = load_verified_people()
 
-    facts = (top_pagerank_facts(index) + group_facts(groups) + surprising_rank_facts(index)
-             + top_degree_facts(extras) + bridge_facts(extras))
+    records = (top_pagerank_facts(index) + group_facts(groups) + surprising_rank_facts(index)
+               + top_degree_facts(extras) + bridge_facts(extras))
+
+    candidates = (records + surprising_rank_facts(index, allowed=verified)
+                  + top_degree_public_fact(extras, verified))
+    publishable, seen = [], set()
+    for f in candidates:
+        if f["key"] not in seen and is_publishable(f, verified):
+            seen.add(f["key"])
+            publishable.append({k: f[k] for k in ("key", "category", "text")})
 
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "facts": facts,
+        "facts": [f["text"] for f in records],
+        "publishable": publishable,
     }
     with gzip.open(OUT, "wt", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
 
-    print(f"Wrote {len(facts)} crawlie facts to {OUT}", flush=True)
-    for fact in facts:
-        print(f"  {fact}", flush=True)
+    print(f"Wrote {len(records)} crawlie facts ({len(publishable)} publishable, "
+          f"{len(verified)} verified public figures) to {OUT}", flush=True)
+    for f in records:
+        print(f"  {f['text']}", flush=True)
+    print("Publishable:", flush=True)
+    for f in publishable:
+        print(f"  [{f['category']}] {f['text']}", flush=True)
 
 
 if __name__ == "__main__":
