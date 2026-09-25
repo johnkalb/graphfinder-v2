@@ -569,6 +569,9 @@ def _test_department_db_path() -> str:
 # rather than depending on a convenience header this deployment doesn't send.
 _CF_ACCESS_TEAM_DOMAIN = os.environ.get("CF_ACCESS_TEAM_DOMAIN", "frosty-dream-d462.cloudflareaccess.com")
 _CF_ACCESS_CERTS_URL = f"https://{_CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs"
+# Application Audience (AUD) tag of the sixdegrees.net Access app -- a JWT
+# the team domain issued for any OTHER Access app must not be accepted here.
+_CF_ACCESS_AUD = os.environ.get("CF_ACCESS_AUD", "26727a4eee1dea152c19a69b2f77c71f6aec573cb632c35be84f965022b5ec91")
 _CF_ACCESS_JWKS_TTL_SECONDS = 3600
 _cf_access_jwks_cache = {"keys": {}, "fetched_at": 0.0}
 
@@ -605,6 +608,10 @@ def _verify_cf_access_jwt_email(assertion: str) -> Optional[str]:
         pubkey.verify(signature, f"{header_b64}.{payload_b64}".encode(), padding.PKCS1v15(), hashes.SHA256())
         if payload.get("exp", 0) < datetime.now(timezone.utc).timestamp():
             return None
+        aud = payload.get("aud")
+        if _CF_ACCESS_AUD not in (aud if isinstance(aud, list) else [aud]):
+            logger.warning("CF Access JWT audience mismatch")
+            return None
         email = payload.get("email")
         return email.strip().lower() if email else None
     except InvalidSignature:
@@ -617,9 +624,15 @@ def _verify_cf_access_jwt_email(assertion: str) -> Optional[str]:
 def _request_user_email(request: Optional[Request]) -> Optional[str]:
     if request is None:
         return None
-    email = request.headers.get("Cf-Access-Authenticated-User-Email")
-    if email:
-        return email.strip().lower()
+    # The plain header is forgeable by anyone who reaches the origin directly
+    # (the *.ondigitalocean.app URL skips Cloudflare), and with access-request
+    # approval an admin session can now add emails to the Access allow-list.
+    # Cloudflare doesn't send it in this deployment anyway, so production
+    # trusts only the signed JWT; the test suite opts back in (conftest.py).
+    if os.environ.get("CF_ACCESS_TRUST_EMAIL_HEADER") == "1":
+        email = request.headers.get("Cf-Access-Authenticated-User-Email")
+        if email:
+            return email.strip().lower()
     assertion = request.headers.get("Cf-Access-Jwt-Assertion")
     if assertion:
         return _verify_cf_access_jwt_email(assertion)
@@ -2902,9 +2915,237 @@ async def add_me(req: AddMeRequest, request: Request):
         logger.exception("add-me failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
 
+# --------------------------------------------------------------------------
+# Public access requests. /request-access and /request-access/submit are the
+# only paths outside the Cloudflare Access gate (a separate path-scoped
+# Bypass app in Cloudflare) -- everything else stays gated. Requests land in
+# service_items as item_type='access_request'; approving one in /admin adds
+# the email to the Access allow-list policy via the Cloudflare API.
+# --------------------------------------------------------------------------
+_CF_ACCESS_POLICY_ID = os.environ.get("CF_ACCESS_POLICY_ID", "f3fa602f-88e7-467b-99ca-1e324fc895e0")
+_EMAIL_RE = re.compile(r"^[^@\s<>\"']{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
+_FEDI_HANDLE_RE = re.compile(r"^@?[A-Za-z0-9_.-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
+_ACCESS_REQUEST_LIMIT_PER_HOUR = 5
+_access_request_hits: dict = {}
+
+
+def _cf_access_allow_email(email: str) -> tuple:
+    """Add email to the reusable Access policy's include list. Returns
+    (ok, message). Reads the policy first and writes back name/decision and
+    all three rule lists, so nothing else on the policy is dropped."""
+    import requests
+    token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not token or not account:
+        return False, "CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not configured"
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account}/access/policies/{_CF_ACCESS_POLICY_ID}"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        got = requests.get(url, headers=headers, timeout=15).json()
+        if not got.get("success"):
+            return False, f"read policy: {got.get('errors')}"
+        policy = got["result"]
+        include = policy.get("include") or []
+        if any((r.get("email") or {}).get("email", "").lower() == email for r in include):
+            return True, "already on the allow-list"
+        body = {"name": policy["name"], "decision": policy["decision"],
+                "include": include + [{"email": {"email": email}}],
+                "exclude": policy.get("exclude") or [], "require": policy.get("require") or []}
+        put = requests.put(url, headers=headers, json=body, timeout=15).json()
+        if not put.get("success"):
+            return False, f"update policy: {put.get('errors')}"
+        return True, "added to the allow-list"
+    except Exception as e:
+        logger.exception("Cloudflare Access allow-list update failed")
+        return False, str(e)
+
+
+def _notify_telegram(text: str):
+    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat:
+        return
+    try:
+        import requests
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      json={"chat_id": chat, "text": text}, timeout=10)
+    except Exception:
+        logger.exception("Telegram notify failed")
+
+
+def _turnstile_ok(token: Optional[str], ip: Optional[str]) -> bool:
+    secret = os.environ.get("TURNSTILE_SECRET_KEY")
+    if not secret:
+        return True  # not configured yet (local/dev); rate limit + honeypot still apply
+    if not token:
+        return False
+    try:
+        import requests
+        r = requests.post("https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                          data={"secret": secret, "response": token, "remoteip": ip or ""}, timeout=10)
+        return bool(r.json().get("success"))
+    except Exception:
+        logger.exception("Turnstile verification failed")
+        return False
+
+
+def _access_request_rate_limited(ip: str) -> bool:
+    import time
+    now = time.time()
+    hits = [t for t in _access_request_hits.get(ip, []) if now - t < 3600]
+    _access_request_hits[ip] = hits + [now]
+    if len(_access_request_hits) > 10000:  # bound memory; worst case resets everyone's window
+        _access_request_hits.clear()
+    return len(hits) >= _ACCESS_REQUEST_LIMIT_PER_HOUR
+
+
+class AccessRequest(BaseModel):
+    email: str = Field(..., max_length=254)
+    handle: Optional[str] = Field(None, max_length=260)
+    note: Optional[str] = Field(None, max_length=1000)
+    website: Optional[str] = None  # honeypot -- hidden from humans, bots fill it in
+    turnstile_token: Optional[str] = Field(None, max_length=4096)
+
+
+_REQUEST_ACCESS_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request access · sixdegrees.net</title>
+__TURNSTILE_SCRIPT__
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --border:#30363d; --accent:#58a6ff; --ok:#3fb950; --err:#f85149; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --muted:#59636e; --border:#d1d9e0; --accent:#0969da; --ok:#1a7f37; --err:#cf222e; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:520px; margin:0 auto; padding:48px 16px; }
+  h1 { font-size:1.6rem; margin:0 0 .5rem; }
+  p.lead { color:var(--muted); margin:0 0 1.75rem; }
+  form { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px; }
+  label { display:block; font-weight:600; margin:0 0 .3rem; font-size:.95rem; }
+  .hint { font-weight:400; color:var(--muted); font-size:.85rem; }
+  input, textarea { width:100%; padding:.6rem .7rem; margin:0 0 1.1rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; }
+  input:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  textarea { min-height:90px; resize:vertical; }
+  .hp { position:absolute; left:-10000px; width:1px; height:1px; overflow:hidden; }
+  button { width:100%; padding:.7rem; border:0; border-radius:6px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .cf-turnstile { margin:0 0 1.1rem; }
+  #result { margin-top:1rem; min-height:1.5em; }
+  #result.ok { color:var(--ok); } #result.err { color:var(--err); }
+  footer { margin-top:1.5rem; color:var(--muted); font-size:.85rem; }
+</style></head>
+<body><main>
+  <h1>Request access</h1>
+  <p class="lead">sixdegrees.net maps how public figures are connected, from filings, court records and news. It's in private beta. Tell us who you are and we'll add you.</p>
+  <form id="f" novalidate>
+    <label for="email">Email <span class="hint">(you'll log in with a code sent here)</span></label>
+    <input id="email" name="email" type="email" autocomplete="email" required maxlength="254">
+    <label for="handle">Fediverse handle <span class="hint">(optional, e.g. @you@mastodon.social)</span></label>
+    <input id="handle" name="handle" type="text" autocomplete="off" maxlength="260">
+    <label for="note">How did you hear about us? <span class="hint">(optional)</span></label>
+    <textarea id="note" name="note" maxlength="1000"></textarea>
+    <div class="hp" aria-hidden="true"><label for="website">Website</label><input id="website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
+    __TURNSTILE_WIDGET__
+    <button id="submit" type="submit">Request access</button>
+    <div id="result" role="status" aria-live="polite"></div>
+  </form>
+  <footer>Requests are reviewed by hand. We only use your email to let you log in.</footer>
+</main>
+<script>
+document.getElementById('f').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const out = document.getElementById('result'), btn = document.getElementById('submit');
+  const email = document.getElementById('email').value.trim();
+  if (!email || !email.includes('@')) { out.className = 'err'; out.textContent = 'Please enter a valid email address.'; return; }
+  const tsEl = document.querySelector('[name="cf-turnstile-response"]');
+  btn.disabled = true; out.className = ''; out.textContent = 'Sending…';
+  try {
+    const res = await fetch('/request-access/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, handle: document.getElementById('handle').value.trim() || null,
+        note: document.getElementById('note').value.trim() || null, website: document.getElementById('website').value || null,
+        turnstile_token: tsEl ? tsEl.value : null }) });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok && d.success) { out.className = 'ok'; out.textContent = d.message; document.getElementById('f').reset(); }
+    else { out.className = 'err'; out.textContent = d.error || 'Something went wrong. Please try again later.';
+           if (window.turnstile) window.turnstile.reset(); btn.disabled = false; }
+  } catch (e) { out.className = 'err'; out.textContent = 'Network error. Please try again.'; btn.disabled = false; }
+});
+</script>
+</body></html>"""
+
+
+@app.get("/request-access", response_class=HTMLResponse)
+async def request_access_page():
+    site_key = os.environ.get("TURNSTILE_SITE_KEY")
+    page = _REQUEST_ACCESS_HTML
+    if site_key:
+        page = page.replace("__TURNSTILE_SCRIPT__",
+                            '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>')
+        page = page.replace("__TURNSTILE_WIDGET__", f'<div class="cf-turnstile" data-sitekey="{html.escape(site_key)}"></div>')
+    else:
+        page = page.replace("__TURNSTILE_SCRIPT__", "").replace("__TURNSTILE_WIDGET__", "")
+    return HTMLResponse(page)
+
+
+@app.post("/request-access/submit")
+async def request_access_submit(req: AccessRequest, request: Request):
+    # Same answer whether the email is new, pending or already approved --
+    # this endpoint is public, so it mustn't reveal who has access.
+    accepted = {"success": True, "message": "Thanks! Your request is in. You'll be able to log in at sixdegrees.net once it's approved."}
+    if req.website:
+        return accepted  # honeypot tripped: pretend success, store nothing
+    ip = request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else "unknown")
+    if _access_request_rate_limited(ip):
+        return JSONResponse(status_code=429, content={"success": False, "error": "Too many requests. Please try again later."})
+    email = req.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        return JSONResponse(status_code=400, content={"success": False, "error": "Please enter a valid email address."})
+    handle = (req.handle or "").strip() or None
+    if handle and not _FEDI_HANDLE_RE.match(handle):
+        return JSONResponse(status_code=400, content={"success": False, "error": "Fediverse handles look like @name@server.example."})
+    if handle and not handle.startswith("@"):
+        handle = "@" + handle
+    note = (req.note or "").strip() or None
+    loop = asyncio.get_running_loop()
+    if not await loop.run_in_executor(None, _turnstile_ok, req.turnstile_token, ip):
+        return JSONResponse(status_code=400, content={"success": False, "error": "Verification failed. Please try again."})
+    try:
+        conn = db.connect(_test_department_db_path())
+        c = conn.cursor()
+        dup = c.execute("SELECT id FROM service_items WHERE item_type = 'access_request' AND submitter_email = ? "
+                        "AND status IN ('new', 'needs_review', 'approved')", (email,)).fetchone()
+        if dup:
+            conn.close()
+            return accepted
+        c.execute("""
+            INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
+            VALUES ('access_request', 'new', 'normal', ?, ?, ?, ?)
+        """, (f"Access request: {email}" + (f" ({handle})" if handle else ""), note or "", email,
+              json.dumps({"handle": handle, "source": "request-access page"})))
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.exception("access request insert failed")
+        return JSONResponse(status_code=500, content={"success": False, "error": "Something went wrong. Please try again later."})
+    summary = f"New sixdegrees access request: {email}" + (f" ({handle})" if handle else "")
+    if note:
+        summary += f"\n\n{note[:500]}"
+    summary += "\n\nReview: https://sixdegrees.net/admin"
+    await loop.run_in_executor(None, _notify_telegram, summary)
+    try:
+        _notify_operator_of_new_submission("access request", email + (f" ({handle})" if handle else ""), note or "", email)
+    except Exception as e:
+        print(f"[operator-notify] Error sending operator alert: {e}")
+    return accepted
+
+
 @app.get("/api/service/queue")
-async def get_service_queue(status: Optional[str] = "new", item_type: Optional[str] = None,
+async def get_service_queue(request: Request, status: Optional[str] = "new", item_type: Optional[str] = None,
                              limit: int = 25, sort: str = "created_at"):
+    # Admin-only: the queue carries submitter emails, including access
+    # requests from members of the public.
+    denied = _require_admin(request)
+    if denied:
+        return denied
     try:
         db_path = _test_department_db_path()
         conn = db.connect(db_path)
@@ -2948,7 +3189,18 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
             
         reviewer = req.reviewed_by or _request_user_email(request) or "admin"
         now_str = datetime.now(timezone.utc).isoformat()
-        
+
+        # Approving an access request = adding the email to the Cloudflare
+        # Access allow-list. Only mark it approved if Cloudflare accepted it.
+        if req.status == "approved" and item["item_type"] == "access_request":
+            ok, msg = await asyncio.get_running_loop().run_in_executor(
+                None, _cf_access_allow_email, (item["submitter_email"] or "").strip().lower())
+            if not ok:
+                conn.close()
+                return JSONResponse(status_code=502, content={"success": False,
+                                    "error": f"Cloudflare allow-list update failed: {msg}"})
+            req.note = f"{req.note} — {msg}" if req.note else msg
+
         c.execute("""
             UPDATE service_items
             SET status = ?, reviewed_by = ?, reviewed_at = ?, resolution_note = ?
@@ -3405,6 +3657,7 @@ async def admin_page(request: Request):
       <option value="dispute">dispute</option>
       <option value="qa_question">qa_question</option>
       <option value="legal_review">legal_review</option>
+      <option value="access_request">access_request</option>
     </select></label>
     <label>Limit: <select id="q-limit" onchange="loadQueue()">
       <option value="25">25</option>
