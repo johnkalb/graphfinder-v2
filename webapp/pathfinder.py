@@ -3197,7 +3197,10 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
                 None, _cf_access_allow_email, (item["submitter_email"] or "").strip().lower())
             if not ok:
                 conn.close()
-                return JSONResponse(status_code=502, content={"success": False,
+                logger.warning("access request %s: Cloudflare allow-list update failed: %s", item_id, msg)
+                # 424, not 502: DigitalOcean/Cloudflare replace an origin 502
+                # with their own HTML 504 page, which hid this message (2026-09-25).
+                return JSONResponse(status_code=424, content={"success": False,
                                     "error": f"Cloudflare allow-list update failed: {msg}"})
             req.note = f"{req.note} — {msg}" if req.note else msg
 
@@ -3729,8 +3732,9 @@ function renderRow(item) {{
 async function doReview(id, status) {{
   const note = document.getElementById('note-' + id)?.value || null;
   const d = await postJson(`/api/service/items/${{id}}/review`, {{status, note}});
-  if (d.success) setQueueStatus(`Item ${{id}} marked ${{status}}.`);
-  loadQueue();
+  if (!d.success) return;  // keep the error visible -- a reload would overwrite it
+  await loadQueue();
+  setQueueStatus(`Item ${{id}} marked ${{status}}.`);
 }}
 async function doResolve(id) {{
   const note = document.getElementById('note-' + id)?.value || null;
@@ -3756,7 +3760,7 @@ async function postJson(url, body) {{
   try {{
     const res = await fetch(url, {{method: 'POST', credentials: 'include',
       headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(body)}});
-    const d = await res.json();
+    const d = await res.json().catch(() => ({{success: false, error: `HTTP ${{res.status}} (non-JSON response)`}}));
     if (!d.success) {{
       const el = document.getElementById('queue-status');
       el.textContent = 'error: ' + (d.error || 'request failed');
