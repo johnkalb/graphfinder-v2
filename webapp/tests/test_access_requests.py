@@ -120,7 +120,8 @@ def test_stays_pending_when_cloudflare_fails(client, tester_data_dir):
     item_id = _submit_and_get_id(client, tester_data_dir, "cf-down@example.org")
     with patch("pathfinder._cf_access_allow_email", return_value=(False, "boom")):
         r = client.post(f"/api/service/items/{item_id}/review", json={"status": "approved"}, headers=ADMIN_HEADERS)
-    assert r.status_code == 502
+    assert r.status_code == 424
+    assert "boom" in r.json()["error"]
     assert _access_rows(tester_data_dir, "cf-down@example.org")[0]["status"] == "new"
 
 
