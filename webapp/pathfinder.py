@@ -3073,6 +3073,23 @@ document.getElementById('f').addEventListener('submit', async (ev) => {
 </body></html>"""
 
 
+# Fediverse: the crawlie account lives on GoToSocial at social.sixdegrees.net
+# (optiplex, via Cloudflare Tunnel) but its handle is @crawlie@sixdegrees.net,
+# so remote servers discover it here first. GoToSocial's host/account-domain
+# split requires these three to redirect to the real host. Like
+# /request-access, they're outside the Access gate via a Bypass app for
+# sixdegrees.net/.well-known.
+_FEDIVERSE_HOST = os.environ.get("FEDIVERSE_HOST", "social.sixdegrees.net")
+
+
+@app.get("/.well-known/webfinger")
+@app.get("/.well-known/nodeinfo")
+@app.get("/.well-known/host-meta")
+async def fediverse_well_known(request: Request):
+    query = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"https://{_FEDIVERSE_HOST}{request.url.path}{query}", status_code=301)
+
+
 @app.get("/request-access", response_class=HTMLResponse)
 async def request_access_page():
     site_key = os.environ.get("TURNSTILE_SITE_KEY")

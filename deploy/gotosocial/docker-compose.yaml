@@ -1,0 +1,62 @@
+# GoToSocial for the sixdegrees crawlie account (@crawlie@sixdegrees.net).
+#
+# Lives in ~/gotosocial on optiplex (snap docker can only mount under $HOME).
+# gotosocial listens only on 127.0.0.1:8080 on the host (for local checks);
+# the public route is cloudflared -> social.sixdegrees.net, an outbound
+# Cloudflare Tunnel, so no router ports are opened.
+#
+#   docker compose up -d gotosocial            # server only (local)
+#   docker compose --profile tunnel up -d      # + tunnel (needs TUNNEL_TOKEN in .env)
+
+services:
+  gotosocial:
+    image: superseriousbusiness/gotosocial:0.22.1
+    container_name: gotosocial
+    user: "1000:1000"
+    restart: unless-stopped
+    networks:
+      gts:
+        ipv4_address: 172.30.53.10
+    environment:
+      # host/account-domain must NOT change after the first start.
+      GTS_HOST: social.sixdegrees.net
+      GTS_ACCOUNT_DOMAIN: sixdegrees.net
+      GTS_PROTOCOL: https
+      GTS_BIND_ADDRESS: 0.0.0.0
+      GTS_PORT: "8080"
+      GTS_DB_TYPE: sqlite
+      GTS_DB_ADDRESS: /gotosocial/storage/sqlite.db
+      GTS_STORAGE_LOCAL_BASE_PATH: /gotosocial/storage
+      GTS_LETSENCRYPT_ENABLED: "false"
+      # cloudflared reaches us over the gts network; trust it for client IPs.
+      GTS_TRUSTED_PROXIES: "127.0.0.1/32,172.30.53.0/24"
+      GTS_ACCOUNTS_REGISTRATION_OPEN: "false"
+      GTS_LANDING_PAGE_USER: crawlie
+      GTS_INSTANCE_LANGUAGES: en
+      GTS_INSTANCE_EXPOSE_PUBLIC_TIMELINE: "false"
+      GTS_LOG_LEVEL: info
+      TZ: America/New_York
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/gotosocial/storage
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: gotosocial-tunnel
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file: .env          # TUNNEL_TOKEN=... (chmod 600, never committed)
+    networks:
+      gts:
+        ipv4_address: 172.30.53.20
+    depends_on:
+      - gotosocial
+
+networks:
+  gts:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.53.0/24

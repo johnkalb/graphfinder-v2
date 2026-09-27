@@ -182,3 +182,13 @@ def test_jwt_for_another_access_app_is_rejected(client, cf_access_keypair):
     assert client.get("/api/service/queue", headers={"Cf-Access-Jwt-Assertion": wrong}).status_code == 403
     good = _make_test_cf_access_jwt("john.kalb@gmail.com", private_key, kid=kid)
     assert client.get("/api/service/queue", headers={"Cf-Access-Jwt-Assertion": good}).status_code == 200
+
+
+# --- Fediverse discovery redirects ---------------------------------------------
+
+@pytest.mark.parametrize("path", ["/.well-known/webfinger", "/.well-known/nodeinfo", "/.well-known/host-meta"])
+def test_well_known_redirects_to_gotosocial(client, path):
+    r = client.get(path, params={"resource": "acct:crawlie@sixdegrees.net"}, follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == (f"https://social.sixdegrees.net{path}"
+                                     "?resource=acct%3Acrawlie%40sixdegrees.net")
