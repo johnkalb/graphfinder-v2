@@ -67,54 +67,53 @@ yet attempted).
 | 51 | Alston & Bird | blocked_bot_mitigation (robots.txt itself returns a Cloudflare "Attention Required!" interstitial challenge page rather than the actual file -- confirmed via a full-body fetch, not just the HTTP status code, since Cloudflare's challenge pages commonly return HTTP 200 with challenge HTML rather than a 403. A site that gates even the compliance-check document behind bot mitigation is a deliberate anti-automation posture, matching the White & Case precedent already in this backlog -- not attempted further.) |
 | 52 | K&L Gates | needs_recon (robots.txt has no Disallow rules at all -- completely unrestricted. Clean semantic markup found: .s-bio-card / .s-bio-card__heading (name+bio href, e.g. /lawyers/Brodie-Erwin) / .s-bio-card__office / .s-bio-card__phone, 50 cards present on initial page load. Numbered pagination buttons ('1' through '8') are present, but clicking button '2' -- after dismissing the OneTrust cookie-consent overlay that otherwise intercepts the click, same issue as jones-day/cooley -- produced no change in the rendered card list and no new xhr/fetch request. No JSON API observed at all. Needs direct visual/DOM inspection of what those numbered buttons actually control before this can be built out.) |
 | 53 | Ashurst | blocked_robots_txt (real merger: ashurst.com now 308-redirects to ashurstperkinscoie.com, same pattern as the Hogan Lovells/Cadwalader and Herbert Smith Freehills/Kramer mergers already in this backlog. The new domain's robots.txt disallows /api/*, /sitecore, /Sitecore, /sitecore/api/ssc/* -- the same first-party Sitecore API family used by working firms Kirkland & Ellis and Greenberg Traurig, so this is a real, deliberate block of the exact endpoint family this harvester would otherwise use -- plus */people/?q=* and */search/*. Hard policy stop, not attempted further.) |
-| 54 | Foley & Lardner | |
-| 55 | Winston & Strawn | |
-| 56 | Perkins Coie | |
-| 57 | King & Wood Mallesons | |
-| 58 | Sheppard, Mullin, Richter & Hampton | |
-| 59 | Cravath, Swaine & Moore | |
-| 60 | Wachtell, Lipton, Rosen & Katz | |
-| 61 | Arnold & Porter | |
-| 62 | Troutman Pepper Locke | |
-| 63 | Fried, Frank, Harris, Shriver & Jacobson | |
-| 64 | McGuireWoods | |
-| 65 | Kim & Chang | |
-| 66 | Clyde & Co | |
-| 67 | O'Melveny & Myers | |
-| 68 | Faegre Drinker | |
-| 69 | BakerHostetler | |
-| 70 | Vinson & Elkins | |
-| 71 | Polsinelli | |
-| 72 | Nelson Mullins Riley & Scarborough | |
-| 73 | Seyfarth Shaw | |
-| 74 | Fragomen, Del Rey, Bernsen & Loewy | |
-| 75 | Hunton Andrews Kurth | |
-| 76 | Pinsent Masons | |
-| 77 | Slaughter and May | |
-| 78 | Katten Muchin Rosenman | |
-| 79 | Bryan Cave Leighton Paisner | |
-| 80 | Venable | |
-| 81 | Baker Botts | |
-| 82 | Pillsbury Winthrop Shaw Pittman | |
-| 83 | Fenwick & West | |
-| 84 | Simmons & Simmons | |
-| 85 | Fox Rothschild | |
-| 86 | Gordon Rees Scully Mansukhani | |
-| 87 | Lewis Brisbois Bisgaard & Smith | |
-| 88 | Gowling WLG | |
-| 89 | Barnes & Thornburg | |
-| 90 | Blank Rome | |
-| 91 | Bird & Bird | |
-| 92 | Littler Mendelson | |
-| 93 | Ogletree, Deakins, Nash, Smoak & Stewart | |
-| 94 | Blake, Cassels & Graydon | |
-| 95 | Cozen O'Connor | |
-| 96 | Husch Blackwell | |
-| 97 | Addleshaw Goddard | |
-| 98 | Taft Stettinius & Hollister | |
-| 99 | Mintz, Levin, Cohn, Ferris, Glovsky, and Popeo | |
-| 100 | Jackson Lewis | |
-
+| 54 | Foley & Lardner | needs_recon (first pass 2026-09-28: robots.txt open, no people/api/search rules) |
+| 55 | Winston & Strawn | needs_recon (first pass 2026-09-28: winston.com now redirects to winstontaylor.com -- merger rebrand, verify; robots.txt open) |
+| 56 | Perkins Coie | blocked_robots_txt (first pass 2026-09-28: perkinscoie.com redirects to ashurstperkinscoie.com, the merged site already blocked under Ashurst #53 -- /api/*, */people/?q=*, */search/*) |
+| 57 | King & Wood Mallesons | blocked_bot_mitigation (first pass 2026-09-28: redirects to kingandwood.com; home page 403 with a challenge page) |
+| 58 | Sheppard, Mullin, Richter & Hampton | needs_recon (first pass 2026-09-28: HTTP 429 on both home and robots.txt -- rate-limited, retry later) |
+| 59 | Cravath, Swaine & Moore | needs_recon (first pass 2026-09-28: robots.txt disallows /people/index.html? -- the people index's query form is off-limits; only a non-query listing, if one exists, is usable) |
+| 60 | Wachtell, Lipton, Rosen & Katz | blocked_bot_mitigation (first pass 2026-09-28: home page 403 with a challenge page) |
+| 61 | Arnold & Porter | needs_recon (first pass 2026-09-28: robots.txt only blocks ?format=vCard) |
+| 62 | Troutman Pepper Locke | needs_recon (first pass 2026-09-28: robots.txt blocks /global-search* and ?_bio_keyword= / ?in= -- use a non-search listing only) |
+| 63 | Fried, Frank, Harris, Shriver & Jacobson | blocked_bot_mitigation (first pass 2026-09-28: 403 on home AND robots.txt -- same posture as White & Case) |
+| 64 | McGuireWoods | needs_recon (first pass 2026-09-28: robots.txt blocks ?[refinementList] faceted URLs -- looks Algolia-backed like Reed Smith; check for a public search-only key) |
+| 65 | Kim & Chang | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 66 | Clyde & Co | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 67 | O'Melveny & Myers | blocked_bot_mitigation (first pass 2026-09-28: home AND robots.txt return 403 challenge pages) |
+| 68 | Faegre Drinker | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore/api/ssc/* only) |
+| 69 | BakerHostetler | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 70 | Vinson & Elkins | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 71 | Polsinelli | needs_recon (first pass 2026-09-28: robots.txt blocks /?s=* site search only) |
+| 72 | Nelson Mullins Riley & Scarborough | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 73 | Seyfarth Shaw | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 74 | Fragomen, Del Rey, Bernsen & Loewy | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 75 | Hunton Andrews Kurth | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 76 | Pinsent Masons | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore/ -- avoid Sitecore API paths) |
+| 77 | Slaughter and May | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 78 | Katten Muchin Rosenman | needs_recon (first pass 2026-09-28: robots.txt open; host is katten.com) |
+| 79 | Bryan Cave Leighton Paisner | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 80 | Venable | needs_recon (first pass 2026-09-28: robots.txt blocks /api/* for all agents incl. ClaudeBot/GPTBot (not a site-wide AI block) -- avoid /api/) |
+| 81 | Baker Botts | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore -- avoid Sitecore API paths) |
+| 82 | Pillsbury Winthrop Shaw Pittman | blocked_robots_txt (first pass 2026-09-28: robots.txt disallows /en/lawyers/?v=attorney&ls=* and search-results pages -- the directory's own query mechanism) |
+| 83 | Fenwick & West | blocked_bot_mitigation (first pass 2026-09-28: home page 403; robots.txt also blocks /search/) |
+| 84 | Simmons & Simmons | blocked_robots_txt (first pass 2026-09-28: robots.txt disallows */people/? and */people? -- the people directory's query form) |
+| 85 | Fox Rothschild | needs_recon (first pass 2026-09-28: robots.txt blocks /?s=* site search only) |
+| 86 | Gordon Rees Scully Mansukhani | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 87 | Lewis Brisbois Bisgaard & Smith | needs_recon (first pass 2026-09-28: robots.txt blocks GPTBot site-wide but not other agents -- judgment call on AI-crawler intent (cf. Akin Gump); lowest priority) |
+| 88 | Gowling WLG | needs_recon (first pass 2026-09-28: robots.txt blocks /api/ for all agents (ClaudeBot/GPTBot named with the same /api/ rules) -- avoid /api/) |
+| 89 | Barnes & Thornburg | needs_recon (first pass 2026-09-28: robots.txt blocks /api/ -- avoid /api/) |
+| 90 | Blank Rome | needs_recon (first pass 2026-09-28: HTTP 429 on home page -- rate-limited, retry later) |
+| 91 | Bird & Bird | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore paths -- avoid Sitecore API) |
+| 92 | Littler Mendelson | needs_recon (first pass 2026-09-28: robots.txt blocks /search -- use a non-search listing only) |
+| 93 | Ogletree, Deakins, Nash, Smoak & Stewart | needs_recon (first pass 2026-09-28: robots.txt open; host is ogletree.com) |
+| 94 | Blake, Cassels & Graydon | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 95 | Cozen O'Connor | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 96 | Husch Blackwell | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 97 | Addleshaw Goddard | needs_recon (first pass 2026-09-28: robots.txt blocks GPTBot site-wide but not other agents -- judgment call on AI-crawler intent (cf. Akin Gump); lowest priority) |
+| 98 | Taft Stettinius & Hollister | needs_recon (first pass 2026-09-28: robots.txt blocks /api/ -- avoid /api/) |
+| 99 | Mintz, Levin, Cohn, Ferris, Glovsky, and Popeo | needs_recon (first pass 2026-09-28: domain is mintz.com (not .org); robots.txt blocks /search/ -- use a non-search listing only) |
+| 100 | Jackson Lewis | needs_recon (first pass 2026-09-28: robots.txt blocks /search/ -- use a non-search listing only) |
 Note: several are UK/international firms (Clifford Chance, Linklaters, Freshfields, Slaughter and
 May, etc.) with no US name-collision guarantee -- still worth the DB name-collision check per the
 README's mandatory step, since the graph already has plenty of non-US entities.
