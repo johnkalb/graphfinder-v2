@@ -77,7 +77,7 @@ yet attempted).
 | 61 | Arnold & Porter | needs_recon (first pass 2026-09-28: robots.txt only blocks ?format=vCard) |
 | 62 | Troutman Pepper Locke | needs_recon (first pass 2026-09-28: robots.txt blocks /global-search* and ?_bio_keyword= / ?in= -- use a non-search listing only) |
 | 63 | Fried, Frank, Harris, Shriver & Jacobson | blocked_bot_mitigation (first pass 2026-09-28: 403 on home AND robots.txt -- same posture as White & Case) |
-| 64 | McGuireWoods | needs_recon (first pass 2026-09-28: robots.txt blocks ?[refinementList] faceted URLs -- looks Algolia-backed like Reed Smith; check for a public search-only key) |
+| 64 | McGuireWoods | working (2026-09-28: WordPress 'WP Search with Algolia' -- public search-only key in the page's own inline `var algolia` config, index wp_posts_people. Split by people_last_name_letter facet to stay under Algolia's 1,000-hit cap (/browse is 403 for this key); lawyer roles only via taxonomies.role. Dry-run: 993 lawyers, 0 dupes (1,078 people minus 85 'Other Professional').) |
 | 65 | Kim & Chang | needs_recon (first pass 2026-09-28: robots.txt open) |
 | 66 | Clyde & Co | needs_recon (first pass 2026-09-28: robots.txt open) |
 | 67 | O'Melveny & Myers | blocked_bot_mitigation (first pass 2026-09-28: home AND robots.txt return 403 challenge pages) |
