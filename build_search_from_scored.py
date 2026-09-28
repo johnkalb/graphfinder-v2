@@ -38,6 +38,31 @@ for idx, name in enumerate(sorted_nodes):
     pct = round((idx / num_nodes) * 100)
     node_percentiles[name] = max(1, min(100, pct))
 
+# PageRank ladder for crawlie facts ("#1 is ..., #1,000 is ..."): the person at
+# each power-of-ten rank by the SAME PageRank the site's SCI uses. Build-dir
+# only (read by build_crawlie_facts.py), not deployed.
+# People = nodes the database types PERSON (build_person_nodes.py). The name
+# heuristic alone put "SERVICE EMPLOYEES", then "DLA Piper", at #1.
+from build_crawlie_facts import looks_like_person
+try:
+    with gzip.open("webapp/data/person_nodes.json.gz", "rt", encoding="utf-8") as f:
+        _person_idx = set(json.load(f))
+    is_person = lambda i, n: i in _person_idx
+except FileNotFoundError:
+    print("WARNING: person_nodes.json.gz missing -- ladder falls back to the name heuristic")
+    is_person = lambda i, n: looks_like_person(n)
+people_ranked = sorted((n for i, n in enumerate(nodes) if is_person(i, n)), key=lambda n: -pr.get(n, 0.0))
+name_to_idx = {n: i for i, n in enumerate(nodes)}
+rungs = []
+r = 1
+while r <= len(people_ranked):
+    name = people_ranked[r - 1]
+    rungs.append({"rank": r, "name": name, "degree": deg.get(name_to_idx[name], 0)})
+    r *= 10
+with open("webapp/data/pagerank_ladder.json", "w", encoding="utf-8") as f:
+    json.dump({"people": len(people_ranked), "rungs": rungs}, f, ensure_ascii=False, indent=1)
+print(f"PageRank ladder: {len(people_ranked):,} people; " + ", ".join(f"#{x['rank']:,} {x['name']}" for x in rungs))
+
 print("Assembling search index...")
 index = []
 for i, name in enumerate(nodes):
