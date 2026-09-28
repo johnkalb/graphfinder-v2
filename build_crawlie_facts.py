@@ -30,6 +30,8 @@ SEARCH_INDEX = "webapp/data/search_index.json.gz"
 GROUP_RANKINGS = "webapp/data/group_rankings.json.gz"
 CENTRALITY_EXTRAS = "webapp/data/centrality_extras.json.gz"
 OUT = "webapp/data/crawlie_facts.json.gz"
+PAGERANK_LADDER = "webapp/data/pagerank_ladder.json"   # build_search_from_scored.py
+GRAPH_STATS = "webapp/data/graph_stats.json"           # build_graph_stats.py
 QID_MAP = os.environ.get("QID_MAP_PATH", os.path.join(os.path.expanduser("~"), "qid_map.jsonl"))
 
 MIN_DEGREE = 15          # exclude near-isolated stub nodes -- "surprising" divergence there is just noise
@@ -322,8 +324,106 @@ def bridge_facts(extras):
     return facts
 
 
+def load_optional_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def ladder_facts(ladder, verified):
+    """"#1 is X, #100 is Y, ..." from build_search_from_scored.py's
+    pagerank_ladder.json. Two records share one key: the ticker version names
+    every rung; the publishable one names only verified public figures and
+    describes the rest by their connection count."""
+    if not ladder or not ladder.get("rungs"):
+        return [], []
+
+    def rung_text(r, name_it):
+        n = r["degree"]
+        who = r["name"] if name_it else f"someone with {n:,} connection{'' if n == 1 else 's'}"
+        return f"#{r['rank']:,} is {who}"
+
+    rungs = ladder["rungs"]
+    intro = f"Out of {ladder['people']:,} people in the sixdegrees network, ranked by PageRank: "
+    all_names = [r["name"] for r in rungs]
+    ticker = fact("pagerank_ladder", intro + "; ".join(rung_text(r, True) for r in rungs) + ".",
+                  ["ladder"], all_names)
+    ok = lambda r: r["name"].lower() in verified and is_clean_label(r["name"])
+    public = fact("pagerank_ladder", intro + "; ".join(rung_text(r, ok(r)) for r in rungs) + ".",
+                  ["ladder"], [r["name"] for r in rungs if ok(r)])
+    return [ticker], [public]
+
+
+def pct(x):
+    return f"{x:.0%}" if x < 0.995 else f"{x:.1%}"
+
+
+def stats_facts(stats):
+    """Dataset/network statistics from build_graph_stats.py (graph_stats.json).
+    No people named, so all of these are publishable."""
+    if not stats:
+        return []
+    out = []
+    sep = stats.get("separation")
+    if sep:
+        m = sep["median_steps"]
+        out.append(fact("stats_separation",
+                        "In the sixdegrees network, the median distance between two people is exactly six steps."
+                        if m == 6 else
+                        f"In the sixdegrees network, the median distance between two people is {m} steps — not six.",
+                        ["median"]))
+        w3, w6 = sep["within"].get("3"), sep["within"].get("6")
+        if w3 is not None and w6 is not None:
+            out.append(fact("stats_separation",
+                            f"Only {pct(w3)} of pairs of people in the sixdegrees network are within 3 steps "
+                            f"of each other — but {pct(w6)} are within 6.", ["within3"]))
+        out.append(fact("stats_separation",
+                        f"Half of all people in the sixdegrees network can reach 90% of everyone else within "
+                        f"{sep['reach90_median_steps']} steps.", ["reach90"]))
+        out.append(fact("stats_separation",
+                        f"{pct(sep['network_share'])} of the {sep['people']:,} people in sixdegrees belong to one "
+                        f"connected network — and some pairs in it are at least {sep['longest_seen']} steps apart.",
+                        ["network"]))
+    ch = stats.get("charities")
+    if ch:
+        out.append(fact("stats_charity",
+                        f"{ch['count']:,} US nonprofits each hold more than $10 million in assets — "
+                        f"${ch['total_assets'] / 1e12:.1f} trillion in total.", ["count"]))
+        out.append(fact("stats_charity",
+                        f"The largest 1% of big US nonprofits ({ch['top1pct_count']:,} organizations) hold "
+                        f"{pct(ch['top1pct_share'])} of their combined assets. The biggest, "
+                        f"{ch['largest_name'].title()}, holds ${ch['largest_assets'] / 1e9:,.0f} billion.",
+                        ["concentration"]))
+        if ch.get("processed"):
+            out.append(fact("stats_charity",
+                            f"sixdegrees has mapped the boards of {ch['processed']:,} of the {ch['count']:,} "
+                            f"US nonprofits with more than $10 million in assets so far, largest first.",
+                            ["progress"]))
+    lf = stats.get("law_firms")
+    if lf:
+        out.append(fact("stats_law",
+                        f"The {lf['firms']} global law firms tracked by sixdegrees employ {lf['attorneys']:,} "
+                        f"attorneys between them; {lf['largest_firm']} alone has {lf['largest_attorneys']:,}.",
+                        ["attorneys"]))
+    sc = stats.get("scale")
+    if sc:
+        out.append(fact("stats_scale",
+                        f"sixdegrees maps {sc['nodes'] / 1e6:.2f} million people and organizations, linked by "
+                        f"{sc['edges'] / 1e6:.1f} million relationships drawn from public records.", ["size"]))
+    return out
+
+
+# Categories whose key subjects are fixed identifiers ("median", "ladder"),
+# not names -- only their named people get the label check.
+_NON_NAME_KEYS = ("stats_", "pagerank_ladder")
+
+
 def is_publishable(f, verified):
-    names = f["people"] + f["key"].split(":", 1)[1].split("|")
+    names = list(f["people"])
+    if not f["category"].startswith(_NON_NAME_KEYS):
+        names += f["key"].split(":", 1)[1].split("|")
     return (all(p.lower() in verified for p in f["people"])
             and all(is_clean_label(n) for n in names if not n.isdigit()))
 
@@ -334,11 +434,14 @@ def main():
     extras = load_centrality_extras()
     verified = load_verified_people()
 
+    ladder_ticker, ladder_public = ladder_facts(load_optional_json(PAGERANK_LADDER), verified)
+    stat_records = stats_facts(load_optional_json(GRAPH_STATS))
+
     records = (top_pagerank_facts(index) + group_facts(groups) + surprising_rank_facts(index)
-               + top_degree_facts(extras) + bridge_facts(extras))
+               + top_degree_facts(extras) + bridge_facts(extras) + ladder_ticker + stat_records)
 
     candidates = (records + surprising_rank_facts(index, allowed=verified)
-                  + top_degree_public_fact(extras, verified))
+                  + top_degree_public_fact(extras, verified) + ladder_public)
     publishable, seen = [], set()
     for f in candidates:
         if f["key"] not in seen and is_publishable(f, verified):

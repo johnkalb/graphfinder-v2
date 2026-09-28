@@ -24,6 +24,9 @@ def test_pick_candidates_rotates_categories_and_skips_posted():
     facts = [fact("g1"), fact("g2"), fact("g3"), fact("w1", "who_you_know"), fact("b1", "bridge")]
     picks = cp.pick_candidates(facts, posted={"g1"})
     assert [f["key"] for f in picks] == ["g2", "w1", "b1"]
+    stats = [fact("s1", "stats_separation"), fact("c1", "stats_charity")]
+    picks = cp.pick_candidates(facts + stats, posted=set())
+    assert [f["key"] for f in picks] == ["g1", "s1", "w1"]
 
 
 @pytest.fixture
