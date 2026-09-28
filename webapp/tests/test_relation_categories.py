@@ -121,6 +121,19 @@ def test_person_reconciliation_cross_referenced_is_same_entity():
     assert categorize("CROSS_REFERENCED") == "SAME_ENTITY"
 
 
+def test_wikidata_media_relation_types_categorize_correctly():
+    """wikidata_media_backfill.py (source_data=WIKIDATA_MEDIA, 2026-09-28).
+    DIRECTED must not hit the DIRECTOR* board-seat prefix, and the backfill
+    deliberately avoids CAST_MEMBER, which lands in MEMBERSHIP via the
+    substring check -- both would silently mis-score film credits."""
+    for rt in ("CAST_IN", "DIRECTED", "PRODUCED", "WROTE_SCREENPLAY", "AUTHORED"):
+        assert categorize(rt) == "CREATIVE_COLLAB", rt
+    assert categorize("AWARD_RECEIVED") == "AWARD"
+    assert categorize("EMPLOYEE") == "EMPLOYMENT"
+    assert categorize("DIRECTOR") == "CO_DIRECTOR"          # board seats unchanged
+    assert categorize("CAST_MEMBER") == "MEMBERSHIP"        # why the backfill doesn't use it
+
+
 def test_unrecognized_relation_type_falls_through_to_other():
     """categorize() has no "reject unknown input" mode -- anything
     unrecognized silently becomes OTHER. This is the actual mechanism behind
