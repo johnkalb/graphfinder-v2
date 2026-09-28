@@ -134,6 +134,15 @@ def test_wikidata_media_relation_types_categorize_correctly():
     assert categorize("CAST_MEMBER") == "MEMBERSHIP"        # why the backfill doesn't use it
 
 
+def test_romantic_partner_is_friend_not_executive():
+    """ROMANTIC_PARTNER was listed under FRIEND but the earlier "PARTNER"
+    substring check for executive titles caught it first (CO_EXECUTIVE).
+    Found via the influencer backfill's P451 unmarried-partner edges."""
+    assert categorize("ROMANTIC_PARTNER") == "FRIEND"
+    assert categorize("MANAGING_PARTNER") == "CO_EXECUTIVE"
+    assert categorize("GENERAL_PARTNER") == "CO_EXECUTIVE"
+
+
 def test_unrecognized_relation_type_falls_through_to_other():
     """categorize() has no "reject unknown input" mode -- anything
     unrecognized silently becomes OTHER. This is the actual mechanism behind

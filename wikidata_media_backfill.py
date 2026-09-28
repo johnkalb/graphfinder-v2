@@ -267,32 +267,18 @@ def fetch_label_counts(names):
 UNIQUE_NAME_MAX_DEGREE = 150
 
 
-# --- resolve + build rows ------------------------------------------------------------
+def resolve_people(people, labels, own_targets=None):
+    """Map Wikidata people to the graph node name to write, per the module
+    docstring's identity rules. Returns (node_name {qid: name}, graph node
+    list, canon_key -> node index). Reused by wikidata_influencer_backfill.py
+    (its own CACHE_DIR keeps the identity caches separate).
 
-def main():
-    commit = "--commit" in sys.argv
-
-    awards = repair_triples("awards", cached("awards", fetch_awards))
-    winners = sorted({p for p, _, _ in awards})
-    credits = cached("credits", lambda: fetch_credits(winners))
-    journalists = repair_triples("journalists", cached("journalists", fetch_journalists))
-    log(f"awards={len(awards):,} winners={len(winners):,} credits={len(credits):,} journalist links={len(journalists):,}")
-
-    # works shared by >= 2 winners
-    work_people = defaultdict(set)
-    for p, w, _ in credits:
-        work_people[w].add(p)
-    shared = {w for w, ps in work_people.items() if len(ps) >= 2}
-    credits = [(p, w, rel) for p, w, rel in credits if w in shared]
-    log(f"shared works={len(shared):,} -> credits kept={len(credits):,}")
-
-    people = set(winners) | {p for p, _, _ in journalists}
-    labels = repair_labels("person_labels", cached("person_labels", lambda: fetch_labels(people, with_desc=True)),
-                           with_desc=True)
-    work_labels = repair_labels("work_labels", cached("work_labels", lambda: fetch_labels(shared)))
-    work_meta = cached("work_meta", lambda: fetch_work_meta(shared))
-
-    # --- identity ---
+    own_targets: {qid: set of canon_key target names this import will link
+    the person to}. A node that already neighbours any of them is the same
+    person -- which also makes re-runs idempotent: once an import's rows are
+    in the graph, everyone matches their own earlier links instead of being
+    split into "(description)" duplicates of themselves (found 2026-09-28)."""
+    own_targets = own_targets or {}
     with gzip.open(GRAPH, "rt", encoding="utf-8") as f:
         g = json.load(f)
     gnodes = g["nodes"]
@@ -333,7 +319,8 @@ def main():
             how["new person"] += 1
             continue
         idx = key_to_idx[canon_key(label)]
-        if canon_key(qmap.get(p, "")) == canon_key(label) or set(facts.get(p, [])) & nbrs[idx]:
+        if (canon_key(qmap.get(p, "")) == canon_key(label) or set(facts.get(p, [])) & nbrs[idx]
+                or own_targets.get(p, set()) & nbrs[idx]):
             node_name[p] = gnodes[idx]
             how["merged into existing node (confirmed)"] += 1
         elif label_counts.get(label) == 1 and degree[idx] <= UNIQUE_NAME_MAX_DEGREE:
@@ -346,13 +333,34 @@ def main():
             how["namesake without description (skipped)"] += 1
     for k, v in how.most_common():
         log(f"  identity: {k}: {v:,}")
+    return node_name, gnodes, key_to_idx
 
-    # --- rows ---
-    rows = set()
-    for p, a, alabel in awards:
-        if p in node_name and alabel and not re.fullmatch(r"Q\d+", alabel):
-            rows.add((node_name[p], "PERSON", alabel, "ORG", "AWARD_RECEIVED",
-                      json.dumps({"qid": p, "award_qid": a, "src": "wdqs P166"})))
+
+# --- resolve + build rows ------------------------------------------------------------
+
+def main():
+    commit = "--commit" in sys.argv
+
+    awards = repair_triples("awards", cached("awards", fetch_awards))
+    winners = sorted({p for p, _, _ in awards})
+    credits = cached("credits", lambda: fetch_credits(winners))
+    journalists = repair_triples("journalists", cached("journalists", fetch_journalists))
+    log(f"awards={len(awards):,} winners={len(winners):,} credits={len(credits):,} journalist links={len(journalists):,}")
+
+    # works shared by >= 2 winners
+    work_people = defaultdict(set)
+    for p, w, _ in credits:
+        work_people[w].add(p)
+    shared = {w for w, ps in work_people.items() if len(ps) >= 2}
+    credits = [(p, w, rel) for p, w, rel in credits if w in shared]
+    log(f"shared works={len(shared):,} -> credits kept={len(credits):,}")
+
+    people = set(winners) | {p for p, _, _ in journalists}
+    labels = repair_labels("person_labels", cached("person_labels", lambda: fetch_labels(people, with_desc=True)),
+                           with_desc=True)
+    work_labels = repair_labels("work_labels", cached("work_labels", lambda: fetch_labels(shared)))
+    work_meta = cached("work_meta", lambda: fetch_work_meta(shared))
+
     work_name = {}
     for w in shared:
         title = (work_labels.get(w) or [""])[0]
@@ -360,6 +368,23 @@ def main():
             continue
         kind, year = (work_meta.get(w) or ["work", ""])
         work_name[w] = f"{title} ({year + ' ' if year else ''}{kind})"
+
+    own_targets = defaultdict(set)   # identity evidence: what this import links each person to
+    for p, _, alabel in awards:
+        own_targets[p].add(canon_key(alabel))
+    for p, w, _ in credits:
+        if w in work_name:
+            own_targets[p].add(canon_key(work_name[w]))
+    for p, _, elabel in journalists:
+        own_targets[p].add(canon_key(elabel))
+    node_name, gnodes, key_to_idx = resolve_people(people, labels, own_targets)
+
+    # --- rows ---
+    rows = set()
+    for p, a, alabel in awards:
+        if p in node_name and alabel and not re.fullmatch(r"Q\d+", alabel):
+            rows.add((node_name[p], "PERSON", alabel, "ORG", "AWARD_RECEIVED",
+                      json.dumps({"qid": p, "award_qid": a, "src": "wdqs P166"})))
     for p, w, rel in credits:
         if p in node_name and w in work_name:
             rows.add((node_name[p], "PERSON", work_name[w], "ORG", rel,

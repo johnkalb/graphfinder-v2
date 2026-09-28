@@ -53,6 +53,11 @@ def categorize(rt):
         return "CREATIVE_COLLAB"
     if r == "AWARD_RECEIVED":
         return "AWARD"
+    # Must precede the "PARTNER" substring check below (executive titles like
+    # MANAGING_PARTNER), which otherwise swallows it -- it's listed under
+    # FRIEND further down but was unreachable (found 2026-09-28).
+    if r == "ROMANTIC_PARTNER":
+        return "FRIEND"
     # Self-reported by the app's authenticated user via "Check My Contacts" -> "Add Me"
     if r == "SELF_ATTESTED_CONTACT":
         return "SELF_ATTESTED"
