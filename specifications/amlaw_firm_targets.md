@@ -67,32 +67,32 @@ yet attempted).
 | 51 | Alston & Bird | blocked_bot_mitigation (robots.txt itself returns a Cloudflare "Attention Required!" interstitial challenge page rather than the actual file -- confirmed via a full-body fetch, not just the HTTP status code, since Cloudflare's challenge pages commonly return HTTP 200 with challenge HTML rather than a 403. A site that gates even the compliance-check document behind bot mitigation is a deliberate anti-automation posture, matching the White & Case precedent already in this backlog -- not attempted further.) |
 | 52 | K&L Gates | needs_recon (robots.txt has no Disallow rules at all -- completely unrestricted. Clean semantic markup found: .s-bio-card / .s-bio-card__heading (name+bio href, e.g. /lawyers/Brodie-Erwin) / .s-bio-card__office / .s-bio-card__phone, 50 cards present on initial page load. Numbered pagination buttons ('1' through '8') are present, but clicking button '2' -- after dismissing the OneTrust cookie-consent overlay that otherwise intercepts the click, same issue as jones-day/cooley -- produced no change in the rendered card list and no new xhr/fetch request. No JSON API observed at all. Needs direct visual/DOM inspection of what those numbered buttons actually control before this can be built out.) |
 | 53 | Ashurst | blocked_robots_txt (real merger: ashurst.com now 308-redirects to ashurstperkinscoie.com, same pattern as the Hogan Lovells/Cadwalader and Herbert Smith Freehills/Kramer mergers already in this backlog. The new domain's robots.txt disallows /api/*, /sitecore, /Sitecore, /sitecore/api/ssc/* -- the same first-party Sitecore API family used by working firms Kirkland & Ellis and Greenberg Traurig, so this is a real, deliberate block of the exact endpoint family this harvester would otherwise use -- plus */people/?q=* and */search/*. Hard policy stop, not attempted further.) |
-| 54 | Foley & Lardner | needs_recon (first pass 2026-09-28: robots.txt open, no people/api/search rules) |
-| 55 | Winston & Strawn | needs_recon (first pass 2026-09-28: winston.com now redirects to winstontaylor.com -- merger rebrand, verify; robots.txt open) |
+| 54 | Foley & Lardner | working (2026-09-28: sitemap-driven -- 1,434 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 55 | Winston & Strawn | working (2026-09-28: sitemap-driven -- 1,462 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay). winston.com redirects to winstontaylor.com (merger rebrand).) |
 | 56 | Perkins Coie | blocked_robots_txt (first pass 2026-09-28: perkinscoie.com redirects to ashurstperkinscoie.com, the merged site already blocked under Ashurst #53 -- /api/*, */people/?q=*, */search/*) |
 | 57 | King & Wood Mallesons | blocked_bot_mitigation (first pass 2026-09-28: redirects to kingandwood.com; home page 403 with a challenge page) |
 | 58 | Sheppard, Mullin, Richter & Hampton | needs_recon (first pass 2026-09-28: HTTP 429 on both home and robots.txt -- rate-limited, retry later) |
 | 59 | Cravath, Swaine & Moore | needs_recon (first pass 2026-09-28: robots.txt disallows /people/index.html? -- the people index's query form is off-limits; only a non-query listing, if one exists, is usable) |
 | 60 | Wachtell, Lipton, Rosen & Katz | blocked_bot_mitigation (first pass 2026-09-28: home page 403 with a challenge page) |
 | 61 | Arnold & Porter | needs_recon (first pass 2026-09-28: robots.txt only blocks ?format=vCard) |
-| 62 | Troutman Pepper Locke | needs_recon (first pass 2026-09-28: robots.txt blocks /global-search* and ?_bio_keyword= / ?in= -- use a non-search listing only) |
+| 62 | Troutman Pepper Locke | working (2026-09-28: sitemap-driven -- 2,104 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
 | 63 | Fried, Frank, Harris, Shriver & Jacobson | blocked_bot_mitigation (first pass 2026-09-28: 403 on home AND robots.txt -- same posture as White & Case) |
 | 64 | McGuireWoods | working (2026-09-28: WordPress 'WP Search with Algolia' -- public search-only key in the page's own inline `var algolia` config, index wp_posts_people. Split by people_last_name_letter facet to stay under Algolia's 1,000-hit cap (/browse is 403 for this key); lawyer roles only via taxonomies.role. Dry-run: 993 lawyers, 0 dupes (1,078 people minus 85 'Other Professional').) |
 | 65 | Kim & Chang | needs_recon (first pass 2026-09-28: robots.txt open) |
 | 66 | Clyde & Co | needs_recon (first pass 2026-09-28: robots.txt open) |
 | 67 | O'Melveny & Myers | blocked_bot_mitigation (first pass 2026-09-28: home AND robots.txt return 403 challenge pages) |
 | 68 | Faegre Drinker | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore/api/ssc/* only) |
-| 69 | BakerHostetler | needs_recon (first pass 2026-09-28: robots.txt open) |
-| 70 | Vinson & Elkins | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 69 | BakerHostetler | working (2026-09-28: sitemap-driven -- 1,095 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 70 | Vinson & Elkins | working (2026-09-28: sitemap-driven -- 712 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
 | 71 | Polsinelli | needs_recon (first pass 2026-09-28: robots.txt blocks /?s=* site search only) |
-| 72 | Nelson Mullins Riley & Scarborough | needs_recon (first pass 2026-09-28: robots.txt open) |
-| 73 | Seyfarth Shaw | needs_recon (first pass 2026-09-28: robots.txt open) |
-| 74 | Fragomen, Del Rey, Bernsen & Loewy | needs_recon (first pass 2026-09-28: robots.txt open) |
-| 75 | Hunton Andrews Kurth | needs_recon (first pass 2026-09-28: robots.txt open) |
-| 76 | Pinsent Masons | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore/ -- avoid Sitecore API paths) |
-| 77 | Slaughter and May | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 72 | Nelson Mullins Riley & Scarborough | working (2026-09-28: sitemap-driven -- 1,116 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay). Sitemap partly stale (sampled 404s cache as empty, not retried).) |
+| 73 | Seyfarth Shaw | working (2026-09-28: sitemap-driven -- 1,078 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 74 | Fragomen, Del Rey, Bernsen & Loewy | working (2026-09-28: sitemap-driven -- 970 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 75 | Hunton Andrews Kurth | working (2026-09-28: sitemap-driven -- 811 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 76 | Pinsent Masons | working (2026-09-28: sitemap-driven -- 2,549 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 77 | Slaughter and May | working (2026-09-28: sitemap-driven -- 697 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
 | 78 | Katten Muchin Rosenman | needs_recon (first pass 2026-09-28: robots.txt open; host is katten.com) |
-| 79 | Bryan Cave Leighton Paisner | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 79 | Bryan Cave Leighton Paisner | needs_recon (2026-09-28: sitemap bio pattern only matched 134 of ~1,250 bios -- BCLP URLs use a different path shape; adjust bio_path_regex) |
 | 80 | Venable | needs_recon (first pass 2026-09-28: robots.txt blocks /api/* for all agents incl. ClaudeBot/GPTBot (not a site-wide AI block) -- avoid /api/) |
 | 81 | Baker Botts | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore -- avoid Sitecore API paths) |
 | 82 | Pillsbury Winthrop Shaw Pittman | blocked_robots_txt (first pass 2026-09-28: robots.txt disallows /en/lawyers/?v=attorney&ls=* and search-results pages -- the directory's own query mechanism) |
@@ -102,18 +102,18 @@ yet attempted).
 | 86 | Gordon Rees Scully Mansukhani | needs_recon (first pass 2026-09-28: robots.txt open) |
 | 87 | Lewis Brisbois Bisgaard & Smith | needs_recon (first pass 2026-09-28: robots.txt blocks GPTBot site-wide but not other agents -- judgment call on AI-crawler intent (cf. Akin Gump); lowest priority) |
 | 88 | Gowling WLG | needs_recon (first pass 2026-09-28: robots.txt blocks /api/ for all agents (ClaudeBot/GPTBot named with the same /api/ rules) -- avoid /api/) |
-| 89 | Barnes & Thornburg | needs_recon (first pass 2026-09-28: robots.txt blocks /api/ -- avoid /api/) |
+| 89 | Barnes & Thornburg | working (2026-09-28: sitemap-driven -- 1,343 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay). strip_suffix drops " | Barnes & Thornburg" and ", <City> Attorney".) |
 | 90 | Blank Rome | needs_recon (first pass 2026-09-28: HTTP 429 on home page -- rate-limited, retry later) |
 | 91 | Bird & Bird | needs_recon (first pass 2026-09-28: robots.txt blocks /sitecore paths -- avoid Sitecore API) |
-| 92 | Littler Mendelson | needs_recon (first pass 2026-09-28: robots.txt blocks /search -- use a non-search listing only) |
-| 93 | Ogletree, Deakins, Nash, Smoak & Stewart | needs_recon (first pass 2026-09-28: robots.txt open; host is ogletree.com) |
-| 94 | Blake, Cassels & Graydon | needs_recon (first pass 2026-09-28: robots.txt open) |
-| 95 | Cozen O'Connor | needs_recon (first pass 2026-09-28: robots.txt open) |
-| 96 | Husch Blackwell | needs_recon (first pass 2026-09-28: robots.txt open) |
+| 92 | Littler Mendelson | working (2026-09-28: sitemap-driven -- 2,014 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 93 | Ogletree, Deakins, Nash, Smoak & Stewart | working (2026-09-28: sitemap-driven -- 1,199 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 94 | Blake, Cassels & Graydon | needs_recon (2026-09-28: sitemap lists only a search page, no individual bios) |
+| 95 | Cozen O'Connor | needs_recon (2026-09-28: sitemap/robots fetch timed out twice -- retry) |
+| 96 | Husch Blackwell | working (2026-09-28: sitemap-driven -- 1,353 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
 | 97 | Addleshaw Goddard | needs_recon (first pass 2026-09-28: robots.txt blocks GPTBot site-wide but not other agents -- judgment call on AI-crawler intent (cf. Akin Gump); lowest priority) |
-| 98 | Taft Stettinius & Hollister | needs_recon (first pass 2026-09-28: robots.txt blocks /api/ -- avoid /api/) |
-| 99 | Mintz, Levin, Cohn, Ferris, Glovsky, and Popeo | needs_recon (first pass 2026-09-28: domain is mintz.com (not .org); robots.txt blocks /search/ -- use a non-search listing only) |
-| 100 | Jackson Lewis | needs_recon (first pass 2026-09-28: robots.txt blocks /search/ -- use a non-search listing only) |
+| 98 | Taft Stettinius & Hollister | working (2026-09-28: sitemap-driven -- 1,559 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 99 | Mintz, Levin, Cohn, Ferris, Glovsky, and Popeo | working (2026-09-28: sitemap-driven -- 669 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
+| 100 | Jackson Lewis | working (2026-09-28: sitemap-driven -- 1,390 bio URLs listed in the firm's own sitemap; names read from each bio page's <h1>/og:title by the daily --fill-sitemap-names job (optiplex cron 01:30, 2,500 pages/night, honours Crawl-delay).) |
 Note: several are UK/international firms (Clifford Chance, Linklaters, Freshfields, Slaughter and
 May, etc.) with no US name-collision guarantee -- still worth the DB name-collision check per the
 README's mandatory step, since the graph already has plenty of non-US entities.
