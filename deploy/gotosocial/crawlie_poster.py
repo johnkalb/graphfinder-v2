@@ -53,11 +53,13 @@ HASHTAGS = {
     "stats_separation": "#SixDegrees #NetworkScience #SmallWorld",
     "stats_charity": "#Nonprofits #Philanthropy #OpenData",
     "stats_law": "#BigLaw #Law #OpenData",
+    "stats_banks": "#Banking #Finance #OpenData",
     "stats_scale": "#OpenData #NetworkScience",
 }
 # Proposal order: rotate through categories so a day isn't three of one kind.
 CATEGORY_ORDER = ["group_vs_group", "stats_separation", "who_you_know", "stats_charity", "pagerank_ladder",
-                  "bridge", "stats_law", "top_degree_public", "stats_scale", "top_pagerank", "top_degree"]
+                  "bridge", "stats_banks", "stats_law", "top_degree_public", "stats_scale", "top_pagerank",
+                  "top_degree"]
 
 
 def load_env():

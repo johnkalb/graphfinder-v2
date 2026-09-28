@@ -141,6 +141,56 @@ def law_firm_stats(conn):
             "largest_firm": rows[0][0], "largest_attorneys": rows[0][1]}
 
 
+FDIC_API = "https://banks.data.fdic.gov/api"
+
+
+def bank_stats():
+    """FDIC BankFind (public, no key): active FDIC-insured institutions, how
+    concentrated their assets/deposits are, and how many there were at the
+    historical peak. ASSET/DEP are reported in thousands of dollars."""
+    import requests
+    try:
+        import pip_system_certs.wrapt_requests  # noqa: F401 -- Norton TLS interception on this machine
+    except Exception:
+        pass
+    banks, offset = [], 0
+    while True:
+        r = requests.get(f"{FDIC_API}/institutions", timeout=60, params={
+            "filters": "ACTIVE:1", "fields": "NAME,ASSET,DEP,REPDTE", "sort_by": "ASSET",
+            "sort_order": "DESC", "limit": 10000, "offset": offset})
+        r.raise_for_status()
+        page = [d["data"] for d in r.json()["data"]]
+        banks += page
+        if len(page) < 10000:
+            break
+        offset += 10000
+    assets = [b.get("ASSET") or 0 for b in banks]
+    deposits = [b.get("DEP") or 0 for b in banks]
+    total_a, total_d = sum(assets), sum(deposits)
+    top = banks[0]
+    out = {"count": len(banks), "as_of": top.get("REPDTE"),
+           "total_assets": total_a * 1000, "total_deposits": total_d * 1000,
+           "top10_asset_share": round(sum(assets[:10]) / total_a, 4),
+           "top10_deposit_share": round(sum(sorted(deposits, reverse=True)[:10]) / total_d, 4),
+           "largest_name": top["NAME"], "largest_deposit_share": round((top.get("DEP") or 0) / total_d, 4),
+           "under_1b_count": sum(1 for a in assets if a < 1_000_000)}
+    # Historical commercial-bank counts. The summary has a row per state PLUS
+    # national-total rows ("All States and Territories", "U.S. States and
+    # DC"), so read only the all-inclusive total -- summing every row tripled
+    # the 1984 count to 43,488. Savings-institution rows don't populate BANKS,
+    # so this compares commercial banks with commercial banks.
+    r = requests.get(f"{FDIC_API}/summary", timeout=60, params={
+        "filters": 'CB_SI:CB AND STNAME:"All States and Territories"', "fields": "YEAR,BANKS", "limit": 1000})
+    r.raise_for_status()
+    per_year = {int(d["data"]["YEAR"]): d["data"].get("BANKS") or 0 for d in r.json()["data"]}
+    if per_year:
+        peak_year = max(per_year, key=per_year.get)
+        latest_year = max(per_year)
+        out.update({"cb_peak_year": peak_year, "cb_peak_count": per_year[peak_year],
+                    "cb_latest_year": latest_year, "cb_latest_count": per_year[latest_year]})
+    return out
+
+
 def main():
     t0 = time.time()
     with gzip.open(SCORED, "rt", encoding="utf-8") as f:
@@ -176,6 +226,12 @@ def main():
         except Exception as e:
             log(f"law firm stats skipped: {e}")
         conn.close()
+
+    try:
+        stats["banks"] = bank_stats()
+        log(f"banks: {stats['banks']}")
+    except Exception as e:
+        log(f"bank stats skipped: {e}")
 
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=1, ensure_ascii=False)

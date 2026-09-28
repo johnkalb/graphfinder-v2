@@ -407,6 +407,24 @@ def stats_facts(stats):
                         f"The {lf['firms']} global law firms tracked by sixdegrees employ {lf['attorneys']:,} "
                         f"attorneys between them; {lf['largest_firm']} alone has {lf['largest_attorneys']:,}.",
                         ["attorneys"]))
+    bk = stats.get("banks")
+    if bk:
+        largest = bk["largest_name"].replace(", National Association", "")
+        out.append(fact("stats_banks",
+                        f"There are {bk['count']:,} FDIC-insured banks in the US, but the 10 largest hold "
+                        f"{pct(bk['top10_asset_share'])} of all bank assets.", ["concentration"]))
+        out.append(fact("stats_banks",
+                        f"{largest} alone holds {bk['largest_deposit_share']:.1%} of all deposits in "
+                        f"FDIC-insured US banks.", ["largest"]))
+        if bk.get("cb_peak_count") and bk.get("cb_latest_count"):
+            drop = 1 - bk["cb_latest_count"] / bk["cb_peak_count"]
+            out.append(fact("stats_banks",
+                            f"The US had {bk['cb_peak_count']:,} commercial banks in {bk['cb_peak_year']}. "
+                            f"By {bk['cb_latest_year']} it had {bk['cb_latest_count']:,} — {pct(drop)} fewer.",
+                            ["decline"]))
+        out.append(fact("stats_banks",
+                        f"{bk['under_1b_count']:,} of the {bk['count']:,} FDIC-insured US banks are community "
+                        f"banks with under $1 billion in assets.", ["community"]))
     sc = stats.get("scale")
     if sc:
         out.append(fact("stats_scale",
