@@ -141,6 +141,47 @@ def law_firm_stats(conn):
             "largest_firm": rows[0][0], "largest_attorneys": rows[0][1]}
 
 
+def inventor_stats(conn):
+    """Patent co-inventor network (source_data=PATENT_COINVENTOR): inventors,
+    co-inventor ties, the largest connected co-inventor group, the most
+    connected inventor, and the organizations employing the most inventors.
+    Names are compared lowercased -- the source mixes "SCOTT STEPHENS" and
+    "Scott Stephens" styles."""
+    cur = conn.cursor()
+    cur.execute("SELECT source_name, target_name FROM relationships "
+                "WHERE source_data = 'PATENT_COINVENTOR' AND relation_type = 'CO_INVENTOR_WITH'")
+    idx, display, pairs = {}, {}, set()
+    for s, t in cur.fetchall():
+        if not s or not t:
+            continue
+        a, b = s.strip().lower(), t.strip().lower()
+        if a == b:
+            continue
+        for key, raw in ((a, s), (b, t)):
+            if key not in idx:
+                idx[key] = len(idx)
+                display[idx[key]] = raw.strip()
+        pairs.add((min(idx[a], idx[b]), max(idx[a], idx[b])))
+    g = ig.Graph(n=len(idx), edges=list(pairs), directed=False)
+    comps = g.connected_components()
+    degs = g.degree()
+    top = max(range(g.vcount()), key=degs.__getitem__)
+    top_name = display[top]
+    if top_name.isupper():
+        top_name = top_name.title()
+    cur.execute("SELECT count(DISTINCT lower(source_name)) FROM relationships "
+                "WHERE source_data = 'PATENT_COINVENTOR' AND relation_type IN ('INVENTOR_AT', 'IDENTITY')")
+    inventors = max(cur.fetchone()[0], len(idx))
+    cur.execute("SELECT target_name, count(DISTINCT lower(source_name)) FROM relationships "
+                "WHERE source_data = 'PATENT_COINVENTOR' AND relation_type = 'INVENTOR_AT' "
+                "GROUP BY 1 ORDER BY 2 DESC LIMIT 5")
+    top_orgs = cur.fetchall()
+    return {"inventors": inventors, "coinventor_ties": len(pairs),
+            "largest_group": max(len(c) for c in comps), "groups": len(comps),
+            "top_inventor": top_name, "top_inventor_coinventors": degs[top],
+            "top_orgs": [[n, c] for n, c in top_orgs]}
+
+
 FDIC_API = "https://banks.data.fdic.gov/api"
 
 
@@ -225,6 +266,11 @@ def main():
             log(f"law firms: {stats['law_firms']}")
         except Exception as e:
             log(f"law firm stats skipped: {e}")
+        try:
+            stats["inventors"] = inventor_stats(conn)
+            log(f"inventors: {stats['inventors']}")
+        except Exception as e:
+            log(f"inventor stats skipped: {e}")
         conn.close()
 
     try:

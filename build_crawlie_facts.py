@@ -360,6 +360,23 @@ def pct(x):
     return f"{x:.0%}" if x < 0.995 else f"{x:.1%}"
 
 
+_COMPANY_ALIASES = {"international business machines": "IBM"}
+_COMPANY_SUFFIX = re.compile(r",?\s+(?:technology licensing|technologies|corporation|corp\.?|incorporated|inc\.?"
+                             r"|co\.?,? ltd\.?|ltd\.?|llc|l\.l\.c\.|gmbh|ag|s\.a\.|plc)\s*$", re.I)
+
+
+def short_company(name):
+    """"MICROSOFT TECHNOLOGY LICENSING, LLC" -> "Microsoft"; patent assignee
+    names arrive upper-case with legal suffixes."""
+    n = name.strip()
+    for _ in range(3):
+        n = _COMPANY_SUFFIX.sub("", n).strip(" ,")
+    alias = _COMPANY_ALIASES.get(n.lower())
+    if alias:
+        return alias
+    return n.title() if n.isupper() else n
+
+
 def stats_facts(stats):
     """Dataset/network statistics from build_graph_stats.py (graph_stats.json).
     No people named, so all of these are publishable."""
@@ -425,6 +442,19 @@ def stats_facts(stats):
         out.append(fact("stats_banks",
                         f"{bk['under_1b_count']:,} of the {bk['count']:,} FDIC-insured US banks are community "
                         f"banks with under $1 billion in assets.", ["community"]))
+    inv = stats.get("inventors")
+    if inv:
+        # largest_group / top_inventor are deliberately NOT published: patent
+        # names aren't disambiguated, so common names ("Wei Wang": 732
+        # "co-inventors") merge many people and bridge unrelated teams.
+        out.append(fact("stats_inventors",
+                        f"sixdegrees tracks {inv['inventors']:,} patent inventors, linked by "
+                        f"{inv['coinventor_ties']:,} co-inventor ties.", ["count"]))
+        orgs = [f"{short_company(n)} ({c:,})" for n, c in inv.get("top_orgs", [])[:5]]
+        if len(orgs) >= 3:
+            out.append(fact("stats_inventors",
+                            "The companies with the most inventors in sixdegrees' patent data: "
+                            + ", ".join(orgs[:-1]) + f" and {orgs[-1]}.", ["top_orgs"]))
     sc = stats.get("scale")
     if sc:
         out.append(fact("stats_scale",
