@@ -48,6 +48,12 @@ CATEGORY_PROB = {
     "SAME_SCHOOL_OVERLAP": 0.12,
     "CO_INVENTOR": 0.68,
     "PATENT_ASSIGNED_TO": 0.55,
+    # Credited on the same film/show/book -- casts and crews work together
+    # closely, close to co-inventors on a patent.
+    "CREATIVE_COLLAB": 0.65,
+    # Won the same award category -- a peer group, not an acquaintance
+    # (thousands of Grammy winners), so weak like same-school overlap.
+    "AWARD": 0.12,
     "SELF_ATTESTED": 0.10,
     # Below SELF_ATTESTED -- a LinkedIn connection is a lower real-world bar
     # than someone actively self-reporting from their phone contacts (a cold
@@ -92,6 +98,8 @@ CATEGORY_DESC = {
     "SAME_SCHOOL_OVERLAP": ("Same School (overlapping years)", "Both attended the same institution during overlapping years (Wikidata education dates). A weak signal — large schools dilute the chance of acquaintance, but contemporaneous enrollment is suggestive."),
     "CO_INVENTOR": ("Co-Inventor", "Both people are named as inventors on the same patent. This is usually a meaningful professional collaboration and stronger than a generic co-mention."),
     "PATENT_ASSIGNED_TO": ("Patent Assigned To", "An inventor is listed on a patent assigned to the organization. This often indicates a real professional or institutional relationship, but does not necessarily prove ordinary employment."),
+    "CREATIVE_COLLAB": ("Creative Collaboration", "Both are credited on the same film, TV show or book (cast, director, producer, screenwriter or author, per Wikidata). Casts and crews work closely together, so this is a fairly strong signal."),
+    "AWARD": ("Same Award", "Both won the same award category (e.g. an Academy Award for Best Actor, per Wikidata). A weak signal: winners form a peer group but often never meet."),
     "SELF_ATTESTED": ("Self-Reported Contact", "The user reported this contact from their own phone/address book. Unverified and self-interested (a single party attesting to their own connection) — treated as one of the weakest signals and expected to be the category most often disputed."),
     "LINKEDIN": ("LinkedIn Connection", "The user reported this as a LinkedIn connection. Unverified and self-interested like a self-reported contact, but treated as weaker still — a LinkedIn connection can be as casual as an accepted cold request, not necessarily a real acquaintance."),
     "OTHER": ("Other", "An uncategorized relationship. Treated as very weak evidence."),

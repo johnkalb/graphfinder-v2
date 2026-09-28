@@ -47,6 +47,12 @@ def categorize(rt):
         return "CO_INVENTOR"
     if r == "PATENT_ASSIGNED_TO":
         return "PATENT_ASSIGNED_TO"
+    # Wikidata media backfill (wikidata_media_backfill.py): credits on the same
+    # film/show/book. Checked before the DIRECTOR* board-seat prefix below.
+    if r in ("CAST_IN", "DIRECTED", "PRODUCED", "WROTE_SCREENPLAY", "AUTHORED"):
+        return "CREATIVE_COLLAB"
+    if r == "AWARD_RECEIVED":
+        return "AWARD"
     # Self-reported by the app's authenticated user via "Check My Contacts" -> "Add Me"
     if r == "SELF_ATTESTED_CONTACT":
         return "SELF_ATTESTED"
