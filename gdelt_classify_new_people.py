@@ -1,31 +1,40 @@
 #!/usr/bin/env python3
-"""GDELT co-occurrence daily incremental classification -- Effort 1 of
-specifications/gdelt-cooccurrence-classification.md.
+"""GDELT co-occurrence classification, driven by stored evidence (2026-09-29).
 
-Each run: finds people newly added to `relationships` by a real (non-GDELT)
-source since the last run, looks up their GDELT_FULL co-occurrence partners
-that are ALSO already-known real people, live-queries GDELT's DOC API for
-fresh article URLs on each such pair, and runs them through the validated
-corroboration pipeline (src/data/gdelt_classify.py). Promoted relations are
-written back into `relationships` with source_data='GDELT_CORROBORATED'.
+Each run walks gdelt_cooccurrence_evidence -- the table gdelt_full_harvester.py
+fills from GDELT's GKG files with every co-mentioned pair, a running mention
+count, and up to 5 article URLs -- most-mentioned first, and for pairs where
+BOTH names are people in the scored graph, runs the stored article URLs
+through the validated corroboration pipeline (src/data/gdelt_classify.py).
+Promoted relations are written to `relationships` with
+source_data='GDELT_CORROBORATED', under the graph's own display names so they
+attach to the existing nodes.
 
-Postgres-only (uses relationships.id BIGSERIAL as the cursor watermark and
-gdelt_cooccurrence_evidence's TEXT[] columns) -- requires DATABASE_URL set,
-same as every other harvester post-migration (see
-[[project_postgres_migration]]).
+History: this used to live-query GDELT's DOC 2.0 search API for candidate
+articles. That API has been overloaded since mid-September (GDELT's own
+advice, 2026-09-21: use other datasets), so every query 429'd and the job was
+paused 2026-09-24. The GKG files we already harvest carry the same article
+URLs, so no search API is needed.
 
-Deployed two places: this file (repo root, for local/manual runs) and a
-mirrored copy at .hermes.old/agents/gdelt-full/scripts/ (for smart_runner's
-SSH-remote dispatch to optiplex, agent key "gdelt" -- see smart_runner.py's
-AGENTS dict). The sys.path setup below is OS-aware/absolute, same pattern as
-gdelt_full_harvester.py, so it resolves src.* correctly from either
-location -- os.path.dirname(__file__) would NOT (it'd point at .../scripts/
-on the remote copy, which has no src/ alongside it)."""
-import hashlib
+promotion_status values written here: promoted / rejected (articles read, no
+corroborated relation) / no_articles (no stored URL could be fetched -- dead
+links, mostly older articles) / not_graph_people (a name isn't a graph person;
+recorded so the pair isn't rescanned every run; reset to 'unreviewed' to
+revisit after the graph grows).
+
+Graph people come from graph_people.tsv.gz (canon_key TAB display name),
+written by build_person_nodes.py in the nightly rebuild and copied to optiplex.
+
+Deployed two places: this file (repo root) and a mirrored copy at
+.hermes.old/agents/gdelt-full/scripts/ that smart_runner scp's to optiplex
+(agent key "gdelt"). Postgres-only."""
+import gzip
 import json
 import os
+import re
 import sys
 import time
+import unicodedata
 from datetime import datetime
 
 sys.path.insert(0, "/home/john/.hermes" if os.name != "nt" else r"C:\Users\johnk\Desktop\sixdegrees")
@@ -35,276 +44,128 @@ from src.data.pg_shim import connect as _pg_connect
 from src.data.db_manager import DBManager
 from src.data import gdelt_classify as gc
 
-CURSOR_SOURCE = "gdelt_cooccurrence_daily"
-CURSOR_KEY = "max_relationship_id"
-GDELT_SOURCES = ("GDELT_FULL", "GDELT", "GDELT_CORROBORATED")
-MAX_NEW_NAMES_PER_RUN = 500   # safety cap -- a normal day is tens to a couple hundred
-MAX_PAIRS_PER_RUN = 60        # ~1-1.5 min/pair measured this session -> bounds a single run
-# smart_runner kills the remote run at 1800s; stop starting new pairs well
-# before that so the cursor gets saved. (60 pairs x 1-1.5 min never fit anyway.)
+GRAPH_PEOPLE = os.environ.get(
+    "GRAPH_PEOPLE_PATH",
+    "/home/john/.hermes/agents/gdelt-full/graph_people.tsv.gz" if os.name != "nt"
+    else r"C:\Users\johnk\graphfinder-clean\webapp\data\graph_people.tsv.gz")
+SCAN_BATCH = 2000
+MAX_PAIRS_PER_RUN = 60
+# smart_runner kills the remote run at 1800s; stop starting new pairs well before.
 MAX_RUN_SECONDS = 20 * 60
 
+_COMBINING = dict.fromkeys(range(0x300, 0x370))
+_CK_KEEP = re.compile(r"[^\w ]|_")
+_CK_WS = re.compile(r"\s+")
 
-def already_classified(db, pairs):
-    """Pair hashes that already have a promoted/rejected verdict, so a name
-    whose pairs span several runs doesn't get re-queried from the start."""
-    if not pairs:
-        return set()
-    hashes = [pair_hash(a, b)[0] for a, b in pairs]
+
+def canon_key(name):
+    """Identical to build_scored_edges.canon_key (the graph's node-merge key)."""
+    s = unicodedata.normalize("NFKD", name.lower()).translate(_COMBINING)
+    s = _CK_WS.sub(" ", _CK_KEEP.sub("", s)).strip()
+    return s if len(s) >= 2 else name.lower().strip()
+
+
+def load_graph_people():
+    people = {}
+    with gzip.open(GRAPH_PEOPLE, "rt", encoding="utf-8") as f:
+        for line in f:
+            key, _, display = line.rstrip("\n").partition("\t")
+            if key:
+                people[key] = display or key
+    return people
+
+
+def set_status(db, pair_hashes, status):
+    if not pair_hashes:
+        return
     cur = db.cursor()
-    cur.execute(
-        "SELECT pair_hash FROM gdelt_cooccurrence_evidence "
-        "WHERE pair_hash = ANY(%s) AND promotion_status IN ('promoted', 'rejected')",
-        (hashes,),
-    )
-    return {r[0] for r in cur.fetchall()}
-
-
-def pair_hash(name_a, name_b):
-    a, b = sorted((name_a.lower(), name_b.lower()))
-    key = f"{a}|{b}"
-    return hashlib.md5(key.encode("utf-8")).hexdigest(), a, b
-
-
-def get_cursor(db):
-    cur = db.cursor()
-    cur.execute("SELECT cursor_value FROM harvest_cursors WHERE source = ?", (CURSOR_SOURCE,))
-    row = cur.fetchone()
-    if row is not None:
-        return int(row[0])
-    # First run: start from the current max id so we only classify people
-    # added AFTER this script is first deployed, not the entire backlog.
-    cur.execute("SELECT COALESCE(MAX(id), 0) FROM relationships")
-    start = int(cur.fetchone()[0])
-    cur.execute(
-        "INSERT OR IGNORE INTO harvest_cursors (source, cursor_key, cursor_value) VALUES (?, ?, ?)",
-        (CURSOR_SOURCE, CURSOR_KEY, start),
-    )
-    db.commit()
-    return start
-
-
-def save_cursor(db, value):
-    cur = db.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO harvest_cursors (source, cursor_key, cursor_value) VALUES (?, ?, ?)",
-        (CURSOR_SOURCE, CURSOR_KEY, value),
-    )
+    cur.execute("UPDATE gdelt_cooccurrence_evidence SET promotion_status = %s WHERE pair_hash = ANY(%s)",
+                (status, list(pair_hashes)))
     db.commit()
 
 
-def find_new_people(db, since_id):
-    """People referenced by a non-GDELT relationship row with id > since_id.
-    Returns (names_lowercased, max_id_seen). Known limitation: BIGSERIAL ids
-    aren't a perfectly ordered commit watermark under concurrent writers, so
-    a row committed late with an id below the new watermark could in theory
-    be missed -- acceptable here since a missed pair simply waits for its
-    next co-occurrence or Effort 3's later targeted sweep, not silently lost
-    forever."""
+def next_candidates(db, people, want):
+    """Up to `want` unreviewed pairs with >=2 stored URLs whose names are both
+    graph people, most-mentioned first. Pairs that fail the people check are
+    marked not_graph_people as the scan passes them."""
     cur = db.cursor()
-    cur.execute(
-        """
-        SELECT lower(name) AS name, MAX(id) AS max_id FROM (
-            SELECT source_name AS name, id FROM relationships
-            WHERE source_type = 'PERSON' AND id > %s
-              AND source_data NOT IN ('GDELT_FULL', 'GDELT', 'GDELT_CORROBORATED')
-            UNION ALL
-            SELECT target_name AS name, id FROM relationships
-            WHERE target_type = 'PERSON' AND id > %s
-              AND source_data NOT IN ('GDELT_FULL', 'GDELT', 'GDELT_CORROBORATED')
-        ) t
-        WHERE name IS NOT NULL AND name != ''
-        GROUP BY lower(name)
-        ORDER BY max_id ASC
-        LIMIT %s
-        """,
-        (since_id, since_id, MAX_NEW_NAMES_PER_RUN),
-    )
-    # [(name_lower, max_id)] in ascending max_id order -- the cursor may only
-    # advance to a name's max_id once every pair for that name is handled.
-    return [(r[0], int(r[1])) for r in cur.fetchall()]
-
-
-def find_known_real_names(db):
-    cur = db.cursor()
-    cur.execute(
-        "SELECT DISTINCT lower(source_name) FROM relationships "
-        "WHERE source_type = 'PERSON' AND source_data NOT IN ('GDELT_FULL', 'GDELT', 'GDELT_CORROBORATED')"
-    )
-    known = set(r[0] for r in cur.fetchall() if r[0])
-    cur.execute(
-        "SELECT DISTINCT lower(target_name) FROM relationships "
-        "WHERE target_type = 'PERSON' AND source_data NOT IN ('GDELT_FULL', 'GDELT', 'GDELT_CORROBORATED')"
-    )
-    known |= set(r[0] for r in cur.fetchall() if r[0])
-    return known
-
-
-def find_candidate_pairs(db, new_names, known_real_names):
-    """For each newly-added person, find their GDELT_FULL co-occurrence
-    partners that are ALSO already-known real people -- the highest-value
-    slice for Effort 1: both endpoints already matter to the graph, we're
-    only trying to find out WHAT specifically connects them."""
-    if not new_names:
-        return []
-    cur = db.cursor()
-    cur.execute(
-        """
-        SELECT
-            CASE WHEN lower(source_name) = ANY(%(names)s) THEN source_name ELSE target_name END AS new_person,
-            CASE WHEN lower(source_name) = ANY(%(names)s) THEN target_name ELSE source_name END AS partner
-        FROM relationships
-        WHERE source_data = 'GDELT_FULL'
-          AND (lower(source_name) = ANY(%(names)s) OR lower(target_name) = ANY(%(names)s))
-        """,
-        {"names": new_names},
-    )
-    pairs = []
-    seen = set()
-    for row in cur.fetchall():
-        new_person, partner = row[0], row[1]
-        if not new_person or not partner:
-            continue
-        if partner.lower() not in known_real_names:
-            continue
-        if new_person.lower() == partner.lower():
-            continue
-        key = frozenset((new_person.lower(), partner.lower()))
-        if key in seen:
-            continue
-        seen.add(key)
-        pairs.append((new_person, partner))
-    return pairs
-
-
-def upsert_evidence_status(db, name_a, name_b, status, sample_urls):
-    h, a, b = pair_hash(name_a, name_b)
-    cur = db.cursor()
-    cur.execute(
-        """
-        INSERT INTO gdelt_cooccurrence_evidence
-            (pair_hash, name_a, name_b, occurrence_count, sample_urls, first_seen, last_seen, promotion_status)
-        VALUES (%s, %s, %s, %s, %s, now(), now(), %s)
-        ON CONFLICT (pair_hash) DO UPDATE SET
-            promotion_status = EXCLUDED.promotion_status,
-            last_seen = now()
-        """,
-        (h, name_a, name_b, len(sample_urls), sample_urls[:5], status),
-    )
-    db.commit()
+    out = []
+    while len(out) < want:
+        # Picked pairs stay 'unreviewed' until classified, so exclude them here
+        # or a second batch would return them again.
+        cur.execute(
+            "SELECT pair_hash, name_a, name_b, occurrence_count, sample_urls FROM gdelt_cooccurrence_evidence "
+            "WHERE promotion_status = 'unreviewed' AND cardinality(sample_urls) >= 2 "
+            "AND NOT (pair_hash = ANY(%s)) ORDER BY occurrence_count DESC LIMIT %s",
+            ([c[0] for c in out], SCAN_BATCH))
+        rows = cur.fetchall()
+        if not rows:
+            break
+        not_people = []
+        for h, a, b, n, urls in rows:
+            ka, kb = canon_key(a), canon_key(b)
+            if ka in people and kb in people and ka != kb:
+                out.append((h, people[ka], people[kb], n, list(urls)))
+                if len(out) >= want:
+                    break
+            else:
+                not_people.append(h)
+        set_status(db, not_people, "not_graph_people")
+        if len(out) < want and not not_people:
+            break   # a whole batch of graph-people pairs -> they're all in `out`
+    return out
 
 
 def main():
     if not pg_shim.IS_POSTGRES:
-        print("[gdelt-classify-daily] DATABASE_URL not set -- this job is Postgres-only. Aborting.")
+        print("[gdelt-classify] DATABASE_URL not set -- this job is Postgres-only. Aborting.")
         return
-
+    run_start = time.time()
     db = _pg_connect(DB_PATH)
     dbm = DBManager(DB_PATH)
+    people = load_graph_people()
+    print(f"[gdelt-classify] Starting at {datetime.now().isoformat()}; {len(people):,} graph people loaded", flush=True)
 
-    since_id = get_cursor(db)
-    print(f"[gdelt-classify-daily] Starting at {datetime.now().isoformat()}, cursor={since_id}")
-
-    new_people = find_new_people(db, since_id)
-    new_names = [n for n, _ in new_people]
-    print(f"[gdelt-classify-daily] {len(new_names)} newly-added people since cursor")
-    if not new_names:
-        print("[gdelt-classify-daily] Nothing to do.")
-        db.close()
-        return
-
-    known_real_names = find_known_real_names(db)
-    print(f"[gdelt-classify-daily] {len(known_real_names)} known real (non-GDELT) names loaded")
-
-    pairs = find_candidate_pairs(db, new_names, known_real_names)
-    print(f"[gdelt-classify-daily] {len(pairs)} candidate pairs (new person <-> already-known partner)")
-
-    # Group pending pairs by new person, skipping pairs that already have a
-    # verdict from an earlier run. 2026-09-24: this used to classify only
-    # pairs[:60] and then save the cursor past ALL ~500 names, so ~99% of
-    # candidate pairs (and every pair that hit a GDELT 429) were never looked
-    # at again -- 116K pairs seen Sep 14-24, ~1.4K attempted, 0 promoted.
-    done = already_classified(db, pairs)
-    pending_by_name = {}
-    for name_a, name_b in pairs:
-        if pair_hash(name_a, name_b)[0] not in done:
-            pending_by_name.setdefault(name_a.lower(), []).append((name_a, name_b))
-    print(f"[gdelt-classify-daily] {len(done)} already classified, "
-          f"{sum(map(len, pending_by_name.values()))} pending")
-
-    promoted_count = 0
-    rejected_count = 0
-    error_count = 0
-    attempted = 0
-    run_start = time.time()
-    new_cursor = since_id
-    stop_reason = None
-
-    # Walk names in max_id order; the cursor only moves past a name once all
-    # of its pairs have been handled, so anything cut off by the per-run
-    # budget or a GDELT outage is picked up again next run.
-    for name, name_max_id in new_people:
-        for name_a, name_b in pending_by_name.get(name, []):
-            if attempted >= MAX_PAIRS_PER_RUN or time.time() - run_start > MAX_RUN_SECONDS:
-                stop_reason = "per-run budget reached"
-                break
-            attempted += 1
-            print(f"[gdelt-classify-daily] [{attempted}] {name_a} <-> {name_b}...", flush=True)
-            t0 = time.time()
-            try:
-                articles = gc.search_gdelt_comention(name_a, name_b)
-                urls = [a["url"] for a in articles]
-                if not urls:
-                    print("    no candidate articles found")
-                    upsert_evidence_status(db, name_a, name_b, "rejected", [])
-                    rejected_count += 1
-                    continue
-
-                result = gc.classify_pair(name_a, name_b, urls)
-                elapsed = time.time() - t0
-
-                if result["promoted"]:
-                    best_relation, supporting_urls = max(
-                        result["promoted"].items(), key=lambda kv: len(kv[1])
-                    )
-                    relation_type = gc.normalize_relation_type(best_relation)
-                    evidence = json.dumps({
-                        "note": f"GDELT co-occurrence, corroborated by {len(supporting_urls)} independent sources",
-                        "urls": supporting_urls,
-                    })
-                    dbm.add_relationship(
-                        None, name_a, "PERSON", None, name_b, "PERSON",
-                        relation_type, "GDELT_CORROBORATED", evidence,
-                    )
-                    upsert_evidence_status(db, name_a, name_b, "promoted", urls)
-                    promoted_count += 1
-                    print(f"    PROMOTED: {relation_type} ({len(supporting_urls)} sources, {elapsed:.1f}s)")
-                else:
-                    upsert_evidence_status(db, name_a, name_b, "rejected", urls)
-                    rejected_count += 1
-                    print(f"    not promoted ({result['n_independent']} independent source(s), {elapsed:.1f}s)")
-
-            except gc.GdeltTransientError as e:
-                # GDELT is down/throttling -- every remaining pair would fail
-                # the same way, so stop and retry this one next run.
-                error_count += 1
-                stop_reason = f"GDELT unavailable ({e})"
-                break
-            except Exception as e:
-                # Pair-specific failure (bad article, model error): skip it
-                # rather than let one pair block the cursor forever.
-                error_count += 1
-                print(f"    ERROR: {e}")
-        if stop_reason:
+    candidates = next_candidates(db, people, MAX_PAIRS_PER_RUN)
+    print(f"[gdelt-classify] {len(candidates)} candidate pairs this run", flush=True)
+    counts = {"promoted": 0, "rejected": 0, "no_articles": 0, "errors": 0}
+    for i, (h, name_a, name_b, n_mentions, urls) in enumerate(candidates, 1):
+        if time.time() - run_start > MAX_RUN_SECONDS:
+            print("[gdelt-classify] time budget reached; the rest stay unreviewed for the next run", flush=True)
             break
-        new_cursor = name_max_id
+        print(f"[gdelt-classify] [{i}] {name_a} <-> {name_b} ({n_mentions:,} mentions, {len(urls)} urls)...", flush=True)
+        t0 = time.time()
+        try:
+            result = gc.classify_pair(name_a, name_b, urls)
+        except Exception as e:
+            counts["errors"] += 1
+            print(f"    ERROR: {e}")
+            continue
+        elapsed = time.time() - t0
+        if not result.get("fetched"):
+            set_status(db, [h], "no_articles")
+            counts["no_articles"] += 1
+            print(f"    no stored article could be fetched ({elapsed:.1f}s)")
+        elif result["promoted"]:
+            best_relation, supporting_urls = max(result["promoted"].items(), key=lambda kv: len(kv[1]))
+            relation_type = gc.normalize_relation_type(best_relation)
+            evidence = json.dumps({
+                "note": f"GDELT co-occurrence, corroborated by {len(supporting_urls)} independent sources",
+                "urls": supporting_urls, "mentions": n_mentions,
+            })
+            dbm.add_relationship(None, name_a, "PERSON", None, name_b, "PERSON",
+                                 relation_type, "GDELT_CORROBORATED", evidence)
+            set_status(db, [h], "promoted")
+            counts["promoted"] += 1
+            print(f"    PROMOTED: {relation_type} ({len(supporting_urls)} sources, {elapsed:.1f}s)")
+        else:
+            set_status(db, [h], "rejected")
+            counts["rejected"] += 1
+            print(f"    not promoted ({result['n_independent']} independent source(s) of "
+                  f"{result.get('fetched', 0)} fetched, {elapsed:.1f}s)")
 
-    save_cursor(db, new_cursor)
-    print(
-        f"\n[gdelt-classify-daily] Tick complete: {promoted_count} promoted, "
-        f"{rejected_count} rejected, {error_count} errors. Cursor -> {new_cursor}"
-        + (f" (stopped early: {stop_reason})" if stop_reason else "")
-    )
+    print(f"\n[gdelt-classify] Tick complete: {counts['promoted']} promoted, {counts['rejected']} rejected, "
+          f"{counts['no_articles']} no articles, {counts['errors']} errors ({time.time() - run_start:.0f}s)")
     dbm.close()
     db.close()
 

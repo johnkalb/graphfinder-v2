@@ -36,7 +36,7 @@ def env_state(tmp_path, monkeypatch):
         json.dump({"generated_at": "2026-09-27T00:00:00", "publishable":
                    [fact("g1"), fact("w1", "who_you_know"), fact("g2"), fact("b1", "bridge")]}, f)
     sent, posted, updates = [], [], []
-    monkeypatch.setattr(cp, "notify", lambda env, text: sent.append(text))
+    monkeypatch.setattr(cp, "notify", lambda env, text: sent.append(text) or True)
     monkeypatch.setattr(cp, "publish", lambda env, f: posted.append(f["key"]) or f"https://x/{f['key']}")
 
     def fake_tg(env, method, **params):
@@ -91,6 +91,13 @@ def test_none_reply_leaves_facts_for_later(env_state):
     assert posted == [] and state["queue"] == [] and state["posted"] == {}
     cp.cmd_propose(env, state)
     assert [f["key"] for f in state["proposal"]["facts"]] == ["g1", "w1", "b1"]
+
+
+def test_proposal_not_recorded_when_telegram_send_fails(env_state, monkeypatch):
+    env, state, sent, posted, updates = env_state
+    monkeypatch.setattr(cp, "notify", lambda env, text: False)
+    cp.cmd_propose(env, state)
+    assert state["proposal"] is None
 
 
 def test_failed_post_stays_queued(env_state, monkeypatch):
