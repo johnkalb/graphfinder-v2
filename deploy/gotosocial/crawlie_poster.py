@@ -103,14 +103,27 @@ def tg(env, method, **params):
     if DRY_RUN and method == "sendMessage":
         log(f"[dry-run] telegram: {params.get('text')}")
         return {"ok": True, "result": {"message_id": 0}}
-    r = requests.post(f"https://api.telegram.org/bot{env['CRAWLIE_TELEGRAM_BOT_TOKEN']}/{method}",
-                      json=params, timeout=40)
-    return r.json()
+    # Telegram resets connections now and then (6 tracebacks 2026-09-28);
+    # retry briefly, then report failure instead of crashing the tick -- a
+    # crash in the 9:00 run would silently skip that day's proposal.
+    for attempt in range(3):
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{env['CRAWLIE_TELEGRAM_BOT_TOKEN']}/{method}",
+                              json=params, timeout=40)
+            return r.json()
+        except (requests.RequestException, ValueError) as e:
+            err = e
+            time.sleep(5 * (attempt + 1))
+    return {"ok": False, "description": f"{type(err).__name__}: {err}"}
 
 
 def notify(env, text):
-    tg(env, "sendMessage", chat_id=env.get("CRAWLIE_TELEGRAM_CHAT_ID"), text=text,
-       disable_web_page_preview=True)
+    """Returns True if Telegram accepted the message."""
+    res = tg(env, "sendMessage", chat_id=env.get("CRAWLIE_TELEGRAM_CHAT_ID"), text=text,
+             disable_web_page_preview=True)
+    if not res.get("ok"):
+        log(f"telegram send failed: {res.get('description')}")
+    return bool(res.get("ok"))
 
 
 def parse_reply(text, n):
@@ -185,7 +198,9 @@ def cmd_propose(env, state):
         lines.append(f"{i}. {f['text']}")
         lines.append("")
     lines.append("Reply: all · none · or numbers like 1 3")
-    notify(env, "\n".join(lines))
+    if not notify(env, "\n".join(lines)):
+        log("proposal NOT recorded -- the Telegram message didn't go through")
+        return
     state["proposal"] = {"sent_at": now, "facts": candidates}
     log(f"proposed {len(candidates)} fact(s)")
 

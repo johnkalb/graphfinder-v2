@@ -23,6 +23,7 @@ import psycopg2
 
 SCORED = "webapp/data/graph_scored.json.gz"
 OUT = "webapp/data/person_nodes.json.gz"
+PEOPLE_TSV = "webapp/data/graph_people.tsv.gz"
 
 _COMBINING = dict.fromkeys(range(0x300, 0x370))
 _CK_KEEP = re.compile(r"[^\w ]|_")
@@ -59,9 +60,20 @@ def main():
 
     with gzip.open(SCORED, "rt", encoding="utf-8") as f:
         nodes = json.load(f)["nodes"]
-    idx = [i for i, n in enumerate(nodes) if canon_key(n) in person_keys]
+    # Some sources type companies as PERSON ("Jeepers Inc" reached #1,000 on the
+    # PageRank ladder, 2026-09-29), so an obvious org word overrides the DB type.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from build_crawlie_facts import _ORG_WORDS
+    idx = [i for i, n in enumerate(nodes) if canon_key(n) in person_keys and not _ORG_WORDS.search(n)]
     with gzip.open(OUT, "wt", encoding="utf-8") as f:
         json.dump(idx, f, separators=(",", ":"))
+    # canon_key -> display name, for the GDELT classifier on optiplex (copied
+    # there by rebuild_and_deploy.py): lets it test "both names are graph
+    # people" without a full-table scan, and write promoted relations under
+    # the node's own display name.
+    with gzip.open(PEOPLE_TSV, "wt", encoding="utf-8") as f:
+        for i in idx:
+            f.write(f"{canon_key(nodes[i])}\t{nodes[i]}\n")
     print(f"Wrote {OUT}: {len(idx):,} of {len(nodes):,} nodes are people ({time.time() - t0:.0f}s)", flush=True)
 
 
