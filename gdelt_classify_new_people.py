@@ -50,8 +50,45 @@ GRAPH_PEOPLE = os.environ.get(
     else r"C:\Users\johnk\graphfinder-clean\webapp\data\graph_people.tsv.gz")
 SCAN_BATCH = 2000
 MAX_PAIRS_PER_RUN = 60
-# smart_runner kills the remote run at 1800s; stop starting new pairs well before.
-MAX_RUN_SECONDS = 20 * 60
+# smart_runner kills the remote run at 1800s (and returns no output at all
+# then), so stop starting pairs at 15 min and cap any single pair at 4 min --
+# the first run (2026-09-29) was killed mid-pair after ~18 pairs.
+MAX_RUN_SECONDS = 15 * 60
+PAIR_TIMEOUT_SEC = 240
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "classify.log")
+
+
+def log(msg):
+    """stdout (returned by smart_runner only when a run ends) + a file that
+    survives a killed run."""
+    line = f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}"
+    print(line, flush=True)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+class PairTimeout(Exception):
+    pass
+
+
+def classify_with_timeout(name_a, name_b, urls):
+    """gc.classify_pair with a hard wall-clock cap (SIGALRM; Linux/optiplex)."""
+    import signal
+    if not hasattr(signal, "SIGALRM"):
+        return gc.classify_pair(name_a, name_b, urls)
+
+    def _raise(signum, frame):
+        raise PairTimeout()
+    old = signal.signal(signal.SIGALRM, _raise)
+    signal.alarm(PAIR_TIMEOUT_SEC)
+    try:
+        return gc.classify_pair(name_a, name_b, urls)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
 
 _COMBINING = dict.fromkeys(range(0x300, 0x370))
 _CK_KEEP = re.compile(r"[^\w ]|_")
@@ -118,34 +155,39 @@ def next_candidates(db, people, want):
 
 def main():
     if not pg_shim.IS_POSTGRES:
-        print("[gdelt-classify] DATABASE_URL not set -- this job is Postgres-only. Aborting.")
+        log("[gdelt-classify] DATABASE_URL not set -- this job is Postgres-only. Aborting.")
         return
     run_start = time.time()
     db = _pg_connect(DB_PATH)
     dbm = DBManager(DB_PATH)
     people = load_graph_people()
-    print(f"[gdelt-classify] Starting at {datetime.now().isoformat()}; {len(people):,} graph people loaded", flush=True)
+    log(f"[gdelt-classify] Starting at {datetime.now().isoformat()}; {len(people):,} graph people loaded")
 
     candidates = next_candidates(db, people, MAX_PAIRS_PER_RUN)
-    print(f"[gdelt-classify] {len(candidates)} candidate pairs this run", flush=True)
+    log(f"[gdelt-classify] {len(candidates)} candidate pairs this run")
     counts = {"promoted": 0, "rejected": 0, "no_articles": 0, "errors": 0}
     for i, (h, name_a, name_b, n_mentions, urls) in enumerate(candidates, 1):
         if time.time() - run_start > MAX_RUN_SECONDS:
-            print("[gdelt-classify] time budget reached; the rest stay unreviewed for the next run", flush=True)
+            log("[gdelt-classify] time budget reached; the rest stay unreviewed for the next run")
             break
-        print(f"[gdelt-classify] [{i}] {name_a} <-> {name_b} ({n_mentions:,} mentions, {len(urls)} urls)...", flush=True)
+        log(f"[gdelt-classify] [{i}] {name_a} <-> {name_b} ({n_mentions:,} mentions, {len(urls)} urls)...")
         t0 = time.time()
         try:
-            result = gc.classify_pair(name_a, name_b, urls)
+            result = classify_with_timeout(name_a, name_b, urls)
+        except PairTimeout:
+            set_status(db, [h], "timeout")
+            counts["errors"] += 1
+            log(f"    TIMEOUT after {PAIR_TIMEOUT_SEC}s -- marked 'timeout' so it can't block the queue")
+            continue
         except Exception as e:
             counts["errors"] += 1
-            print(f"    ERROR: {e}")
+            log(f"    ERROR: {e}")
             continue
         elapsed = time.time() - t0
         if not result.get("fetched"):
             set_status(db, [h], "no_articles")
             counts["no_articles"] += 1
-            print(f"    no stored article could be fetched ({elapsed:.1f}s)")
+            log(f"    no stored article could be fetched ({elapsed:.1f}s)")
         elif result["promoted"]:
             best_relation, supporting_urls = max(result["promoted"].items(), key=lambda kv: len(kv[1]))
             relation_type = gc.normalize_relation_type(best_relation)
@@ -157,15 +199,15 @@ def main():
                                  relation_type, "GDELT_CORROBORATED", evidence)
             set_status(db, [h], "promoted")
             counts["promoted"] += 1
-            print(f"    PROMOTED: {relation_type} ({len(supporting_urls)} sources, {elapsed:.1f}s)")
+            log(f"    PROMOTED: {relation_type} ({len(supporting_urls)} sources, {elapsed:.1f}s)")
         else:
             set_status(db, [h], "rejected")
             counts["rejected"] += 1
-            print(f"    not promoted ({result['n_independent']} independent source(s) of "
+            log(f"    not promoted ({result['n_independent']} independent source(s) of "
                   f"{result.get('fetched', 0)} fetched, {elapsed:.1f}s)")
 
-    print(f"\n[gdelt-classify] Tick complete: {counts['promoted']} promoted, {counts['rejected']} rejected, "
-          f"{counts['no_articles']} no articles, {counts['errors']} errors ({time.time() - run_start:.0f}s)")
+    log(f"[gdelt-classify] Tick complete: {counts['promoted']} promoted, {counts['rejected']} rejected, "
+        f"{counts['no_articles']} no articles, {counts['errors']} errors ({time.time() - run_start:.0f}s)")
     dbm.close()
     db.close()
 

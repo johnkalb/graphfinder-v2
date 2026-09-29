@@ -50,13 +50,27 @@ def main():
     t0 = time.time()
     conn = psycopg2.connect(database_url())
     cur = conn.cursor()
-    person_keys = set()
+    # Majority vote per name: a single stray PERSON typing isn't enough --
+    # some source typed "Los Angeles" as PERSON, and it reached the GDELT
+    # classifier as a "person" (2026-09-29). Count PERSON vs ORG typings of
+    # each name across non-GDELT rows and call it a person only if PERSON wins
+    # or ties.
+    # RECONCILIATION is excluded too: its CROSS_REFERENCED self-loops re-type
+    # GDELT NER names as PERSON (that's where "Los Angeles" came from), and
+    # LOCATION typings count against being a person.
+    votes = {}   # canon key -> [person_count, non_person_count]
     for col, typ in (("source_name", "source_type"), ("target_name", "target_type")):
-        cur.execute(f"SELECT DISTINCT {col} FROM relationships WHERE {typ} = 'PERSON' "
-                    f"AND source_data NOT IN ('GDELT', 'GDELT_FULL')")
-        person_keys |= {canon_key(r[0]) for r in cur.fetchall() if r[0]}
-        print(f"  {col}: {len(person_keys):,} person keys so far ({time.time() - t0:.0f}s)", flush=True)
+        cur.execute(f"SELECT {col}, {typ}, count(*) FROM relationships "
+                    f"WHERE {typ} IN ('PERSON', 'ORG', 'LOCATION') "
+                    f"AND source_data NOT IN ('GDELT', 'GDELT_FULL', 'RECONCILIATION') GROUP BY 1, 2")
+        for name, t, n in cur.fetchall():
+            if name:
+                v = votes.setdefault(canon_key(name), [0, 0])
+                v[0 if t == "PERSON" else 1] += n
+        print(f"  {col}: {len(votes):,} typed names so far ({time.time() - t0:.0f}s)", flush=True)
     conn.close()
+    person_keys = {k for k, (p, o) in votes.items() if p and p >= o}
+    print(f"  {len(person_keys):,} names typed PERSON at least as often as ORG", flush=True)
 
     with gzip.open(SCORED, "rt", encoding="utf-8") as f:
         nodes = json.load(f)["nodes"]

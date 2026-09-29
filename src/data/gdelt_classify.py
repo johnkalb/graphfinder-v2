@@ -272,15 +272,23 @@ def classify_from_docs(name_a: str, name_b: str, docs: list[tuple[str, str]],
     }
 
 
+# REBEL on CPU is the per-pair bottleneck and scales with article length; a
+# long feature ran one pair past the classifier's time budget (2026-09-29).
+# How two people are related is almost always stated early in a news story.
+MAX_ARTICLE_CHARS = 8000
+
+
 def fetch_article(url: str) -> str | None:
     """trafilatura-based article text fetch. ~1s/doc, ~83-85% success rate
-    observed this session (paywalls/dead links account for the rest)."""
+    observed this session (paywalls/dead links account for the rest).
+    Returns at most MAX_ARTICLE_CHARS of text."""
     import trafilatura
     try:
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
             return None
-        return trafilatura.extract(downloaded)
+        text = trafilatura.extract(downloaded)
+        return text[:MAX_ARTICLE_CHARS] if text else text
     except Exception as e:
         logger.warning("article fetch failed for %s: %s", url, e)
         return None
