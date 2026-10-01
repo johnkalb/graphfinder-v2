@@ -56,9 +56,10 @@ HASHTAGS = {
     "stats_banks": "#Banking #Finance #OpenData",
     "stats_inventors": "#Patents #Innovation #OpenData",
     "stats_scale": "#OpenData #NetworkScience",
+    "community_establishment": "#NetworkScience #Power #Establishment",
 }
 # Proposal order: rotate through categories so a day isn't three of one kind.
-CATEGORY_ORDER = ["group_vs_group", "stats_separation", "who_you_know", "stats_charity", "pagerank_ladder",
+CATEGORY_ORDER = ["community_establishment", "group_vs_group", "stats_separation", "who_you_know", "stats_charity", "pagerank_ladder",
                   "bridge", "stats_banks", "stats_inventors", "stats_law", "top_degree_public", "stats_scale",
                   "top_pagerank", "top_degree"]
 

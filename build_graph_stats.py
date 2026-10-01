@@ -14,6 +14,8 @@ the webapp.
   charities   the IRS Business Master File candidates ($10M+ assets) and how
               many of them the harvester has processed so far
   law_firms   AMLAW_ROSTER attorneys per firm (only the firms we harvest)
+  establishment  the "establishment" community (Leiden): size, partisan
+              links, median hops, top bridges/hubs, subcommunities
 
 The DB-backed parts are optional: DATABASE_URL from the environment, or the
 gitignored secrets file via pg_secret; they're skipped if neither works.
@@ -185,6 +187,122 @@ def inventor_stats(conn):
 FDIC_API = "https://banks.data.fdic.gov/api"
 
 
+# --- communities (2026-10-01) ------------------------------------------------
+# Leiden (modularity, weighted by edge probability) over the whole graph, then
+# a closer look at the "establishment" community -- found by anchors, not by
+# id, since ids change as the graph grows. Seeded so results are stable from
+# night to night. Names are reported raw; build_crawlie_facts.py publishes
+# only verified public figures.
+ESTABLISHMENT_ANCHORS = ("Lawrence Summers", "David Rubenstein", "Council on Foreign Relations")
+PARTY_ANCHORS = {"democratic": "Democratic National Committee", "republican": "Republican National Committee"}
+# subcommunities held together mainly by alumni ties mix unrelated people
+# (Einstein with Farrah Fawcett) -- not reported
+MAX_EDUCATION_SHARE = 0.40
+
+
+def community_stats(G, nodes, edges, people_mask):
+    random.seed(42)          # igraph draws from Python's RNG
+    t = time.time()
+    w = [max(float(e[2]), 1e-6) for e in edges]
+    memb = G.community_leiden(objective_function="modularity", weights=w, n_iterations=4).membership
+    log(f"  leiden {time.time() - t:.0f}s")
+    idx = {n: i for i, n in enumerate(nodes)}
+    homes = [memb[idx[a]] for a in ESTABLISHMENT_ANCHORS if a in idx]
+    if len(homes) < 2 or len(set(homes)) != 1:
+        log(f"  establishment anchors split or missing ({homes}) -- skipped")
+        return None
+    est = homes[0]
+    party = {k: memb[idx[v]] for k, v in PARTY_ANCHORS.items() if v in idx}
+
+    mem = [i for i, c in enumerate(memb) if c == est]
+    S = G.induced_subgraph(mem)
+    # attach weights/categories to the subgraph edges via a lookup on endpoints
+    pos = {v: k for k, v in enumerate(mem)}
+    sub_w, sub_cats = {}, {}
+    inside_cats, links_to = {}, {}
+    for e in edges:
+        ca, cb = memb[e[0]], memb[e[1]]
+        if ca == est and cb == est:
+            key = (min(pos[e[0]], pos[e[1]]), max(pos[e[0]], pos[e[1]]))
+            sub_w[key] = max(float(e[2]), 1e-6)
+            sub_cats[key] = e[3] if len(e) > 3 else []
+            for c in sub_cats[key]:
+                inside_cats[c] = inside_cats.get(c, 0) + 1
+        elif ca == est or cb == est:
+            other = cb if ca == est else ca
+            links_to[other] = links_to.get(other, 0) + 1
+    S.es["w"] = [sub_w[tuple(sorted(e.tuple))] for e in S.es]
+    is_p = [people_mask[v] for v in mem]
+    P = [k for k in range(S.vcount()) if is_p[k]]
+    tot_cats = sum(inside_cats.values()) or 1
+
+    rng = random.Random(42)
+    hist = {}
+    pset = np.array(P)
+    for s in rng.sample(P, min(200, len(P))):
+        d = np.asarray(S.distances(source=[s])[0], dtype=np.float64)[pset]
+        d = d[(d > 0) & np.isfinite(d)].astype(np.int64)
+        for dist, n in enumerate(np.bincount(d).tolist()):
+            if n:
+                hist[dist] = hist.get(dist, 0) + n
+    total = sum(hist.values())
+    cum, median_hops = 0, None
+    for dist in sorted(hist):
+        cum += hist[dist]
+        if median_hops is None and cum >= total / 2:
+            median_hops = dist
+
+    deg = S.degree()
+    ppl_ties = [0] * S.vcount()
+    for a, b in (e.tuple for e in S.es):
+        if is_p[a] and is_p[b]:
+            ppl_ties[a] += 1
+            ppl_ties[b] += 1
+    src = rng.sample(P, min(1500, len(P)))
+    t = time.time()
+    btw = S.betweenness(sources=src)
+    log(f"  establishment betweenness {time.time() - t:.0f}s")
+    name = lambda k: nodes[mem[k]]
+    top_bridges = [name(k) for k in sorted(P, key=lambda k: -btw[k])[:40]]
+    top_connected = [[name(k), deg[k]] for k in sorted(P, key=lambda k: -deg[k])[:40]]
+    hub_orgs = [[name(k), deg[k]] for k in sorted((k for k in range(S.vcount()) if not is_p[k]),
+                                                  key=lambda k: -deg[k])[:10]]
+
+    sub = S.community_leiden(objective_function="modularity", weights="w", n_iterations=4).membership
+    sub_people, sub_edu, sub_all = {}, {}, {}
+    for k in P:
+        sub_people[sub[k]] = sub_people.get(sub[k], 0) + 1
+    for key, cats in sub_cats.items():
+        a, b = key
+        if sub[a] == sub[b]:
+            for c in cats:
+                sub_all[sub[a]] = sub_all.get(sub[a], 0) + 1
+                if c == "EDUCATION":
+                    sub_edu[sub[a]] = sub_edu.get(sub[a], 0) + 1
+    subs = []
+    for c, n in sorted(sub_people.items(), key=lambda kv: -kv[1])[:15]:
+        edu = sub_edu.get(c, 0) / max(1, sub_all.get(c, 0))
+        if edu > MAX_EDUCATION_SHARE:
+            continue
+        ks = [k for k in range(S.vcount()) if sub[k] == c]
+        orgs_k = sorted((k for k in ks if not is_p[k]), key=lambda k: -deg[k])[:8]
+        org_set = set(orgs_k)
+        # each hub person with the hub orgs they link to DIRECTLY -- a fact may
+        # only pair a person with an organization they're actually tied to
+        # (clustering alone put Jair Bolsonaro "in" a BlackRock subcommunity)
+        hubs = sorted((k for k in ks if is_p[k]), key=lambda k: -ppl_ties[k])[:150]
+        subs.append({"people": n, "hub_orgs": [name(k) for k in orgs_k],
+                     "hub_people": [[name(k), [name(o) for o in S.neighbors(k) if o in org_set]] for k in hubs]})
+
+    return {"people": len(P), "orgs": S.vcount() - len(P), "edges_inside": S.ecount(),
+            "edges_out": sum(links_to.values()),
+            "links_democratic": links_to.get(party.get("democratic"), 0) if party.get("democratic") != est else None,
+            "links_republican": links_to.get(party.get("republican"), 0) if party.get("republican") != est else None,
+            "glue": [[c, round(v / tot_cats, 3)] for c, v in sorted(inside_cats.items(), key=lambda kv: -kv[1])[:5]],
+            "median_hops": median_hops, "top_bridges": top_bridges, "top_connected": top_connected,
+            "hub_orgs": hub_orgs, "subcommunities": subs}
+
+
 def bank_stats():
     """FDIC BankFind (public, no key): active FDIC-insured institutions, how
     concentrated their assets/deposits are, and how many there were at the
@@ -253,6 +371,12 @@ def main():
              "scale": {"nodes": G.vcount(), "edges": G.ecount(), "people": sum(people_mask)}}
     stats["separation"] = separation_stats(G, people_mask)
     log(f"separation: {stats['separation']}")
+
+    try:
+        stats["establishment"] = community_stats(G, nodes, g["edges"], people_mask)
+        log(f"establishment: {json.dumps(stats['establishment'])[:300]}")
+    except Exception as e:
+        log(f"community stats skipped: {e}")
 
     conn = db_connect()
     try:
