@@ -21,6 +21,7 @@ from collections import defaultdict, Counter
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
 from relation_categories import categorize
 from link_scoring import score_pair
+from nicknames import formal_forms
 
 
 # --- name canonicalization (2026-09-10) -----------------------------------
@@ -219,6 +220,54 @@ if os.path.exists(OVERLAP_FILE):
                 n_ov_kept += 1
     print(f"Wikidata overlap edges: {n_ov} read, {n_ov_kept} connect existing nodes")
     print(f"Unique scorable pairs after overlap merge: {len(pair_rels)}")
+
+# --- nickname merge (2026-10-01) ---
+# "Larry Summers" and "Lawrence Summers" were two nodes, splitting his edges
+# (and his rank) in half. A nickname-variant pair is merged only when the two
+# nodes are structurally the same person: >=3 shared neighbours, not counting
+# FEC campaign committees (thousands of unrelated "Mike Smith"/"Michael Smith"
+# donors share those) or mega-hubs, making up >=30% of the smaller node's
+# neighbours. Measured on the 2026-10-01 graph: 186 merges out of 30,636
+# variant pairs; Steve King (congressman) / Stephen King and common donor
+# names stay apart. The nickname node folds into the formal one; its display
+# forms survive as aliases.
+NICK_MIN_SHARED, NICK_MIN_OVERLAP, NICK_HUB_DEG = 3, 0.30, 5000
+nbrs = defaultdict(set)
+for a, b in pair_rels:
+    nbrs[a].add(b)
+    nbrs[b].add(a)
+
+
+def _is_person(key):
+    d = best_display(key)
+    return d.lower() in persons or looks_like_person(d)
+
+
+nick_map = {}
+for key in list(nbrs):
+    best = None
+    for fk in formal_forms(key):
+        if fk == key or fk not in nbrs or not _is_person(key) or not _is_person(fk):
+            continue
+        shared = [n for n in nbrs[key] & nbrs[fk]
+                  if not n.startswith("fec campaign committee") and len(nbrs[n]) <= NICK_HUB_DEG]
+        overlap = len(shared) / min(len(nbrs[key]), len(nbrs[fk]))
+        if len(shared) >= NICK_MIN_SHARED and overlap >= NICK_MIN_OVERLAP and (not best or overlap > best[1]):
+            best = (fk, overlap)
+    if best:
+        nick_map[key] = best[0]
+del nbrs
+if nick_map:
+    merged_rels = defaultdict(set)
+    for (a, b), rels in pair_rels.items():
+        a, b = nick_map.get(a, a), nick_map.get(b, b)
+        if a != b:
+            merged_rels[tuple(sorted([a, b]))] |= rels
+    pair_rels = merged_rels
+    for k, fk in nick_map.items():
+        display_votes[fk].update(display_votes.pop(k, Counter()))
+print(f"Nickname merges: {len(nick_map)} (e.g. {', '.join(f'{k} -> {v}' for k, v in list(nick_map.items())[:5])})")
+print(f"Unique scorable pairs after nickname merge: {len(pair_rels)}")
 
 # Score each pair
 node_ids = {}
