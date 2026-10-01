@@ -121,6 +121,20 @@ def set_status(db, pair_hashes, status):
     db.commit()
 
 
+MAX_URLS_PER_PAIR = 6
+
+
+def pick_urls(urls, days):
+    """Prefer URLs from distinct news days (migration 005 spreads them), most
+    recent first since newer links are likelier to still resolve; undated
+    pre-migration URLs fill any remaining slots."""
+    urls = list(urls or [])
+    days = list(days or []) + [None] * (len(urls) - len(days or []))
+    dated = sorted(((d, u) for u, d in zip(urls, days) if d), reverse=True)
+    undated = [u for u, d in zip(urls, days) if not d]
+    return ([u for _, u in dated] + undated)[:MAX_URLS_PER_PAIR]
+
+
 def next_candidates(db, people, want):
     """Up to `want` unreviewed pairs with >=2 stored URLs whose names are both
     graph people, most-mentioned first. Pairs that fail the people check are
@@ -131,7 +145,8 @@ def next_candidates(db, people, want):
         # Picked pairs stay 'unreviewed' until classified, so exclude them here
         # or a second batch would return them again.
         cur.execute(
-            "SELECT pair_hash, name_a, name_b, occurrence_count, sample_urls FROM gdelt_cooccurrence_evidence "
+            "SELECT pair_hash, name_a, name_b, occurrence_count, sample_urls, sample_days "
+            "FROM gdelt_cooccurrence_evidence "
             "WHERE promotion_status = 'unreviewed' AND cardinality(sample_urls) >= 2 "
             "AND NOT (pair_hash = ANY(%s)) ORDER BY occurrence_count DESC LIMIT %s",
             ([c[0] for c in out], SCAN_BATCH))
@@ -139,10 +154,10 @@ def next_candidates(db, people, want):
         if not rows:
             break
         not_people = []
-        for h, a, b, n, urls in rows:
+        for h, a, b, n, urls, days in rows:
             ka, kb = canon_key(a), canon_key(b)
             if ka in people and kb in people and ka != kb:
-                out.append((h, people[ka], people[kb], n, list(urls)))
+                out.append((h, people[ka], people[kb], n, pick_urls(urls, days)))
                 if len(out) >= want:
                     break
             else:
