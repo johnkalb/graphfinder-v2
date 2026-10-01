@@ -463,9 +463,77 @@ def stats_facts(stats):
     return out
 
 
+# Every fact that mentions a community carries this definition (operator's
+# rule, 2026-10-01): readers would otherwise take "community" in its everyday
+# sense. Community nicknames ("establishment") are ours, so they go in quotes.
+COMMUNITY_DEF = ('A "community" here is a cluster the software finds by itself: '
+                 'people far more connected to each other than to the rest of the network.')
+_GLUE_WORDS = {"CO_EXECUTIVE": "executive roles", "CO_DIRECTOR": "boards", "EDUCATION": "universities",
+               "LOBBYING": "lobbying", "FAMILY": "family", "EMPLOYMENT": "employers", "DONATION": "donations",
+               "MEMBERSHIP": "memberships", "FINANCIAL": "money", "CREATIVE_COLLAB": "creative work"}
+
+
+def _join(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + f" and {items[-1]}"
+
+
+def community_facts(est, verified, sep_median=None):
+    """The "establishment" community (build_graph_stats.community_stats).
+    Every person named must be verified; ticker and posts get the same text."""
+    if not est:
+        return []
+    out = []
+    n = est["people"]
+    glue = [_GLUE_WORDS[c] for c, _ in est.get("glue", []) if c in _GLUE_WORDS][:3]
+    d, r = est.get("links_democratic"), est.get("links_republican")
+    if d and r and glue:
+        gap = abs(d - r) / max(d, r)
+        lean = ("splits its outside ties almost evenly between Democrats and Republicans" if gap < 0.15 else
+                f"leans {'Democratic' if d > r else 'Republican'} in its outside ties")
+        out.append(fact("community_establishment",
+                        f'The "establishment" community — {n:,} people tied together mostly by shared '
+                        f"{_join(glue)} — {lean}: {d:,} links into the Democratic community, "
+                        f"{r:,} into the Republican one. {COMMUNITY_DEF}", ["partisan"]))
+    bridge = next((b for b in est.get("top_bridges", []) if b.lower() in verified and is_clean_label(b)), None)
+    if bridge:
+        out.append(fact("community_establishment",
+                        f'More shortest paths between members of the "establishment" community ({n:,} people) '
+                        f"run through {bridge} than through any other well-known figure. {COMMUNITY_DEF}",
+                        ["bridge"], [bridge]))
+    m = est.get("median_hops")
+    if m and sep_median:
+        if m >= sep_median:
+            tail = (f"no closer than the network as a whole ({sep_median}). It is a loose web, not an inner circle."
+                    if m == sep_median else f"farther apart than the network as a whole ({sep_median}).")
+        else:
+            tail = f"closer than the network as a whole ({sep_median})."
+        out.append(fact("community_establishment",
+                        f'Members of the "establishment" community ({n:,} people) are typically {m} steps apart — '
+                        f"{tail} {COMMUNITY_DEF}", ["hops"]))
+    orgs = [(short_company(o), k) for o, k in est.get("hub_orgs", []) if is_clean_label(o)]
+    if len(orgs) >= 3:
+        (o1, k1), (o2, k2), (o3, k3) = orgs[:3]
+        out.append(fact("community_establishment",
+                        f'{o1} is the biggest hub of the "establishment" community, with {k1:,} links inside it — '
+                        f"ahead of {o2} ({k2:,}) and {o3} ({k3:,}). {COMMUNITY_DEF}", ["hub_org"]))
+    for sub in est.get("subcommunities", []):
+        raw_orgs = [o for o in sub["hub_orgs"] if is_clean_label(o)][:3]
+        sorgs = [short_company(o) for o in raw_orgs]
+        # only people tied directly to one of the subcommunity's hub organizations
+        hubs = [p for p, linked in sub["hub_people"]
+                if p.lower() in verified and is_clean_label(p) and linked][:3]
+        if len(sorgs) < 3 or len(hubs) < 2:
+            continue
+        out.append(fact("community_establishment",
+                        f'Inside the "establishment" community, the {sub["people"]:,}-person subcommunity centred on '
+                        f"{_join(sorgs)} counts {_join(hubs)} among its best-connected members. {COMMUNITY_DEF}",
+                        ["sub", sorgs[0]], hubs))
+    return out
+
+
 # Categories whose key subjects are fixed identifiers ("median", "ladder"),
 # not names -- only their named people get the label check.
-_NON_NAME_KEYS = ("stats_", "pagerank_ladder")
+_NON_NAME_KEYS = ("stats_", "pagerank_ladder", "community_")
 
 
 def is_publishable(f, verified):
@@ -483,7 +551,10 @@ def main():
     verified = load_verified_people()
 
     ladder_ticker, ladder_public = ladder_facts(load_optional_json(PAGERANK_LADDER), verified)
-    stat_records = stats_facts(load_optional_json(GRAPH_STATS))
+    graph_stats = load_optional_json(GRAPH_STATS) or {}
+    stat_records = stats_facts(graph_stats)
+    stat_records += community_facts(graph_stats.get("establishment"), verified,
+                                    (graph_stats.get("separation") or {}).get("median_steps"))
 
     records = (top_pagerank_facts(index) + group_facts(groups) + surprising_rank_facts(index)
                + top_degree_facts(extras) + bridge_facts(extras) + ladder_ticker + stat_records)
