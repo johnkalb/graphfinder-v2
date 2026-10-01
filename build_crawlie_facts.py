@@ -415,8 +415,8 @@ def stats_facts(stats):
                         ["concentration"]))
         if ch.get("processed"):
             out.append(fact("stats_charity",
-                            f"sixdegrees has mapped the boards of {ch['processed']:,} of the {ch['count']:,} "
-                            f"US nonprofits with more than $10 million in assets so far, largest first.",
+                            f"sixdegrees has checked the IRS filings of {ch['processed']:,} of the {ch['count']:,} "
+                            f"US nonprofits with more than $10 million in assets so far, largest first, to map their boards.",
                             ["progress"]))
     lf = stats.get("law_firms")
     if lf:
