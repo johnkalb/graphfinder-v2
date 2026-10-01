@@ -374,7 +374,7 @@ def short_company(name):
     alias = _COMPANY_ALIASES.get(n.lower())
     if alias:
         return alias
-    return n.title() if n.isupper() else n
+    return n.title() if n.isupper() and len(n) > 4 else n     # keep short acronyms (CHS, IBM)
 
 
 def stats_facts(stats):
@@ -516,18 +516,17 @@ def community_facts(est, verified, sep_median=None):
         out.append(fact("community_establishment",
                         f'{o1} is the biggest hub of the "establishment" community, with {k1:,} links inside it — '
                         f"ahead of {o2} ({k2:,}) and {o3} ({k3:,}). {COMMUNITY_DEF}", ["hub_org"]))
+    # Subcommunities are described by their organizations only. Naming people
+    # was tried and dropped (2026-10-01): only verified figures can be named,
+    # and those ranked far down (#65, #101) while the real hubs weren't
+    # verified, so "best-connected members" misled.
     for sub in est.get("subcommunities", []):
-        raw_orgs = [o for o in sub["hub_orgs"] if is_clean_label(o)][:3]
-        sorgs = [short_company(o) for o in raw_orgs]
-        # only people tied directly to one of the subcommunity's hub organizations
-        hubs = [p for p, linked in sub["hub_people"]
-                if p.lower() in verified and is_clean_label(p) and linked][:3]
-        if len(sorgs) < 3 or len(hubs) < 2:
+        sorgs = [short_company(o) for o in sub["hub_orgs"] if is_clean_label(o)][:3]
+        if len(sorgs) < 3:
             continue
         out.append(fact("community_establishment",
-                        f'Inside the "establishment" community, the {sub["people"]:,}-person subcommunity centred on '
-                        f"{_join(sorgs)} counts {_join(hubs)} among its best-connected members. {COMMUNITY_DEF}",
-                        ["sub", sorgs[0]], hubs))
+                        f'Inside the "establishment" community is a subcommunity of {sub["people"]:,} people '
+                        f"centred on {_join(sorgs)}. {COMMUNITY_DEF}", ["sub", sorgs[0]]))
     return out
 
 
