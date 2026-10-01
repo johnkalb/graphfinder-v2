@@ -90,7 +90,20 @@ def test_none_reply_leaves_facts_for_later(env_state):
     cp.cmd_tick(env, state)
     assert posted == [] and state["queue"] == [] and state["posted"] == {}
     cp.cmd_propose(env, state)
-    assert [f["key"] for f in state["proposal"]["facts"]] == ["g1", "w1", "b1"]
+    assert [f["key"] for f in state["proposal"]["facts"]] == ["g2", "w1", "b1"]   # never-offered g2 first
+
+
+def test_unanswered_days_rotate_through_the_pool():
+    facts = [fact("g1"), fact("g2"), fact("w1", "who_you_know"), fact("w2", "who_you_know"),
+             fact("s1", "stats_separation"), fact("c1", "stats_charity"), fact("k1", "stats_banks")]
+    offered, seen = {}, []
+    for day in range(1, 4):
+        picks = [f["key"] for f in cp.pick_candidates(facts, set(), offered)]
+        seen.append(picks)
+        offered.update({k: day for k in picks})
+    assert seen[0] == ["g1", "s1", "w1"]
+    assert seen[1] == ["c1", "k1", "g2"]           # categories never offered go first
+    assert set(seen[2]) & {"w2"}                    # the rest of the pool comes round
 
 
 def test_proposal_not_recorded_when_telegram_send_fails(env_state, monkeypatch):

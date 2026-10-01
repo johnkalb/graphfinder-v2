@@ -165,12 +165,21 @@ def publish(env, fact):
 
 # --- commands ------------------------------------------------------------------
 
-def pick_candidates(facts, posted):
-    fresh = [f for f in facts if f["key"] not in posted]
+def pick_candidates(facts, posted, offered=None):
+    """Up to MAX_PER_DAY never-posted facts, one per category in turn. Facts
+    (and categories) offered least recently come first, so a day that gets no
+    reply, or "none", doesn't bring back the same three the next morning."""
+    offered = offered or {}
     by_cat = {}
-    for f in fresh:
-        by_cat.setdefault(f["category"], []).append(f)
-    order = CATEGORY_ORDER + sorted(c for c in by_cat if c not in CATEGORY_ORDER)
+    for f in facts:
+        if f["key"] not in posted:
+            by_cat.setdefault(f["category"], []).append(f)
+    for fs in by_cat.values():
+        fs.sort(key=lambda f: offered.get(f["key"], 0))     # stable: build order breaks ties
+    rank = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+    # categories rotate by when any of their facts was last offered
+    last = {c: max(offered.get(f["key"], 0) for f in fs) for c, fs in by_cat.items()}
+    order = sorted(by_cat, key=lambda c: (last[c], rank.get(c, len(rank)), c))
     picks = []
     while len(picks) < MAX_PER_DAY and any(by_cat.get(c) for c in order):
         for c in order:
@@ -188,7 +197,8 @@ def cmd_propose(env, state):
     with gzip.open(FACTS, "rt", encoding="utf-8") as f:
         data = json.load(f)
     queued = {f["key"] for f in state["queue"]}
-    candidates = pick_candidates(data.get("publishable", []), set(state["posted"]) | queued)
+    candidates = pick_candidates(data.get("publishable", []), set(state["posted"]) | queued,
+                                 state.get("offered"))
     if not candidates:
         log("no never-posted publishable facts; nothing to propose")
         state["proposal"] = None
@@ -202,6 +212,9 @@ def cmd_propose(env, state):
         log("proposal NOT recorded -- the Telegram message didn't go through")
         return
     state["proposal"] = {"sent_at": now, "facts": candidates}
+    offered = state.setdefault("offered", {})
+    for f in candidates:
+        offered[f["key"]] = now
     log(f"proposed {len(candidates)} fact(s)")
 
 
@@ -237,7 +250,7 @@ def read_replies(env, state):
         if chosen:
             notify(env, f"Approved {len(chosen)}. Posting one every {POST_SPACING // 3600}h, first one shortly.")
         else:
-            notify(env, "Skipped today's candidates. They'll be offered again on a later day.")
+            notify(env, "Skipped today's candidates. Tomorrow brings different ones; these come back later.")
         log(f"reply {text!r} -> queued {len(chosen)}")
 
 
@@ -258,6 +271,12 @@ def cmd_tick(env, state):
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "tick"
+    # propose (0 9 * * *) and tick (*/5) both fire at 09:00; without a lock the
+    # tick could load state before the proposal was saved and then overwrite it,
+    # so the morning's proposal vanished and replies got "nothing waiting".
+    import fcntl
+    lock = open(STATE + ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
     state = load_state()
     if cmd == "status":
         print(json.dumps({"posted": len(state["posted"]), "queue": len(state["queue"]),
