@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
 from relation_categories import categorize
 from link_scoring import score_pair
 from nicknames import formal_forms
+from disambiguation import Splitter, is_junk_name
 
 
 # --- name canonicalization (2026-09-10) -----------------------------------
@@ -132,6 +133,38 @@ c.execute("SELECT DISTINCT target_name FROM relationships WHERE target_type='PER
 persons |= {r[0].lower() for r in c.fetchall() if r[0]}
 print(f"Person names: {len(persons)}")
 
+# --- common-name splitting (2026-10-02, see webapp/disambiguation.py) ---
+# Pre-pass over FEC donations and patent INVENTOR_AT rows to find names whose
+# records span many employers / companies; their edges are then keyed per
+# employer / company in the main loop. Verified public figures are exempt
+# (verified_people.json.gz is copied here by rebuild_and_deploy.py; without
+# it nothing is exempt).
+VERIFIED = "webapp/data/verified_people.json.gz"
+exempt = set()
+if os.path.exists(VERIFIED):
+    with gzip.open(VERIFIED, "rt", encoding="utf-8") as f:
+        exempt = {canon_key(n) for n in json.load(f)}
+splitter = Splitter(exempt)
+pre = conn.cursor(name="split_prepass_fec")
+pre.itersize = 100_000
+pre.execute("SELECT source_name, evidence FROM relationships WHERE source_data = 'FEC' AND relation_type = 'DONATION'")
+for s_, ev_ in pre:
+    if s_:
+        splitter.observe_fec(canon_key(s_), ev_)
+pre.close()
+pre = conn.cursor(name="split_prepass_patents")
+pre.itersize = 100_000
+pre.execute("SELECT source_name, target_name, evidence FROM relationships "
+            "WHERE source_data = 'PATENT_COINVENTOR' AND relation_type = 'INVENTOR_AT'")
+for s_, t_, ev_ in pre:
+    if s_ and t_:
+        splitter.observe_inventor_at(canon_key(s_), t_, ev_)
+pre.close()
+splitter.finalize()
+print(f"Ambiguous names to split: {len(splitter.fec_ambiguous)} FEC donors, "
+      f"{len(splitter.inv_ambiguous)} inventors ({len(exempt)} verified exempt)")
+split_base = {}   # split node key -> the name key it was split from
+
 # Gather relations per undirected pair (preserving ALL types).
 # Pair keys are canon_key()'d so punctuation/diacritic variants of one person
 # land on ONE node. display_votes[key] tallies the raw display forms seen for
@@ -158,14 +191,15 @@ def _stream(cur, n=250_000):
 # exactly like it did against SQLite.
 stream_cur = conn.cursor(name="build_scored_edges_stream")
 stream_cur.itersize = 250_000
-stream_cur.execute("SELECT source_name, target_name, relation_type FROM relationships")
+stream_cur.execute("SELECT source_name, target_name, relation_type, source_data, "
+                   "CASE WHEN source_data IN ('FEC', 'PATENT_COINVENTOR') THEN evidence END FROM relationships")
 c = stream_cur
 n_raw = n_drop = n_selfmerge = 0
-for s, t, r in _stream(c):
+for s, t, r, src, ev in _stream(c):
     n_raw += 1
     if not s or not t or s == t:
         continue
-    if r in DROP_RELATIONS:
+    if r in DROP_RELATIONS or is_junk_name(s) or is_junk_name(t):
         n_drop += 1
         continue
     sl, tl = s.lower(), t.lower()
@@ -177,6 +211,25 @@ for s, t, r in _stream(c):
             n_drop += 1
             continue
     sk, tk = canon_key(s), canon_key(t)
+    if src == "FEC" and r == "DONATION" and sk in splitter.fec_ambiguous:
+        m = splitter.fec_endpoint(sk, s, ev)
+        if m is None:
+            n_drop += 1
+            continue
+        split_base[m[0]] = sk
+        sk, s = m
+    elif src == "PATENT_COINVENTOR" and r in ("INVENTOR_AT", "CO_INVENTOR_WITH") and (
+            sk in splitter.inv_ambiguous or tk in splitter.inv_ambiguous):
+        ms = splitter.patent_endpoint(sk, s, ev, assignee=t if r == "INVENTOR_AT" else None)
+        mt = (tk, t) if r == "INVENTOR_AT" else splitter.patent_endpoint(tk, t, ev)
+        if ms is None or mt is None:
+            n_drop += 1
+            continue
+        if ms[0] != sk:
+            split_base[ms[0]] = sk
+        if mt[0] != tk:
+            split_base[mt[0]] = tk
+        (sk, s), (tk, t) = ms, mt
     if sk == tk:                    # different raw strings, same person -> not an edge
         n_selfmerge += 1
         display_votes[sk][s] += 1
@@ -189,6 +242,8 @@ conn.close()
 print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}, "
       f"self-loops after canonicalization: {n_selfmerge}")
 print(f"Unique scorable pairs: {len(pair_rels)}")
+print(f"Common-name splits: {splitter.split} edge endpoints moved to {len(split_base)} per-employer/company nodes; "
+      f"{splitter.dropped} unattributable edges dropped")
 
 def best_display(key):
     votes = display_votes.get(key)
@@ -305,5 +360,8 @@ n_merged = sum(len(v) for v in aliases.values())
 print(f"Canonicalized: {len(aliases)} nodes carry aliases ({n_merged} variant strings folded in)")
 
 with gzip.open(OUT, "wt", encoding="utf-8") as f:
-    json.dump({"nodes": nodes, "edges": edges, "aliases": aliases}, f, separators=(",", ":"))
+    # splits: node index -> display name of the ambiguous name it came from,
+    # so build_person_nodes.py can type it (its display isn't in the DB)
+    splits = {node_ids[k]: best_display(b) for k, b in split_base.items() if k in node_ids}
+    json.dump({"nodes": nodes, "edges": edges, "aliases": aliases, "splits": splits}, f, separators=(",", ":"))
 print(f"Saved {OUT}: {os.path.getsize(OUT)/1024/1024:.1f} MB, {len(nodes)} nodes")

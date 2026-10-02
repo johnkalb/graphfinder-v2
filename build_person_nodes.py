@@ -73,12 +73,20 @@ def main():
     print(f"  {len(person_keys):,} names typed PERSON at least as often as ORG", flush=True)
 
     with gzip.open(SCORED, "rt", encoding="utf-8") as f:
-        nodes = json.load(f)["nodes"]
+        g = json.load(f)
+    nodes = g["nodes"]
+    # Common-name split nodes ("MICHAEL SMITH (Fedex)", see
+    # webapp/disambiguation.py) aren't in the DB under that display name, so
+    # they take the typing of the name they were split from. Their employer
+    # part would trip the org-word check, so it's applied to the base only.
+    splits = {int(i): base for i, base in (g.get("splits") or {}).items()}
     # Some sources type companies as PERSON ("Jeepers Inc" reached #1,000 on the
     # PageRank ladder, 2026-09-29), so an obvious org word overrides the DB type.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from build_crawlie_facts import _ORG_WORDS
-    idx = [i for i, n in enumerate(nodes) if canon_key(n) in person_keys and not _ORG_WORDS.search(n)]
+    idx = [i for i, n in enumerate(nodes)
+           if (canon_key(splits[i]) in person_keys and not _ORG_WORDS.search(splits[i])) if i in splits
+           else (canon_key(n) in person_keys and not _ORG_WORDS.search(n))]
     with gzip.open(OUT, "wt", encoding="utf-8") as f:
         json.dump(idx, f, separators=(",", ":"))
     # canon_key -> display name, for the GDELT classifier on optiplex (copied
@@ -87,6 +95,8 @@ def main():
     # the node's own display name.
     with gzip.open(PEOPLE_TSV, "wt", encoding="utf-8") as f:
         for i in idx:
+            if i in splits:     # GDELT names can't say which "Michael Smith" they mean
+                continue
             f.write(f"{canon_key(nodes[i])}\t{nodes[i]}\n")
     print(f"Wrote {OUT}: {len(idx):,} of {len(nodes):,} nodes are people ({time.time() - t0:.0f}s)", flush=True)
 
