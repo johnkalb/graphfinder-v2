@@ -32,7 +32,13 @@ CENTRALITY_EXTRAS = "webapp/data/centrality_extras.json.gz"
 OUT = "webapp/data/crawlie_facts.json.gz"
 PAGERANK_LADDER = "webapp/data/pagerank_ladder.json"   # build_search_from_scored.py
 GRAPH_STATS = "webapp/data/graph_stats.json"           # build_graph_stats.py
+# the public /demo only offers and names these (see pathfinder.py "Public demo")
+VERIFIED_OUT = "webapp/data/verified_people.json.gz"
 QID_MAP = os.environ.get("QID_MAP_PATH", os.path.join(os.path.expanduser("~"), "qid_map.jsonl"))
+# People added straight from Wikidata (WIKIDATA_MEDIA / WIKIDATA_INFLUENCERS
+# imports) already carry their QID -- Meryl Streep, MrBeast. Exported from
+# those rows' evidence on 2026-10-01; re-export if the imports are rerun.
+QID_IMPORTS = os.environ.get("QID_IMPORTS_PATH", os.path.join(os.path.expanduser("~"), "qid_map_imports.jsonl"))
 
 MIN_DEGREE = 15          # exclude near-isolated stub nodes -- "surprising" divergence there is just noise
 MAX_PAIR_FACTOIDS = 20
@@ -80,6 +86,13 @@ def load_verified_people():
                     verified.add(json.loads(line)["name"].lower())
     except FileNotFoundError:
         print(f"WARNING: {QID_MAP} not found -- publishable facts limited to FAMOUS_NAMES", flush=True)
+    try:
+        with open(QID_IMPORTS, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    verified.add(json.loads(line)["name"].lower())
+    except FileNotFoundError:
+        pass
     return verified
 
 
@@ -573,6 +586,9 @@ def main():
     }
     with gzip.open(OUT, "wt", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+
+    with gzip.open(VERIFIED_OUT, "wt", encoding="utf-8") as f:
+        json.dump(sorted(verified), f, ensure_ascii=False, separators=(",", ":"))
 
     print(f"Wrote {len(records)} crawlie facts ({len(publishable)} publishable, "
           f"{len(verified)} verified public figures) to {OUT}", flush=True)
