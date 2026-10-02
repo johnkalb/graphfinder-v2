@@ -5,6 +5,7 @@ import asyncio
 import concurrent.futures
 import functools
 import logging
+import collections, gzip, threading, time
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
@@ -3051,6 +3052,10 @@ __TURNSTILE_SCRIPT__
   <footer>Requests are reviewed by hand. We only use your email to let you log in.</footer>
 </main>
 <script>
+// requests arriving from the public demo (/request-access?from=demo) are tagged
+// so the admin queue shows which channel brings people in
+const viaParam = (new URLSearchParams(location.search).get('from') || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 30);
+const viaTag = viaParam ? `[via ${viaParam}] ` : '';
 document.getElementById('f').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const out = document.getElementById('result'), btn = document.getElementById('submit');
@@ -3061,7 +3066,7 @@ document.getElementById('f').addEventListener('submit', async (ev) => {
   try {
     const res = await fetch('/request-access/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, handle: document.getElementById('handle').value.trim() || null,
-        note: document.getElementById('note').value.trim() || null, website: document.getElementById('website').value || null,
+        note: (viaTag + document.getElementById('note').value.trim()).trim() || null, website: document.getElementById('website').value || null,
         turnstile_token: tsEl ? tsEl.value : null }) });
     const d = await res.json().catch(() => ({}));
     if (res.ok && d.success) { out.className = 'ok'; out.textContent = d.message; document.getElementById('f').reset(); }
@@ -3071,6 +3076,142 @@ document.getElementById('f').addEventListener('submit', async (ev) => {
 });
 </script>
 </body></html>"""
+
+
+# --- Public demo (2026-10-01) -------------------------------------------------
+# /demo lets anyone try a path search WITHOUT the Cloudflare Access login, to
+# find out whether people outside the beta care. Limits, all server-side:
+#   * both endpoints must be verified public figures (verified_people.json.gz,
+#     written nightly by build_crawlie_facts.py from the Wikidata-confirmed
+#     qid_map) -- search suggests only those;
+#   * any person on a path who isn't verified is shown as "A private
+#     individual" (name, label and details removed); organizations are shown;
+#   * per-IP and global rate limits; no evidence, narratives or fallbacks.
+# Cloudflare needs a Bypass application for /demo and /api/demo/ (like
+# /request-access) for this to be reachable logged-out.
+_DEMO_VERIFIED_PATH = DATA_DIR / "verified_people.json.gz"
+_demo_verified = None
+_demo_verified_mtime = None
+_DEMO_LIMITS = {"search": (240, 3600), "path": (20, 3600)}   # per IP: (requests, window seconds)
+_DEMO_GLOBAL_PATH_LIMIT = (600, 3600)
+_demo_hits = {}
+_demo_global_hits = collections.deque()
+_demo_lock = threading.Lock()
+
+
+def _load_demo_verified():
+    """Lowercased verified public-figure names. Reloaded if the file changes."""
+    global _demo_verified, _demo_verified_mtime
+    try:
+        mtime = _DEMO_VERIFIED_PATH.stat().st_mtime
+    except OSError:
+        return _demo_verified or set()
+    if _demo_verified is None or mtime != _demo_verified_mtime:
+        with gzip.open(_DEMO_VERIFIED_PATH, "rt", encoding="utf-8") as f:
+            _demo_verified = {n.lower() for n in json.load(f)}
+        _demo_verified_mtime = mtime
+    return _demo_verified
+
+
+def _demo_client_ip(request: Request) -> str:
+    return (request.headers.get("CF-Connecting-IP")
+            or (request.client.host if request.client else "unknown"))
+
+
+def _demo_rate_limited(request: Request, kind: str) -> bool:
+    limit, window = _DEMO_LIMITS[kind]
+    now = time.time()
+    with _demo_lock:
+        q = _demo_hits.setdefault((_demo_client_ip(request), kind), collections.deque())
+        while q and q[0] < now - window:
+            q.popleft()
+        if len(q) >= limit:
+            return True
+        if kind == "path":
+            g_limit, g_window = _DEMO_GLOBAL_PATH_LIMIT
+            while _demo_global_hits and _demo_global_hits[0] < now - g_window:
+                _demo_global_hits.popleft()
+            if len(_demo_global_hits) >= g_limit:
+                return True
+            _demo_global_hits.append(now)
+        q.append(now)
+        if len(_demo_hits) > 50_000:          # bound memory: drop idle clients
+            for key in [k for k, v in _demo_hits.items() if not v or v[-1] < now - 3600]:
+                del _demo_hits[key]
+        return False
+
+
+def _demo_redact_paths(paths, verified):
+    """Public-safe copy of path results: unverified people become anonymous."""
+    out = []
+    for p in paths:
+        steps = []
+        for st in p.get("path", []):
+            name = st.get("node") or ""
+            private = name.lower() not in verified and _looks_like_person(name)
+            steps.append({"node": None if private else name,
+                          "label": "A private individual" if private else (st.get("label") or name),
+                          "private": private, "relation": st.get("relation"), "cats": st.get("cats") or []})
+        out.append({"length": p.get("length"), "band": p.get("band"), "path": steps})
+    return out
+
+
+@app.get("/demo", response_class=HTMLResponse)
+async def demo_page():
+    try:
+        return HTMLResponse(Path(__file__).with_name("demo.html").read_text(encoding="utf-8"),
+                            headers={"Cache-Control": "no-cache"})
+    except Exception:
+        logger.exception("demo page failed to load")
+        return HTMLResponse("<h1>Demo unavailable</h1>", status_code=500)
+
+
+@app.get("/api/demo/search")
+async def demo_search(request: Request, q: str = Query(default="", max_length=100)):
+    if not q or len(q.strip()) < 2:
+        return []
+    if _demo_rate_limited(request, "search"):
+        return JSONResponse(status_code=429, content={"error": "rate_limited"})
+    verified = _load_demo_verified()
+    out = []
+    for e in _find_entry(q.strip()):
+        if e["canonical"].lower() in verified:
+            out.append({"name": e["canonical"], "degree": e.get("degree")})
+            if len(out) >= 8:
+                break
+    return out
+
+
+@app.get("/api/demo/path")
+async def demo_path(request: Request, src_name: str = Query(default="", max_length=200),
+                    tgt_name: str = Query(default="", max_length=200)):
+    src, tgt = src_name.strip(), tgt_name.strip()
+    verified = _load_demo_verified()
+    if not src or not tgt:
+        return JSONResponse(status_code=400, content={"error": "missing_names"})
+    if src.lower() not in verified or tgt.lower() not in verified:
+        return JSONResponse(status_code=400, content={"error": "not_public_figure",
+                            "detail": "The demo covers verified public figures only. Pick names from the suggestions."})
+    if _demo_rate_limited(request, "path"):
+        return JSONResponse(status_code=429, content={"error": "rate_limited"})
+    if not _graph_backend_ready():
+        return JSONResponse(status_code=503, content={"error": "warming_up"})
+    if _path_process_pool is not None:
+        loop = asyncio.get_event_loop()
+        try:
+            res = await loop.run_in_executor(_path_process_pool, _find_path_dispatch, src, tgt, 6, 3, False)
+        except concurrent.futures.process.BrokenProcessPool:
+            logger.exception("path process pool broken -- demo falling back to inline call")
+            res = _find_path_dispatch(src, tgt)
+    else:
+        res = _find_path_dispatch(src, tgt)
+    paths = _demo_redact_paths(res.get("paths") or [], verified)
+    _log_anonymous_event(getattr(request.state, "session_id", ""), "demo_path",
+                         {"src": src, "tgt": tgt, "found": bool(paths),
+                          "ref": (request.query_params.get("ref") or "")[:40]})
+    if res.get("error"):
+        return JSONResponse(status_code=502, content={"error": "path_failed"})
+    return {"paths": paths}
 
 
 # Fediverse: the crawlie account lives on GoToSocial at social.sixdegrees.net

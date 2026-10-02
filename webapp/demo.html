@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sixdegrees.net demo</title>
+<meta name="description" content="How are two public figures connected? Trace the path through boards, donations, filings, court records and news.">
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --border:#30363d; --accent:#58a6ff; --err:#f85149; --chip:#21262d; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --muted:#59636e; --border:#d1d9e0; --accent:#0969da; --err:#cf222e; --chip:#eaeef2; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:680px; margin:0 auto; padding:40px 16px 64px; }
+  h1 { font-size:1.7rem; margin:0 0 .4rem; }
+  p.lead { color:var(--muted); margin:0 0 1.5rem; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px; }
+  label { display:block; font-weight:600; margin:0 0 .3rem; font-size:.95rem; }
+  .field { position:relative; margin:0 0 1rem; }
+  input { width:100%; padding:.6rem .7rem; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; }
+  input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .sugg { position:absolute; z-index:5; left:0; right:0; top:100%; margin:2px 0 0; padding:0; list-style:none; background:var(--panel); border:1px solid var(--border); border-radius:6px; max-height:260px; overflow:auto; }
+  .sugg li { padding:.45rem .7rem; cursor:pointer; }
+  .sugg li:hover, .sugg li.active { background:var(--chip); }
+  button.go { width:100%; padding:.7rem; border:0; border-radius:6px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.go:disabled { opacity:.6; cursor:default; }
+  .examples { margin:1rem 0 0; font-size:.9rem; color:var(--muted); }
+  .examples button { margin:.25rem .3rem 0 0; padding:.25rem .6rem; border:1px solid var(--border); border-radius:999px; background:var(--chip); color:var(--text); font:inherit; font-size:.85rem; cursor:pointer; }
+  #status { margin:1rem 0 0; min-height:1.5em; color:var(--muted); }
+  #status.err { color:var(--err); }
+  .path { margin:1rem 0 0; }
+  .path h2 { font-size:1rem; margin:0 0 .6rem; }
+  .path h2 span { color:var(--muted); font-weight:400; }
+  ol.chain { list-style:none; margin:0; padding:0; }
+  ol.chain li.node { padding:.5rem .75rem; border:1px solid var(--border); border-radius:8px; background:var(--panel); }
+  ol.chain li.node.private { color:var(--muted); font-style:italic; }
+  ol.chain li.rel { padding:.3rem 0 .3rem 1.2rem; color:var(--muted); font-size:.88rem; border-left:2px solid var(--border); margin-left:1rem; }
+  .cta { margin:2rem 0 0; }
+  .cta a { color:var(--accent); font-weight:600; }
+  footer { margin-top:2rem; color:var(--muted); font-size:.85rem; }
+</style></head>
+<body><main>
+  <h1>How are they connected?</h1>
+  <p class="lead">Pick two public figures. sixdegrees traces the shortest chain of real-world ties between them: boards, donations, court and government filings, film credits and news.</p>
+
+  <div class="panel">
+    <div class="field">
+      <label for="src">From</label>
+      <input id="src" autocomplete="off" placeholder="Start typing a name…" aria-autocomplete="list">
+      <ul class="sugg" id="src-sugg" hidden></ul>
+    </div>
+    <div class="field">
+      <label for="tgt">To</label>
+      <input id="tgt" autocomplete="off" placeholder="Start typing a name…" aria-autocomplete="list">
+      <ul class="sugg" id="tgt-sugg" hidden></ul>
+    </div>
+    <button class="go" id="go" disabled>Find the connection</button>
+    <div class="examples">Try:
+      <button data-a="Meryl Streep" data-b="Chuck Schumer">Meryl Streep → Chuck Schumer</button>
+      <button data-a="Taylor Swift" data-b="Mitt Romney">Taylor Swift → Mitt Romney</button>
+      <button data-a="Warren Buffett" data-b="Bernie Sanders">Warren Buffett → Bernie Sanders</button>
+      <button data-a="MrBeast" data-b="Nancy Pelosi">MrBeast → Nancy Pelosi</button>
+    </div>
+  </div>
+
+  <div id="status" role="status" aria-live="polite"></div>
+  <div id="results"></div>
+
+  <div class="cta panel">
+    This demo covers about 16,000 verified public figures. The full sixdegrees graph maps 1.6 million people and
+    organizations, with the evidence behind every link. It's in private beta:
+    <a href="/request-access?from=demo">request access</a>.
+  </div>
+  <footer>Only verified public figures are named here. Anyone else on a path is shown as “a private individual”.
+    Links come from public records; a link means the two appear together in a record, not that they know each other well.</footer>
+</main>
+<script>
+const REL = {
+  FAMILY: "family", FRIEND: "friends or partners", COMMUNICATED: "communicated", CO_EXECUTIVE: "executive role",
+  CO_DIRECTOR: "board", CO_OFFICER: "officers together", EMPLOYMENT: "employment", TRAVEL_MET: "met or travelled together",
+  ADVISORY: "advisory role", MEMBERSHIP: "membership", EDUCATION: "school", DONATION: "political donation",
+  FINANCIAL: "financial tie", LOBBYING: "lobbying", STAFF_AIDE: "staff", PUBLIC_OFFICE: "public office",
+  FELLOW_OFFICEHOLDER: "served together", SEC_INSIDER: "company insider", NEWS_COMENTION: "named together in news",
+  CO_OCCURS_DOC: "named together in documents", WEAK_SOCIAL: "social tie", SAME_ORG_OVERLAP: "same organization",
+  SAME_SCHOOL_OVERLAP: "same school", CO_INVENTOR: "co-inventors", PATENT_ASSIGNED_TO: "patent",
+  CREATIVE_COLLAB: "worked on the same production", AWARD: "award", SELF_ATTESTED: "self-reported", LINKEDIN: "professional", OTHER: "linked in records"
+};
+const chosen = { src: null, tgt: null };
+const params = new URLSearchParams(location.search);
+const ref = (params.get("ref") || params.get("utm_source") || document.referrer.split("/")[2] || "").slice(0, 40);
+
+function setupField(id) {
+  const input = document.getElementById(id), list = document.getElementById(id + "-sugg");
+  let timer = null, items = [], active = -1;
+  const close = () => { list.hidden = true; active = -1; };
+  const pick = (name) => { input.value = name; chosen[id] = name; close(); update(); };
+  input.addEventListener("input", () => {
+    chosen[id] = null; update(); clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { close(); return; }
+    timer = setTimeout(async () => {
+      try {
+        const r = await fetch("/api/demo/search?q=" + encodeURIComponent(q));
+        if (r.status === 429) { showStatus("Too many searches — please wait a little.", true); return; }
+        items = await r.json();
+        if (input.value.trim() !== q) return;
+        list.innerHTML = "";
+        items.forEach((it, i) => {
+          const li = document.createElement("li"); li.textContent = it.name;
+          li.addEventListener("mousedown", (e) => { e.preventDefault(); pick(it.name); });
+          list.appendChild(li);
+        });
+        if (!items.length) { const li = document.createElement("li"); li.textContent = "No verified public figure matches"; li.style.cursor = "default"; list.appendChild(li); }
+        list.hidden = false;
+      } catch (e) { close(); }
+    }, 200);
+  });
+  input.addEventListener("keydown", (e) => {
+    const lis = [...list.querySelectorAll("li")];
+    if (list.hidden || !items.length) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault(); active = (active + (e.key === "ArrowDown" ? 1 : lis.length - 1)) % lis.length;
+      lis.forEach((li, i) => li.classList.toggle("active", i === active));
+    } else if (e.key === "Enter" && active >= 0) { e.preventDefault(); pick(items[active].name); }
+    else if (e.key === "Escape") close();
+  });
+  input.addEventListener("blur", close);
+  return pick;
+}
+const pickSrc = setupField("src"), pickTgt = setupField("tgt");
+function update() { document.getElementById("go").disabled = !(chosen.src && chosen.tgt); }
+function showStatus(t, err) { const s = document.getElementById("status"); s.textContent = t; s.className = err ? "err" : ""; }
+
+async function run() {
+  const out = document.getElementById("results"); out.innerHTML = "";
+  showStatus("Searching 1.6 million people and organizations…");
+  document.getElementById("go").disabled = true;
+  try {
+    const r = await fetch(`/api/demo/path?src_name=${encodeURIComponent(chosen.src)}&tgt_name=${encodeURIComponent(chosen.tgt)}&ref=${encodeURIComponent(ref)}`);
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 429) return showStatus("You've reached the demo's hourly limit. Request access for unlimited searches.", true);
+    if (r.status === 503) return showStatus("The graph is still loading after an update — try again in a minute.", true);
+    if (!r.ok) return showStatus(d.detail || "Something went wrong. Please try again.", true);
+    if (!d.paths.length) return showStatus("No connection found within six steps.");
+    showStatus("");
+    d.paths.forEach((p, i) => {
+      const box = document.createElement("div"); box.className = "path panel";
+      const h = document.createElement("h2");
+      h.innerHTML = `${i === 0 ? "Strongest path" : "Alternative " + i}: ${p.length} step${p.length === 1 ? "" : "s"} <span>· ${p.band || ""} link</span>`;
+      box.appendChild(h);
+      const ol = document.createElement("ol"); ol.className = "chain";
+      p.path.forEach((st, j) => {
+        const li = document.createElement("li"); li.className = "node" + (st.private ? " private" : "");
+        li.textContent = st.label; ol.appendChild(li);
+        if (j < p.path.length - 1) {
+          const rel = document.createElement("li"); rel.className = "rel";
+          rel.textContent = REL[st.relation] || (st.relation || "linked in records").toLowerCase().replace(/_/g, " ");
+          ol.appendChild(rel);
+        }
+      });
+      box.appendChild(ol); out.appendChild(box);
+    });
+  } catch (e) { showStatus("Network error. Please try again.", true); }
+  finally { update(); }
+}
+document.getElementById("go").addEventListener("click", run);
+document.querySelectorAll(".examples button").forEach((b) => b.addEventListener("click", () => {
+  pickSrc(b.dataset.a); pickTgt(b.dataset.b); run();
+}));
+</script>
+</body></html>
