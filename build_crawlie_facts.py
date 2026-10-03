@@ -495,6 +495,13 @@ def community_facts(est, verified, sep_median=None):
     Every person named must be verified; ticker and posts get the same text."""
     if not est:
         return []
+    # The anchors' community only means "establishment" while it's distinct
+    # from the party donation networks. After the LittleSis relabel
+    # (2026-10-03) it absorbed the DNC and RNC communities, which made Obama
+    # its "top bridge". Publish nothing until it's re-examined.
+    if est.get("links_democratic") is None or est.get("links_republican") is None:
+        print("establishment community merged with a party community -- no community facts", flush=True)
+        return []
     out = []
     n = est["people"]
     glue = [_GLUE_WORDS[c] for c, _ in est.get("glue", []) if c in _GLUE_WORDS][:3]
