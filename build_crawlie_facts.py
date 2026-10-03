@@ -495,30 +495,21 @@ def community_facts(est, verified, sep_median=None):
     Every person named must be verified; ticker and posts get the same text."""
     if not est:
         return []
-    # The anchors' community only means "establishment" while it's distinct
-    # from the party donation networks. After the LittleSis relabel
-    # (2026-10-03) it absorbed the DNC and RNC communities, which made Obama
-    # its "top bridge". Publish nothing until it's re-examined.
-    if est.get("links_democratic") is None or est.get("links_republican") is None:
-        print("establishment community merged with a party community -- no community facts", flush=True)
+    # Only facts computed on the affiliation graph (donation-only links left
+    # out). On the full graph the anchors' community absorbed the DNC and RNC
+    # donor networks (2026-10-03) and stopped meaning "establishment".
+    if est.get("graph") != "affiliation":
+        print("establishment stats not from the affiliation graph -- no community facts", flush=True)
         return []
     out = []
     n = est["people"]
     glue = [_GLUE_WORDS[c] for c, _ in est.get("glue", []) if c in _GLUE_WORDS][:3]
-    d, r = est.get("links_democratic"), est.get("links_republican")
-    if d and r and glue:
-        gap = abs(d - r) / max(d, r)
-        lean = ("splits its outside ties almost evenly between Democrats and Republicans" if gap < 0.15 else
-                f"leans {'Democratic' if d > r else 'Republican'} in its outside ties")
-        out.append(fact("community_establishment",
-                        f'The "establishment" community — {n:,} people tied together mostly by shared '
-                        f"{_join(glue)} — {lean}: {d:,} links into the Democratic community, "
-                        f"{r:,} into the Republican one. {COMMUNITY_DEF}", ["partisan"]))
     bridge = next((b for b in est.get("top_bridges", []) if b.lower() in verified and is_clean_label(b)), None)
     if bridge:
         out.append(fact("community_establishment",
-                        f'More shortest paths between members of the "establishment" community ({n:,} people) '
-                        f"run through {bridge} than through any other well-known figure. {COMMUNITY_DEF}",
+                        f'More shortest paths between members of the "establishment" community ({n:,} people '
+                        f"linked by shared {_join(glue)}) run through {bridge} than through any other "
+                        f"well-known figure. {COMMUNITY_DEF}",
                         ["bridge"], [bridge]))
     m = est.get("median_hops")
     if m and sep_median:
