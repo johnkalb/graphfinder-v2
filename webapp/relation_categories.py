@@ -39,6 +39,20 @@ def categorize(rt):
     if r in ("ALIAS", "FORMER_NAME", "IDENTITY", "CROSS_REFERENCED"):
         return "SAME_ENTITY"
     # Wikidata time-overlap edges (pass through directly)
+    # FEC structure and money flows (fec_structure_backfill.py and the FEC PAC
+    # / spending harvest, 2026-10-03). A candidate runs their committees;
+    # PAC-to-candidate money and committee transfers are donation-strength;
+    # a committee paying a vendor is an actual business relationship.
+    # (INDEPENDENT_EXPENDITURE_AGAINST is dropped in build_scored_edges --
+    # an attack ad isn't a connection.)
+    if r in ("CANDIDATE_COMMITTEE", "LEADERSHIP_PAC"):
+        return "CO_EXECUTIVE"
+    if r in ("PAC_CONTRIBUTION", "INDEPENDENT_EXPENDITURE_FOR", "COMMITTEE_TRANSFER"):
+        return "DONATION"
+    if r == "PAC_SPONSOR":
+        return "MEMBERSHIP"
+    if r == "PAID_VENDOR":
+        return "FINANCIAL"
     if r == "SAME_ORG_OVERLAP":
         return "SAME_ORG_OVERLAP"
     if r == "SAME_SCHOOL_OVERLAP":

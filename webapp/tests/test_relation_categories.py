@@ -153,3 +153,13 @@ def test_unrecognized_relation_type_falls_through_to_other():
     assert categorize("SOME_TOTALLY_MADE_UP_RELATION_TYPE_XYZ") == "OTHER"
     assert categorize("") == "OTHER"
     assert categorize(None) == "OTHER"
+
+
+def test_fec_structure_and_money_flow_types():
+    assert categorize("CANDIDATE_COMMITTEE") == "CO_EXECUTIVE"
+    assert categorize("LEADERSHIP_PAC") == "CO_EXECUTIVE"
+    assert categorize("PAC_CONTRIBUTION") == "DONATION"
+    assert categorize("INDEPENDENT_EXPENDITURE_FOR") == "DONATION"
+    assert categorize("COMMITTEE_TRANSFER") == "DONATION"
+    assert categorize("PAC_SPONSOR") == "MEMBERSHIP"
+    assert categorize("PAID_VENDOR") == "FINANCIAL"

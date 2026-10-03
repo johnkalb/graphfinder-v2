@@ -89,7 +89,8 @@ OUT = os.environ.get("SCORED_OUT", "webapp/data/graph_scored.json.gz")
 # "our lady" from truncated religious/institution names) -- these become
 # fake mega-hub nodes (40k+ degree) that dominate k-shortest-paths cost far
 # out of proportion to the 0.10 probability weight they're scored at.
-DROP_RELATIONS = {"FELLOW_REPRESENTATIVE", "FELLOW_SENATOR", "OWNERSHIP", "MENTIONED_WITH"}
+DROP_RELATIONS = {"FELLOW_REPRESENTATIVE", "FELLOW_SENATOR", "OWNERSHIP", "MENTIONED_WITH",
+                  "INDEPENDENT_EXPENDITURE_AGAINST"}   # an attack ad is not a connection
 POS_RELS = {
     "OWNERSHIP", "POSITION", "DIRECTOR", "CEO", "CHAIRMAN", "PRESIDENT",
     "BOARD_MEMBER", "BOARD_MEMBER_OF", "TRUSTEE", "OFFICER", "CFO", "COO",
