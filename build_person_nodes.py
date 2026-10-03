@@ -84,9 +84,10 @@ def main():
     # PageRank ladder, 2026-09-29), so an obvious org word overrides the DB type.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from build_crawlie_facts import _ORG_WORDS
-    idx = [i for i, n in enumerate(nodes)
-           if (canon_key(splits[i]) in person_keys and not _ORG_WORDS.search(splits[i])) if i in splits
-           else (canon_key(n) in person_keys and not _ORG_WORDS.search(n))]
+    def is_person(i, n):
+        base = splits.get(i, n)
+        return canon_key(base) in person_keys and not _ORG_WORDS.search(base)
+    idx = [i for i, n in enumerate(nodes) if is_person(i, n)]
     with gzip.open(OUT, "wt", encoding="utf-8") as f:
         json.dump(idx, f, separators=(",", ":"))
     # canon_key -> display name, for the GDELT classifier on optiplex (copied
