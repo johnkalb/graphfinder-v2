@@ -201,6 +201,13 @@ MAX_EDUCATION_SHARE = 0.40
 
 
 def community_stats(G, nodes, edges, people_mask):
+    # Communities of AFFILIATION: edges whose only link is a political donation
+    # are left out (2026-10-03). With donations in, the corrected graph (after
+    # the LittleSis relabel) forms one 135K political-donor blob around the
+    # DNC and RNC; without them, the elite core of officeholders, universities
+    # and corporate leadership (112K) separates from unions, lobbying, R&D etc.
+    edges = [e for e in edges if not (len(e) > 3 and set(e[3]) <= {"DONATION"})]
+    G = ig.Graph(n=len(nodes), edges=[(e[0], e[1]) for e in edges], directed=False)
     random.seed(42)          # igraph draws from Python's RNG
     t = time.time()
     w = [max(float(e[2]), 1e-6) for e in edges]
@@ -294,7 +301,7 @@ def community_stats(G, nodes, edges, people_mask):
         subs.append({"people": n, "hub_orgs": [name(k) for k in orgs_k],
                      "hub_people": [[name(k), [name(o) for o in S.neighbors(k) if o in org_set]] for k in hubs]})
 
-    return {"people": len(P), "orgs": S.vcount() - len(P), "edges_inside": S.ecount(),
+    return {"graph": "affiliation", "people": len(P), "orgs": S.vcount() - len(P), "edges_inside": S.ecount(),
             "edges_out": sum(links_to.values()),
             "links_democratic": links_to.get(party.get("democratic"), 0) if party.get("democratic") != est else None,
             "links_republican": links_to.get(party.get("republican"), 0) if party.get("republican") != est else None,
