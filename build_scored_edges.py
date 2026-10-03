@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
 from relation_categories import categorize
 from link_scoring import score_pair
 from nicknames import formal_forms
-from disambiguation import Splitter, is_junk_name
+from disambiguation import FEC_PLACEHOLDER, Splitter, fec_recipient, is_junk_name
 
 
 # --- name canonicalization (2026-09-10) -----------------------------------
@@ -145,6 +145,15 @@ if os.path.exists(VERIFIED):
     with gzip.open(VERIFIED, "rt", encoding="utf-8") as f:
         exempt = {canon_key(n) for n in json.load(f)}
 splitter = Splitter(exempt)
+# FEC committee names by id (copied here by rebuild_and_deploy.py; see
+# disambiguation.fec_recipient). Without the file, placeholders get full ids.
+FEC_NAMES = "webapp/data/fec_committee_names.json.gz"
+committee_names = {}
+if os.path.exists(FEC_NAMES):
+    with gzip.open(FEC_NAMES, "rt", encoding="utf-8") as f:
+        committee_names = json.load(f)
+print(f"FEC committee names: {len(committee_names):,}")
+n_fec_named = n_fec_dropped = 0
 pre = conn.cursor(name="split_prepass_fec")
 pre.itersize = 100_000
 pre.execute("SELECT source_name, evidence FROM relationships WHERE source_data = 'FEC' AND relation_type = 'DONATION'")
@@ -202,6 +211,13 @@ for s, t, r, src, ev in _stream(c):
     if r in DROP_RELATIONS or is_junk_name(s) or is_junk_name(t):
         n_drop += 1
         continue
+    if src == "FEC" and t.startswith(FEC_PLACEHOLDER):
+        t = fec_recipient(ev, committee_names)
+        if t is None:
+            n_fec_dropped += 1
+            n_drop += 1
+            continue
+        n_fec_named += not t.startswith(FEC_PLACEHOLDER)
     sl, tl = s.lower(), t.lower()
     # conflation: position-type edge between two people -> drop
     if r in POS_RELS:
@@ -242,6 +258,7 @@ conn.close()
 print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}, "
       f"self-loops after canonicalization: {n_selfmerge}")
 print(f"Unique scorable pairs: {len(pair_rels)}")
+print(f"FEC donations: {n_fec_named:,} given committee names, {n_fec_dropped:,} dropped (conduit or no id)")
 print(f"Common-name splits: {splitter.split} edge endpoints moved to {len(split_base)} per-employer/company nodes; "
       f"{splitter.dropped} unattributable edges dropped")
 
