@@ -130,3 +130,26 @@ _JUNK = re.compile(
 
 def is_junk_name(name):
     return bool(_JUNK.fullmatch((name or "").strip()))
+
+
+# FEC donations were stored with placeholder targets ("FEC Campaign Committee
+# C0040122" -- the committee id, truncated to 8 characters, so up to ten
+# committees shared one node). The full id is in each row's evidence
+# ("recipient"); the committee name comes from FEC's committee master files
+# (data/fec_committee_names.json.gz, built from cmYY.zip). ActBlue and WinRed
+# are conduits that pass money on to candidates: a donation recorded only "to
+# ActBlue" doesn't say who got it, so it's dropped (about 55K of 760K rows,
+# measured 2026-10-02).
+FEC_PLACEHOLDER = "FEC Campaign Committee"
+FEC_CONDUITS = {"C00401224", "C00694323"}     # ACTBLUE, WINRED
+
+
+def fec_recipient(evidence, committee_names):
+    """The committee name for a placeholder FEC target, the placeholder with
+    the FULL id if the name is unknown, or None to drop the edge."""
+    rid = (_evidence(evidence).get("recipient") or "").strip()
+    if not rid:
+        return None
+    if rid in FEC_CONDUITS:
+        return None
+    return committee_names.get(rid) or f"{FEC_PLACEHOLDER} {rid}"

@@ -90,3 +90,16 @@ def test_junk_names():
     for real in ("Na Li", "Na Na", "Yang Yang", "None But the Brave (1965 film)", "ANONYMOUS TRUST",
                  "Open Society Foundations", "Unknown Subscriber"):
         assert not is_junk_name(real), real
+
+
+def test_fec_recipient_names_committees_and_drops_conduits():
+    from disambiguation import fec_recipient
+    names = {"C00000935": "DCCC", "C00577130": "BERNIE 2016"}
+    ev = lambda rid: json.dumps({"source": "FEC", "recipient": rid})
+    assert fec_recipient(ev("C00000935"), names) == "DCCC"
+    assert fec_recipient(ev("C00577130"), names) == "BERNIE 2016"
+    # unknown id keeps a placeholder, but with the FULL id (no truncation merges)
+    assert fec_recipient(ev("C00999999"), names) == "FEC Campaign Committee C00999999"
+    assert fec_recipient(ev("C00401224"), names) is None      # ActBlue: real recipient unknown
+    assert fec_recipient(ev("C00694323"), names) is None      # WinRed
+    assert fec_recipient(ev(""), names) is None
