@@ -157,7 +157,8 @@ print(f"FEC committee names: {len(committee_names):,}")
 n_fec_named = n_fec_dropped = 0
 pre = conn.cursor(name="split_prepass_fec")
 pre.itersize = 100_000
-pre.execute("SELECT source_name, evidence FROM relationships WHERE source_data = 'FEC' AND relation_type = 'DONATION'")
+pre.execute("SELECT source_name, evidence FROM relationships "
+            "WHERE source_data IN ('FEC', 'FEC_INDIV') AND relation_type = 'DONATION'")
 for s_, ev_ in pre:
     if s_:
         splitter.observe_fec(canon_key(s_), ev_)
@@ -202,7 +203,7 @@ def _stream(cur, n=250_000):
 stream_cur = conn.cursor(name="build_scored_edges_stream")
 stream_cur.itersize = 250_000
 stream_cur.execute("SELECT source_name, target_name, relation_type, source_data, "
-                   "CASE WHEN source_data IN ('FEC', 'PATENT_COINVENTOR') THEN evidence END FROM relationships")
+                   "CASE WHEN source_data IN ('FEC', 'FEC_INDIV', 'PATENT_COINVENTOR') THEN evidence END FROM relationships")
 c = stream_cur
 n_raw = n_drop = n_selfmerge = 0
 for s, t, r, src, ev in _stream(c):
@@ -228,7 +229,7 @@ for s, t, r, src, ev in _stream(c):
             n_drop += 1
             continue
     sk, tk = canon_key(s), canon_key(t)
-    if src == "FEC" and r == "DONATION" and sk in splitter.fec_ambiguous:
+    if src in ("FEC", "FEC_INDIV") and r == "DONATION" and sk in splitter.fec_ambiguous:
         m = splitter.fec_endpoint(sk, s, ev)
         if m is None:
             n_drop += 1
