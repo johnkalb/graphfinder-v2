@@ -48,3 +48,4 @@ data/enrichment_snapshot.csv
 # FEC harvest intermediates (large; regenerate with fec_pac_backfill.py / fec_individual_harvest.py)
 data/fec_pac_rows.jsonl.gz
 data/fec_indiv_*.jsonl.gz
+data/fec_spend_rows.jsonl.gz
