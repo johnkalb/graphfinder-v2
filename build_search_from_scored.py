@@ -6,6 +6,7 @@ Degree is taken from the scored edge list so high-connectivity hubs rank first.
 """
 import gzip, json, os, math
 import networkx as nx
+from pagerank_util import nx_pagerank_exact
 from collections import Counter
 
 SCORED = "webapp/data/graph_scored.json.gz"
@@ -28,7 +29,9 @@ for u, v, prob, c in edges:
     g.add_edge(nodes[u], nodes[v], weight=float(prob))
 
 print("Calculating PageRank Centrality...")
-pr = nx.pagerank(g, weight="weight", max_iter=200)
+# exact PageRank -- nx.pagerank stopped after one iteration on this graph
+# (see pagerank_util.py)
+pr = nx_pagerank_exact(g, weight="weight")
 
 # Sort nodes by PageRank ascending to map to 1-100 percentiles
 sorted_nodes = sorted(nodes, key=lambda n: pr.get(n, 0.0))

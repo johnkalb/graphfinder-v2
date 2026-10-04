@@ -36,6 +36,7 @@ import sqlite3
 import sys
 
 import networkx as nx
+from pagerank_util import nx_pagerank_exact
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
 from relation_categories import categorize
@@ -238,7 +239,9 @@ def main():
         return
 
     print(f"Running PageRank (pass 2, {len(groups)} synthetic group nodes added)...", flush=True)
-    pr = nx.pagerank(g2, weight="weight", max_iter=200)
+    # exact PageRank -- nx.pagerank stopped after one iteration on this graph
+    # (see pagerank_util.py)
+    pr = nx_pagerank_exact(g2, weight="weight")
 
     # Percentile against pass-2's own distribution. Near-identical in shape to
     # pass-1's (build_search_from_scored.py) since only a handful of synthetic
