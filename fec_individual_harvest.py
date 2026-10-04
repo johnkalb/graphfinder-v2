@@ -189,7 +189,12 @@ def commit():
         rows.append((None, m["name"], "PERSON" if m["ent"] == "IND" else "ORG", None, m["target"], "ORG",
                      "DONATION", SOURCE, json.dumps(ev, separators=(",", ":"))))
     log(f"{len(rows):,} donor-committee rows after merging cycles")
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        sys.path.insert(0, r"C:\Users\johnk\AppData\Local\hermes\scripts")
+        import pg_secret
+        url = pg_secret.load_secret("DATABASE_URL")
+    conn = psycopg2.connect(url)
     cur = conn.cursor()
     execute_values(cur, "INSERT INTO relationships (source_id, source_name, source_type, target_id, "
                         "target_name, target_type, relation_type, source_data, evidence) VALUES %s "
