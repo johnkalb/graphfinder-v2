@@ -877,3 +877,16 @@ def test_manual_notification(client):
             assert res.json()["success"] is True
             mock_send.assert_called_once()
 
+
+
+def test_add_me_twice_for_the_same_person_files_one_item(client, tester_data_dir):
+    headers = {"Cf-Access-Authenticated-User-Email": "dup.tester@example.com"}
+    with patch("pathfinder._resolve_name", side_effect=lambda x: x):
+        first = client.post("/api/contacts/add-me", json={"person_name": "Jane Doe", "source": "linkedin"}, headers=headers)
+        second = client.post("/api/contacts/add-me", json={"person_name": "Jane Doe", "source": "linkedin"}, headers=headers)
+    assert first.status_code == 200 and not first.json().get("duplicate")
+    assert second.status_code == 200 and second.json().get("duplicate") is True
+    conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
+    n = conn.execute("SELECT count(*) FROM service_items WHERE submitter_email = 'dup.tester@example.com'").fetchone()[0]
+    conn.close()
+    assert n == 1

@@ -2928,6 +2928,15 @@ async def add_me(req: AddMeRequest, request: Request):
         snippet = ("Submitted via Check My Contacts → Check My LinkedIn Connections → Add Me."
                    if is_linkedin else "Submitted via Check My Contacts → Add Me.")
 
+        # Same person already waiting in the queue from this user (a second
+        # upload, or "Add all" pressed again) -- don't file it twice.
+        subject_line = f"Add Me: {display_name} ↔ {obj_canonical}"
+        dup = c.execute("SELECT id FROM service_items WHERE item_type = 'suggestion' AND status = 'new' "
+                        "AND submitter_email = ? AND subject = ?", (email, subject_line)).fetchone()
+        if dup:
+            conn.close()
+            return {"success": True, "duplicate": True, "message": "Already submitted -- waiting for review."}
+
         meta = json.dumps({
             "subject": display_name,
             "predicate": predicate,
@@ -2939,7 +2948,7 @@ async def add_me(req: AddMeRequest, request: Request):
         c.execute("""
             INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
             VALUES ('suggestion', 'new', 'normal', ?, ?, ?, ?)
-        """, (f"Add Me: {display_name} ↔ {obj_canonical}", body_label, email, meta))
+        """, (subject_line, body_label, email, meta))
 
         conn.commit()
         conn.close()
@@ -5334,7 +5343,9 @@ async function doAddMeSubmit(btn) {
     const data = await res.json();
     if (data.success) {
       addMeSubmittedCount++;
-      btn.outerHTML = ' <span style="color:#3fb950">✓ Submitted for review</span>';
+      btn.outerHTML = data.duplicate
+        ? ' <span style="color:#8b949e">✓ Already submitted</span>'
+        : ' <span style="color:#3fb950">✓ Submitted for review</span>';
       updateAddMeSummary();
     } else {
       btn.outerHTML = ` <span style="color:#f85149">Error: ${escHtml(data.error || 'failed')}</span>`;
@@ -5366,7 +5377,10 @@ function updateAddMeSummary() {
     summary = document.createElement('div');
     summary.id = 'add-me-summary';
     summary.style.cssText = 'margin-top:10px;font-weight:600;color:#3fb950;';
-    document.getElementById('psi-result').appendChild(summary);
+    // at the TOP of the results: with a long match list, a line added at
+    // the bottom went unnoticed and users didn't know they were finished
+    const results = document.getElementById('psi-result');
+    results.insertBefore(summary, results.firstChild);
   }
   summary.textContent = `${addMeSubmittedCount} connection${addMeSubmittedCount === 1 ? '' : 's'} submitted for review. You're done -- no further action needed.`;
 }
