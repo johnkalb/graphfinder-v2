@@ -172,6 +172,17 @@ for s_, t_, ev_ in pre:
         splitter.observe_inventor_at(canon_key(s_), t_, ev_)
 pre.close()
 splitter.finalize()
+# Professional / bulk-filing FEC treasurers (Thomas Datwyler: 701 committees,
+# Joshua LaRose: 534 shell committees) aren't personally tied to those
+# committees, and hundreds of dead-end committees feeding one person pushed
+# LaRose to #10 in PageRank (2026-10-05). Their FEC treasurer links are dropped.
+MAX_TREASURER_COMMITTEES = 10
+pre = conn.cursor()
+pre.execute("SELECT source_name FROM relationships WHERE source_data = 'FEC_STRUCTURE' AND relation_type = 'TREASURER' "
+            "GROUP BY 1 HAVING count(*) > %s", (MAX_TREASURER_COMMITTEES,))
+bulk_treasurers = {r[0] for r in pre.fetchall()}
+pre.close()
+print(f"Bulk FEC treasurers (>{MAX_TREASURER_COMMITTEES} committees) whose treasurer links are dropped: {len(bulk_treasurers)}")
 print(f"Ambiguous names to split: {len(splitter.fec_ambiguous)} FEC donors, "
       f"{len(splitter.inv_ambiguous)} inventors ({len(exempt)} verified exempt)")
 split_base = {}   # split node key -> the name key it was split from
@@ -211,6 +222,9 @@ for s, t, r, src, ev in _stream(c):
     if not s or not t or s == t:
         continue
     if r in DROP_RELATIONS or is_junk_name(s) or is_junk_name(t):
+        n_drop += 1
+        continue
+    if r == "TREASURER" and src == "FEC_STRUCTURE" and s in bulk_treasurers:
         n_drop += 1
         continue
     if src == "FEC" and t.startswith(FEC_PLACEHOLDER):
