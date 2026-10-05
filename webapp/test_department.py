@@ -184,6 +184,27 @@ def init_test_department_db(db_path: str) -> None:
         )
         """
     )
+    # Links approved from the /admin review queue ("Add Me", suggested links).
+    # The nightly rebuild pulls these into the harvest database through
+    # /api/internal/user-links (2026-10-05) -- approval used to write to a
+    # SQLite file inside the container, which the build never read and every
+    # deploy wiped.
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS user_links (
+            id {_PK},
+            service_item_id INTEGER,
+            subject TEXT NOT NULL,
+            subject_type TEXT NOT NULL DEFAULT 'PERSON',
+            object TEXT NOT NULL,
+            object_type TEXT NOT NULL DEFAULT 'PERSON',
+            predicate TEXT NOT NULL,
+            submitter_email TEXT,
+            evidence TEXT,
+            approved_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
