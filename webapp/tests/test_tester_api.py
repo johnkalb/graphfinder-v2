@@ -520,22 +520,10 @@ def test_add_me_approval_creates_relationship_without_subject_preexisting(client
     conn.close()
     item_id = item["id"]
 
-    pipeline_db = tester_data_dir / "pipeline_cache_addme.db"
-    conn = sqlite3.connect(str(pipeline_db))
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS relationships (
-            source_id TEXT, source_name TEXT, source_type TEXT,
-            target_id TEXT, target_name TEXT, target_type TEXT,
-            relation_type TEXT, source_data TEXT, evidence TEXT
-        )
-    """)
-    conn.close()
-
     # Only the object ("Jane Doe") resolves -- the subject (the reporting
     # user's own display name) does not, simulating a brand-new person.
     with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}), \
-         patch("pathfinder._resolve_name", side_effect=lambda x: x if x == "Jane Doe" else None), \
-         patch("pathfinder._get_pipeline_db_path", return_value=str(pipeline_db)):
+         patch("pathfinder._resolve_name", side_effect=lambda x: x if x == "Jane Doe" else None):
         rev_res = client.post(
             f"/api/service/items/{item_id}/review",
             json={"status": "approved", "reviewed_by": "reviewer@example.com"},
@@ -544,14 +532,39 @@ def test_add_me_approval_creates_relationship_without_subject_preexisting(client
     assert rev_res.status_code == 200
     assert rev_res.json()["success"] is True
 
-    conn = sqlite3.connect(str(pipeline_db))
-    rel = conn.execute("SELECT * FROM relationships").fetchone()
+    # Approved links are recorded in the app's own database (user_links),
+    # which the nightly rebuild pulls via /api/internal/user-links.
+    conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
+    conn.row_factory = sqlite3.Row
+    link = conn.execute("SELECT * FROM user_links WHERE service_item_id = ?", (item_id,)).fetchone()
     conn.close()
-    assert rel is not None
-    assert rel[4] == "Jane Doe"              # target_name
-    assert rel[5] == "PERSON"                # target_type
-    assert rel[6] == "SELF_ATTESTED_CONTACT"  # relation_type
-    assert rel[7] == "USER_SUGGESTION"        # source_data
+    assert link is not None
+    assert link["subject"] == "Bob"                 # bob@example.com, no tester name -> "Bob"
+    assert link["object"] == "Jane Doe"
+    assert link["object_type"] == "PERSON"
+    assert link["predicate"] == "SELF_ATTESTED_CONTACT"
+    assert link["submitter_email"] == "bob@example.com"
+
+
+def test_display_name_for_email_tidies_the_local_part():
+    # no tester profile for these addresses, so the local part is tidied up
+    assert pf._display_name_for_email("first.last@nowhere.example") == "First Last"
+    assert pf._display_name_for_email("mary_ann-smith99@example.org") == "Mary Ann Smith"
+    assert pf._display_name_for_email(None) is None
+
+
+def test_internal_user_links_requires_the_sync_token(client, monkeypatch):
+    monkeypatch.delenv("USER_LINKS_SYNC_TOKEN", raising=False)
+    assert client.get("/api/internal/user-links").status_code == 404          # no token configured
+    monkeypatch.setenv("USER_LINKS_SYNC_TOKEN", "s3cret-token")
+    assert client.get("/api/internal/user-links").status_code == 404
+    assert client.get("/api/internal/user-links", headers={"X-Sync-Token": "wrong"}).status_code == 404
+    r = client.get("/api/internal/user-links", headers={"X-Sync-Token": "s3cret-token"})
+    assert r.status_code == 200
+    links = r.json()["links"]
+    assert isinstance(links, list)
+    if links:
+        assert {"id", "subject", "object", "predicate", "approved_at"} <= set(links[0])
 
 
 # ==========================================================================
@@ -779,27 +792,8 @@ def test_service_queue_and_review_workflow(client, tester_data_dir):
     )
     s_id = s_item["id"]
     
-    # Initialize mock pipeline_cache.db relationships table
-    pipeline_db = tester_data_dir / "pipeline_cache.db"
-    conn = sqlite3.connect(str(pipeline_db))
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS relationships (
-            source_id TEXT,
-            source_name TEXT,
-            source_type TEXT,
-            target_id TEXT,
-            target_name TEXT,
-            target_type TEXT,
-            relation_type TEXT,
-            source_data TEXT,
-            evidence TEXT
-        )
-    """)
-    conn.close()
-    
     with patch("pathfinder.send_email", return_value={"success": True, "message_id": "<test-msg-id>"}) as mock_send, \
-         patch("pathfinder._resolve_name", side_effect=lambda x: x), \
-         patch("pathfinder._get_pipeline_db_path", return_value=str(pipeline_db)):
+         patch("pathfinder._resolve_name", side_effect=lambda x: x):
          
         import networkx as nx
         pf._graph = nx.Graph()
@@ -815,13 +809,13 @@ def test_service_queue_and_review_workflow(client, tester_data_dir):
         assert rev_res.json()["success"] is True
         mock_send.assert_called()
         
-        conn = sqlite3.connect(str(tester_data_dir / "pipeline_cache.db"))
-        rel = conn.execute("SELECT * FROM relationships").fetchone()
+        conn = sqlite3.connect(str(tester_data_dir / "test_department.db"))
+        conn.row_factory = sqlite3.Row
+        link = conn.execute("SELECT * FROM user_links WHERE service_item_id = ?", (s_id,)).fetchone()
         conn.close()
-        assert rel is not None
-        assert rel[1] == "Jane Doe"
-        assert rel[4] == "John Doe"
-        assert rel[7] == "USER_SUGGESTION"
+        assert link is not None
+        assert link["subject"] == "Jane Doe"
+        assert link["object"] == "John Doe"
 
 
 def test_service_review_resolves_names_without_full_graph_loaded(client, tester_data_dir, monkeypatch):

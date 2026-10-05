@@ -2868,6 +2868,43 @@ async def dispute_link(req: DisputeRequest, request: Request):
         logger.exception("dispute-link failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "submission failed (see server logs)"})
 
+def _display_name_for_email(email):
+    """A user's name as a graph node: their tester-profile name, else their
+    email's local part tidied up ("john.kalb@..." -> "John Kalb")."""
+    if not email:
+        return None
+    try:
+        conn = db.connect(_test_department_db_path())
+        row = conn.execute("SELECT name FROM testers WHERE email = ?", (email.strip().lower(),)).fetchone()
+        conn.close()
+        if row and row["name"] and row["name"].strip():
+            return row["name"].strip()
+    except Exception:
+        logger.exception("tester name lookup failed")
+    local = email.split("@", 1)[0]
+    parts = [p for p in re.split(r"[._\-+]+", re.sub(r"\d+", "", local)) if p]
+    return " ".join(p.capitalize() for p in parts) or None
+
+
+@app.get("/api/internal/user-links")
+async def internal_user_links(request: Request, since_id: int = Query(default=0, ge=0)):
+    """Approved user links for the nightly rebuild (graphfinder-clean
+    rebuild_and_deploy.py -> sync_user_links.py). Public path (Cloudflare
+    Bypass), so it answers only with the USER_LINKS_SYNC_TOKEN header and
+    looks absent (404) otherwise."""
+    import hmac
+    token = os.environ.get("USER_LINKS_SYNC_TOKEN") or ""
+    supplied = request.headers.get("X-Sync-Token") or ""
+    if not token or not hmac.compare_digest(supplied.encode(), token.encode()):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    conn = db.connect(_test_department_db_path())
+    rows = conn.execute(
+        "SELECT id, subject, subject_type, object, object_type, predicate, submitter_email, evidence, approved_at "
+        "FROM user_links WHERE id > ? ORDER BY id LIMIT 5000", (since_id,)).fetchall()
+    conn.close()
+    return {"links": [dict(r) for r in rows]}
+
+
 @app.post("/api/contacts/add-me")
 async def add_me(req: AddMeRequest, request: Request):
     try:
@@ -2883,7 +2920,7 @@ async def add_me(req: AddMeRequest, request: Request):
         conn = db.connect(db_path)
         c = conn.cursor()
         row = c.execute("SELECT name FROM testers WHERE email = ?", (email,)).fetchone()
-        display_name = (row["name"] if row and row["name"] else email.split("@")[0]).strip()
+        display_name = _display_name_for_email(email) or email.split("@")[0]
 
         is_linkedin = req.source == "linkedin"
         predicate = "LINKEDIN_CONNECTION" if is_linkedin else "SELF_ATTESTED_CONTACT"
@@ -3392,47 +3429,40 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
             # from the relationships row written below.
             obj_canonical = _resolve_name(obj)
             if predicate in ("SELF_ATTESTED_CONTACT", "LINKEDIN_CONNECTION"):
-                subject_canonical = subject.strip() if subject else None
+                # The reporting user's own node: their display name as of
+                # approval, not what was stored at click time (often the bare
+                # email prefix, "john.kalb").
+                subject_canonical = _display_name_for_email(submitter_email) or (subject.strip() if subject else None)
             else:
                 subject_canonical = _resolve_name(subject)
-
             graph_has_nodes = False
             if subject_canonical and obj_canonical:
-                graph_has_nodes = True
+                # Recorded in the app's own database (user_links); the nightly
+                # rebuild pulls it into the harvest database through
+                # /api/internal/user-links. This used to sqlite3.connect() a
+                # pipeline_cache.db inside the container, which the build
+                # never read and every deploy wiped (found 2026-10-05).
                 try:
-                    prod_db_path = _get_pipeline_db_path()
-                    os.makedirs(os.path.dirname(os.path.abspath(prod_db_path)), exist_ok=True)
-                    prod_conn = sqlite3.connect(prod_db_path)
-                    prod_cur = prod_conn.cursor()
-                    try:
-                        prod_cur.execute("ALTER TABLE relationships ADD COLUMN evidence TEXT")
-                    except sqlite3.OperationalError:
-                        pass
-                        
-                    evidence_json = json.dumps([{
-                        "source": source_name,
-                        "url": source_url,
-                        "snippet": snippet
-                    }])
-                    
                     tgt_type = 'PERSON' if predicate in {'FAMILY', 'COMMUNICATED_WITH', 'ASSOCIATED_WITH', 'TRANSACTED_WITH', 'SELF_ATTESTED_CONTACT', 'LINKEDIN_CONNECTION'} else 'ORG'
-                    
-                    prod_cur.execute("""
-                        INSERT OR IGNORE INTO relationships 
-                        (source_id, source_name, source_type, target_id, target_name, target_type, relation_type, source_data, evidence)
-                        VALUES (NULL, ?, 'PERSON', NULL, ?, ?, ?, 'USER_SUGGESTION', ?)
-                    """, (subject_canonical, obj_canonical, tgt_type, predicate, evidence_json))
-                    prod_conn.commit()
-                    prod_conn.close()
-                except Exception as ex:
-                    print(f"[review] Error writing auto-edge to pipeline_cache: {ex}")
-            
+                    evidence_json = json.dumps([{"source": source_name, "url": source_url, "snippet": snippet}])
+                    lconn = db.connect(_test_department_db_path())
+                    lconn.execute(
+                        "INSERT INTO user_links (service_item_id, subject, subject_type, object, object_type, predicate, "
+                        "submitter_email, evidence, approved_at) VALUES (?, ?, 'PERSON', ?, ?, ?, ?, ?, ?)",
+                        (item_id, subject_canonical, obj_canonical, tgt_type, predicate, submitter_email,
+                         evidence_json, now_str))
+                    lconn.commit()
+                    lconn.close()
+                    graph_has_nodes = True
+                except Exception:
+                    logger.exception("review: recording approved link for item %s failed", item_id)
+
             # Send notification
             # Use top-level send_email import
             email_subject = "Your connection suggestion has been approved"
-            html_body = f"<p>Your suggestion to add the link between <strong>{subject}</strong> and <strong>{obj}</strong> has been approved.</p>"
+            html_body = f"<p>Your suggestion to add the link between <strong>{subject_canonical or subject}</strong> and <strong>{obj}</strong> has been approved.</p>"
             if graph_has_nodes:
-                html_body += "<p>It has been successfully added to the graph.</p>"
+                html_body += "<p>It will appear in the network after the next nightly update.</p>"
             else:
                 html_body += "<p>However, one or both of the entities were not found in the active graph, so it was queued for a future index rebuild.</p>"
             
