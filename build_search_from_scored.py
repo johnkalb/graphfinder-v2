@@ -63,7 +63,11 @@ while r <= len(people_ranked):
     rungs.append({"rank": r, "name": name, "degree": deg.get(name_to_idx[name], 0)})
     r *= 10
 with open("webapp/data/pagerank_ladder.json", "w", encoding="utf-8") as f:
-    json.dump({"people": len(people_ranked), "rungs": rungs}, f, ensure_ascii=False, indent=1)
+    # "top": the ten highest-PageRank people, exact order -- the "most
+    # influential" crawlies use this (they used the 1-100 SCI bucket plus a
+    # name-based person guess, which put "WARNOCK FOR GEORGIA" at #1)
+    top = [{"rank": k + 1, "name": n, "degree": deg.get(name_to_idx[n], 0)} for k, n in enumerate(people_ranked[:10])]
+    json.dump({"people": len(people_ranked), "rungs": rungs, "top": top}, f, ensure_ascii=False, indent=1)
 print(f"PageRank ladder: {len(people_ranked):,} people; " + ", ".join(f"#{x['rank']:,} {x['name']}" for x in rungs))
 
 print("Assembling search index...")

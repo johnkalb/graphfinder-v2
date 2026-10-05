@@ -34,6 +34,7 @@ PAGERANK_LADDER = "webapp/data/pagerank_ladder.json"   # build_search_from_score
 GRAPH_STATS = "webapp/data/graph_stats.json"           # build_graph_stats.py
 # the public /demo only offers and names these (see pathfinder.py "Public demo")
 VERIFIED_OUT = "webapp/data/verified_people.json.gz"
+GRAPH_PEOPLE = "webapp/data/graph_people.tsv.gz"     # build_person_nodes.py
 QID_MAP = os.environ.get("QID_MAP_PATH", os.path.join(os.path.expanduser("~"), "qid_map.jsonl"))
 # People added straight from Wikidata (WIKIDATA_MEDIA / WIKIDATA_INFLUENCERS
 # imports) already carry their QID -- Meryl Streep, MrBeast. Exported from
@@ -252,30 +253,33 @@ def group_facts(groups):
     return facts
 
 
-def top_pagerank_facts(index):
-    # search_index.json.gz only persists `sci` as a 1-100 PERCENTILE bucket, not
-    # the raw PageRank score -- thousands of nodes tie at sci=100, so sorting by
-    # sci alone picks an arbitrary tied entry, not the true #1 (confirmed
-    # 2026-08-31: real output surfaced "116 EAST 65TH STREET LLC" and two "3M"
-    # entities as the "top 3", an SEC-filer-address LLC and a company, not
-    # people -- also missing the looks_like_person() filter every other
-    # category here applies). Filtering to people first, then using degree as
-    # a secondary sort key within the percentile tie, is a real improvement but
-    # still an approximation -- it is NOT guaranteed to recover the true
-    # highest-PageRank person among a same-percentile tie, since degree and
-    # PageRank don't always agree. Good enough for a homepage ticker sentence.
-    people = [e for e in index if looks_like_person(e["canonical"])]
-    ranked = sorted(people, key=lambda e: (e["sci"], e["degree"]), reverse=True)
+def top_pagerank_facts(ladder):
+    """The most influential PEOPLE by exact PageRank (pagerank_ladder.json
+    "top", written by build_search_from_scored.py from the database's person
+    typing). Until 2026-10-05 this sorted the search index's 1-100 SCI bucket
+    by degree and guessed personhood from the name, which put a campaign
+    committee ("WARNOCK FOR GEORGIA") at #1 and Barack Obama at #2."""
+    top = (ladder or {}).get("top") or []
     facts = []
     ordinals = ["most", "second most", "third most"]
-    for i, e in enumerate(ranked[:TOP_PAGERANK_COUNT]):
+    for i, e in enumerate(top[:TOP_PAGERANK_COUNT]):
         label = ordinals[i] if i < len(ordinals) else f"{i + 1}th most"
         facts.append(fact(
             "top_pagerank",
-            f"{e['canonical']} is the {label} influential node in the entire network by PageRank.",
-            [str(i + 1), e["canonical"]], [e["canonical"]],
+            f"{e['name']} is the {label} influential person in the network by PageRank.",
+            [str(i + 1), e["name"]], [e["name"]],
         ))
     return facts
+
+
+def load_graph_people_names():
+    """Display names of the graph's people (graph_people.tsv.gz, written by
+    build_person_nodes.py from the database's own PERSON typing), or None."""
+    try:
+        with gzip.open(GRAPH_PEOPLE, "rt", encoding="utf-8") as f:
+            return {line.rstrip("\n").split("\t", 1)[1] for line in f if "\t" in line}
+    except FileNotFoundError:
+        return None
 
 
 def top_degree_facts(extras):
@@ -296,7 +300,7 @@ def top_degree_facts(extras):
         rest = ", ".join(f"{e['name']} ({e['degree']:,})" for e in top[1:10])
         facts.append(fact(
             "top_degree_list",
-            f"By raw connection count, the top 10 are led by {top[0]['name']}, then {rest}.",
+            f"By raw connection count, the top {min(len(top), 10)} people are led by {top[0]['name']}, then {rest}.",
             [e["name"] for e in top[:10]], [e["name"] for e in top[:10]],
         ))
     return facts
@@ -558,6 +562,13 @@ def main():
     index = load_search_index()
     groups = load_group_rankings()
     extras = load_centrality_extras()
+    # build_centrality_extras.py picks people by a name heuristic, which lets
+    # "SERVICE EMPLOYEES" and "WARNOCK FOR GEORGIA" into the top-10 lists
+    people_names = load_graph_people_names()
+    if people_names:
+        for k in ("top_degree", "top_bridge"):
+            if isinstance(extras.get(k), list):
+                extras[k] = [e for e in extras[k] if e.get("name") in people_names]
     verified = load_verified_people()
 
     ladder_ticker, ladder_public = ladder_facts(load_optional_json(PAGERANK_LADDER), verified)
@@ -566,7 +577,7 @@ def main():
     stat_records += community_facts(graph_stats.get("establishment"), verified,
                                     (graph_stats.get("separation") or {}).get("median_steps"))
 
-    records = (top_pagerank_facts(index) + group_facts(groups) + surprising_rank_facts(index)
+    records = (top_pagerank_facts(load_optional_json(PAGERANK_LADDER)) + group_facts(groups) + surprising_rank_facts(index)
                + top_degree_facts(extras) + bridge_facts(extras) + ladder_ticker + stat_records)
 
     candidates = (records + surprising_rank_facts(index, allowed=verified)
