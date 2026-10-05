@@ -715,7 +715,7 @@ RELATION_INFO = {
   'ALMA_MATER': {'title': 'Alma Mater', 'desc': 'One party attended or graduated from the other institution.'},
   'MEMBER_OF': {'title': 'Member', 'desc': 'One party was a member of the other organization.'},
   'POSITION': {'title': 'Position Held', 'desc': 'One party held a position (role, title, or office) at the other organization, per LittleSis records.'},
-  'DONATION': {'title': 'Donation', 'desc': 'One party made a political or charitable donation involving the other, per LittleSis campaign-finance records.'},
+  'DONATION': {'title': 'Donation', 'desc': 'One party made a political or charitable donation involving the other, per FEC campaign-finance filings or LittleSis records.'},
   'MEMBERSHIP': {'title': 'Membership', 'desc': 'One party was a member of the other organization or group, per LittleSis records.'},
   'CO_DIRECTOR': {'title': 'Co-Director', 'desc': 'Both parties served as directors of the same company, per SEC filings.'},
   'CO_OFFICER': {'title': 'Co-Officer', 'desc': 'Both parties served as officers of the same company, per SEC filings.'},
@@ -1533,7 +1533,7 @@ _REL_SOURCE = {
     "CEO": ("LittleSis / Wikidata", "https://littlesis.org/"),
     "CHAIRMAN": ("LittleSis / Wikidata", "https://littlesis.org/"),
     "MEMBERSHIP": ("LittleSis", "https://littlesis.org/"),
-    "DONATION": ("LittleSis (campaign finance)", "https://littlesis.org/"),
+    "DONATION": ("FEC / LittleSis (campaign finance)", "https://www.fec.gov/data/"),
     "MENTIONED_WITH": ("GDELT Global News", "https://www.gdeltproject.org/"),
     "COMMUNICATED_WITH": ("Epstein Estate Documents", "https://oversight.house.gov/"),
     "EMPLOYER": ("Wikidata / LittleSis", "https://www.wikidata.org/"),
@@ -4144,7 +4144,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>🔗 Network Pathfinder</h1>
-  <p class="sub">Explore <strong>800,000+ relationships</strong> across SEC filings, Epstein documents, GDELT news, IRS foundations, Wikidata, and LittleSis. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
+  <p class="sub">Explore <strong>9 million relationships</strong> among 2.3 million people and organizations, drawn from FEC campaign finance, SEC filings, IRS nonprofit filings, lobbying disclosures, court records, patents, GDELT news, Wikidata, LittleSis and released Epstein documents. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
 
   <div id="crawlie-ticker"><span id="crawlie-text"></span></div>
 

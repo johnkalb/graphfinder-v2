@@ -64,7 +64,7 @@
   <div id="results"></div>
 
   <div class="cta panel">
-    This demo covers about 16,000 verified public figures. The full sixdegrees graph maps 1.6 million people and
+    This demo covers about 17,000 verified public figures. The full sixdegrees graph maps 2.3 million people and
     organizations, with the evidence behind every link. It's in private beta:
     <a href="/request-access?from=demo">request access</a>.
   </div>
@@ -130,7 +130,7 @@ function showStatus(t, err) { const s = document.getElementById("status"); s.tex
 
 async function run() {
   const out = document.getElementById("results"); out.innerHTML = "";
-  showStatus("Searching 1.6 million people and organizations…");
+  showStatus("Searching 2.3 million people and organizations…");
   document.getElementById("go").disabled = true;
   try {
     const r = await fetch(`/api/demo/path?src_name=${encodeURIComponent(chosen.src)}&tgt_name=${encodeURIComponent(chosen.tgt)}&ref=${encodeURIComponent(ref)}`);
