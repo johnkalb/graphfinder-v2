@@ -4144,7 +4144,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>🔗 Network Pathfinder</h1>
-  <p class="sub">Explore <strong>9 million relationships</strong> among 2.3 million people and organizations, drawn from FEC campaign finance, SEC filings, IRS nonprofit filings, lobbying disclosures, court records, patents, GDELT news, Wikidata, LittleSis and released Epstein documents. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
+  <p class="sub">Explore <strong>9 million relationships</strong> among 2.3 million people and organizations, drawn from FEC campaign finance, SEC filings, IRS nonprofit filings, lobbying disclosures, court records, patents, GDELT news, Wikidata and released Epstein documents. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
 
   <div id="crawlie-ticker"><span id="crawlie-text"></span></div>
 
