@@ -155,6 +155,7 @@ if os.path.exists(FEC_NAMES):
         committee_names = json.load(f)
 print(f"FEC committee names: {len(committee_names):,}")
 n_fec_named = n_fec_dropped = 0
+n_private_user_links = 0
 pre = conn.cursor(name="split_prepass_fec")
 pre.itersize = 100_000
 pre.execute("SELECT source_name, evidence FROM relationships "
@@ -227,6 +228,15 @@ for s, t, r, src, ev in _stream(c):
     if r == "TREASURER" and src == "FEC_STRUCTURE" and s in bulk_treasurers:
         n_drop += 1
         continue
+    # Self-reported user links ("Add Me", LinkedIn) may be public -- in the
+    # shared graph -- only when the other person is a verified public figure
+    # (private-service spec, decision 2, applied to existing links 2026-10-06).
+    # Links to private people stay in the database as the owner's private links
+    # (for the per-user overlay, once built) but never enter the shared graph.
+    if src == "USER_SUGGESTION" and canon_key(t) not in exempt:
+        n_private_user_links += 1
+        n_drop += 1
+        continue
     if src == "FEC" and t.startswith(FEC_PLACEHOLDER):
         t = fec_recipient(ev, committee_names)
         if t is None:
@@ -275,6 +285,7 @@ print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}, "
       f"self-loops after canonicalization: {n_selfmerge}")
 print(f"Unique scorable pairs: {len(pair_rels)}")
 print(f"FEC donations: {n_fec_named:,} given committee names, {n_fec_dropped:,} dropped (conduit or no id)")
+print(f"Self-reported user links kept private (other person not a verified public figure): {n_private_user_links}")
 print(f"Common-name splits: {splitter.split} edge endpoints moved to {len(split_base)} per-employer/company nodes; "
       f"{splitter.dropped} unattributable edges dropped")
 
