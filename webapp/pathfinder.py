@@ -1871,6 +1871,9 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
         {"src_name": src_name.strip(), "tgt_name": tgt_name.strip(), "include_deceased": include_deceased},
     )
 
+    # deleted public self-reported links: honoured at once (my_links, decision 10)
+    res = _drop_removed_link_paths(res)
+
     # AI Narrative Briefing: attach it only if already cached from a prior
     # request for this same path chain -- never call Gemini inline here.
     # That blocking network call (2-6s+) used to run synchronously inside
@@ -2902,7 +2905,17 @@ async def internal_user_links(request: Request, since_id: int = Query(default=0,
         "SELECT id, subject, subject_type, object, object_type, predicate, submitter_email, evidence, approved_at "
         "FROM user_links WHERE id > ? ORDER BY id LIMIT 5000", (since_id,)).fetchall()
     conn.close()
-    return {"links": [dict(r) for r in rows]}
+    out = {"links": [dict(r) for r in rows]}
+    if since_id == 0:
+        # my_links: public ones join the shared graph; deleted/withdrawn public
+        # ones must leave it (the sync deletes them from the harvest DB)
+        p = _ml_db()
+        def shaped(l):
+            return {"owner": _display_name_for_email(l["owner_email"]), "contact": l["contact"],
+                    "contact_type": l.get("contact_type") or "PERSON", "relation": l["relation"], "my_link_id": l["id"]}
+        out["public_links"] = [shaped(l) for l in _ml.public_links(p)]
+        out["removed_links"] = [shaped(dict(l, contact_type="PERSON")) for l in _ml.removed_public_links(p)]
+    return out
 
 
 @app.post("/api/contacts/add-me")
@@ -2924,6 +2937,20 @@ async def add_me(req: AddMeRequest, request: Request):
 
         is_linkedin = req.source == "linkedin"
         predicate = "LINKEDIN_CONNECTION" if is_linkedin else "SELF_ATTESTED_CONTACT"
+        if _private_links_enabled(email):
+            # private-service beta: your own link, private, immediately -- no
+            # review needed because only you see it (spec decisions 1 and 3)
+            conn.close()
+            if not _ml.agreement_accepted(_ml_db(), email):
+                return JSONResponse(status_code=428, content={"success": False, "error": "agreement_required",
+                                                               "agreement_url": "/terms"})
+            link, e = _ml.add_link(_ml_db(), email, obj_canonical, relation=predicate,
+                                   source="linkedin" if is_linkedin else "contacts", visibility="private",
+                                   is_verified=_is_verified_public)
+            if e:
+                return JSONResponse(status_code=400, content={"success": False, "error": e})
+            return {"success": True, "private_link": True,
+                    "message": "Added to your private links -- only you can see it."}
         body_label = "LinkedIn connection" if is_linkedin else "Self-reported contact"
         snippet = ("Submitted via Check My Contacts → Check My LinkedIn Connections → Add Me."
                    if is_linkedin else "Submitted via Check My Contacts → Add Me.")
@@ -3251,6 +3278,7 @@ async def demo_path(request: Request, src_name: str = Query(default="", max_leng
             res = _find_path_dispatch(src, tgt)
     else:
         res = _find_path_dispatch(src, tgt)
+    res = _drop_removed_link_paths(res)
     paths = _demo_redact_paths(res.get("paths") or [], verified)
     _log_anonymous_event(getattr(request.state, "session_id", ""), "demo_path",
                          {"src": src, "tgt": tgt, "found": bool(paths),
@@ -3258,6 +3286,264 @@ async def demo_path(request: Request, src_name: str = Query(default="", max_leng
     if res.get("error"):
         return JSONResponse(status_code=502, content={"error": "path_failed"})
     return {"paths": paths}
+
+
+# --- My links: each user's private/public links (private-service spec, 2026-10-06) ---
+# Logic in my_links.py; decisions in ~/.claude/plans/resilient-doodling-graham.md.
+# Beta flag PRIVATE_LINKS_BETA: unset/"admins" -> admins only, "all" -> every
+# logged-in user. Everything here needs a logged-in user and, except reading
+# the agreement, the accepted agreement.
+try:
+    import my_links as _ml
+except ImportError:
+    from webapp import my_links as _ml
+
+# A user's own links are strong ties in THEIR searches (they know these people,
+# decision 15); everyone else sees public self-reported links at the weak
+# SELF_ATTESTED / LINKEDIN weight.
+_OWNER_LINK_PROB = 0.90
+_ml_migrated = False
+
+
+def _private_links_enabled(email):
+    if not email:
+        return False
+    mode = (os.environ.get("PRIVATE_LINKS_BETA") or "admins").strip().lower()
+    return mode == "all" or email in _ADMIN_EMAILS
+
+
+def _ml_db():
+    global _ml_migrated
+    p = _test_department_db_path()
+    if not _ml_migrated:
+        try:
+            try:
+                from test_department import init_test_department_db as _init_td
+            except ImportError:
+                from webapp.test_department import init_test_department_db as _init_td
+            _init_td(p)   # CREATE TABLE IF NOT EXISTS -- adds my_links / user_agreements to older DBs
+            n = _ml.migrate_legacy_user_links(p)
+            if n:
+                logger.info("my_links: migrated %d legacy self-reported links as private", n)
+        except Exception:
+            logger.exception("my_links legacy migration failed")
+        _ml_migrated = True
+    return p
+
+
+def _is_verified_public(name):
+    return bool(name) and name.lower() in _load_demo_verified()
+
+
+def _ml_guard(request, need_agreement=True):
+    """(email, None) if allowed, else (None, error response)."""
+    email = _request_user_email(request)
+    if not email:
+        return None, JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
+    if not _private_links_enabled(email):
+        return None, JSONResponse(status_code=404, content={"detail": "Not Found"})
+    if need_agreement and not _ml.agreement_accepted(_ml_db(), email):
+        return None, JSONResponse(status_code=428, content={"success": False, "error": "agreement_required",
+                                                           "agreement_url": "/terms"})
+    return email, None
+
+
+class MyLinkRequest(BaseModel):
+    contact: str = Field(..., max_length=300)
+    visibility: str = Field("private", max_length=10)
+    source: Optional[str] = Field(None, max_length=30)
+
+
+class VisibilityRequest(BaseModel):
+    visibility: str = Field(..., max_length=10)
+
+
+@app.get("/api/my/links")
+async def my_links_list(request: Request):
+    email, err = _ml_guard(request, need_agreement=False)
+    if err:
+        return err
+    p = _ml_db()
+    return {"success": True, "links": _ml.list_links(p, email), "public_count": _ml.public_count(p, email),
+            "max_public": _ml.MAX_PUBLIC_LINKS, "agreement_accepted": _ml.agreement_accepted(p, email),
+            "agreement_version": _ml.AGREEMENT_VERSION}
+
+
+@app.post("/api/my/links")
+async def my_links_add(req: MyLinkRequest, request: Request):
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    contact = _resolve_name(req.contact)
+    if not contact:
+        return JSONResponse(status_code=400, content={"success": False, "error": "person not found in graph"})
+    relation = "LINKEDIN_CONNECTION" if req.source == "linkedin" else "SELF_ATTESTED_CONTACT"
+    link, e = _ml.add_link(_ml_db(), email, contact, relation=relation, source=req.source,
+                           visibility=req.visibility, is_verified=_is_verified_public)
+    if e:
+        return JSONResponse(status_code=400, content={"success": False, "error": e})
+    return {"success": True, "link": link}
+
+
+@app.patch("/api/my/links/{link_id}")
+async def my_links_visibility(link_id: int, req: VisibilityRequest, request: Request):
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    link, e = _ml.set_visibility(_ml_db(), email, link_id, req.visibility, _is_verified_public)
+    if e:
+        return JSONResponse(status_code=400, content={"success": False, "error": e})
+    _invalidate_removed_links()
+    return {"success": True, "link": link}
+
+
+@app.delete("/api/my/links/{link_id}")
+async def my_links_delete(link_id: int, request: Request):
+    email, err = _ml_guard(request, need_agreement=False)
+    if err:
+        return err
+    if not _ml.delete_link(_ml_db(), email, link_id):
+        return JSONResponse(status_code=404, content={"success": False, "error": "link not found"})
+    _invalidate_removed_links()
+    return {"success": True}
+
+
+@app.get("/api/my/links/export")
+async def my_links_export(request: Request):
+    email, err = _ml_guard(request, need_agreement=False)
+    if err:
+        return err
+    from fastapi.responses import Response
+    return Response(_ml.export_csv(_ml_db(), email), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="my_sixdegrees_links.csv"'})
+
+
+@app.post("/api/agreement/accept")
+async def agreement_accept(request: Request):
+    email, err = _ml_guard(request, need_agreement=False)
+    if err:
+        return err
+    _ml.accept_agreement(_ml_db(), email)
+    return {"success": True, "version": _ml.AGREEMENT_VERSION}
+
+
+class LinkReportRequest(BaseModel):
+    subject: str = Field(..., max_length=300)
+    contact: str = Field(..., max_length=300)
+    reason: Optional[str] = Field(None, max_length=1000)
+
+
+@app.post("/api/links/report")
+async def link_report(req: LinkReportRequest, request: Request):
+    """Anyone logged in can report a public self-reported link they see in a
+    path; reports go to the /admin queue (decision 3: review only what's flagged)."""
+    email = _request_user_email(request)
+    if not email:
+        return JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
+    hit = _ml.report_link(_ml_db(), _display_name_for_email, req.subject, req.contact)
+    conn = db.connect(_test_department_db_path())
+    conn.execute("INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata) "
+                 "VALUES ('link_report', 'new', 'normal', ?, ?, ?, ?)",
+                 (f"Reported link: {req.subject} ↔ {req.contact}", req.reason or "", email,
+                  json.dumps({"subject": req.subject, "contact": req.contact, "my_link_id": hit})))
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Thanks -- the link has been reported for review."}
+
+
+# Deleted public links stay in the shared graph until the nightly rebuild;
+# live path results drop any path using one (decision 10: deletion is
+# honoured at once). Cached briefly so each search doesn't hit the database.
+_removed_links_cache = {"at": 0.0, "pairs": frozenset()}
+
+
+def _invalidate_removed_links():
+    _removed_links_cache["at"] = 0.0
+
+
+def _removed_link_pairs():
+    if time.time() - _removed_links_cache["at"] > 60:
+        pairs = set()
+        try:
+            for l in _ml.removed_public_links(_test_department_db_path()):
+                owner = _display_name_for_email(l["owner_email"])
+                if owner:
+                    pairs.add(frozenset((owner.lower(), l["contact"].lower())))
+        except Exception:
+            logger.exception("loading removed public links failed")
+        _removed_links_cache.update(at=time.time(), pairs=frozenset(pairs))
+    return _removed_links_cache["pairs"]
+
+
+def _drop_removed_link_paths(res):
+    pairs = _removed_link_pairs()
+    if not pairs or not isinstance(res, dict) or not res.get("paths"):
+        return res
+    def uses_removed(p):
+        steps = p.get("path", [])
+        return any(frozenset(((steps[i].get("node") or "").lower(), (steps[i + 1].get("node") or "").lower())) in pairs
+                   for i in range(len(steps) - 1))
+    res["paths"] = [p for p in res["paths"] if not uses_removed(p)]
+    return res
+
+
+def _reach_via_contacts(owner_name, contacts, target_name, k=3):
+    """'How do I reach X': the best routes from the user, through one of their
+    own links, to X. The user isn't a node in the shared graph (their private
+    links never enter it), so: one Dijkstra from X to all of the user's
+    contacts, then the k closest contacts' paths, each prefixed by the user's
+    own link at owner strength (decision 15)."""
+    _load_igraph()
+    if _igraph_graph is None or _igraph_graph.vcount() == 0:
+        return {"error": "Graph not loaded"}
+    tgt = _resolve_name(target_name)
+    if not tgt or tgt not in _igraph_name_to_idx:
+        return {"error": f"'{target_name}' not found"}
+    by_idx = {}
+    for c in contacts:
+        node = _resolve_name(c["contact"])
+        if node in _igraph_name_to_idx:
+            by_idx[_igraph_name_to_idx[node]] = (node, c)
+    if not by_idx:
+        return {"paths": [], "note": "none of your links are in the graph"}
+    tgt_idx = _igraph_name_to_idx[tgt]
+    weights = _igraph_living_weight if _igraph_living_weight is not None else _igraph_weight
+    if tgt_idx in (_igraph_deceased_idx or set()):
+        weights = _igraph_weight
+    idxs = list(by_idx)
+    dist = _igraph_graph.distances(source=tgt_idx, target=idxs, weights=weights)[0]
+    ranked = sorted((d, i) for d, i in zip(dist, idxs) if d != float("inf"))
+    owner_step = {"node": owner_name, "label": owner_name, "relation": "MY_LINK", "prob": _OWNER_LINK_PROB,
+                  "cats": ["MY_LINK"], "deceased": None, "sci": None, "you": True}
+    paths = []
+    for d, i in ranked[:k]:
+        node, link = by_idx[i]
+        if i == tgt_idx:
+            sub = {"paths": [{"path": [{"node": node, "label": _get_label(node), "relation": None, "prob": None,
+                                        "cats": None, "deceased": None, "sci": _get_node_sci(node)}]}]}
+        else:
+            sub = _find_path_igraph(node, tgt, k=1)
+        if not sub.get("paths"):
+            continue
+        steps = [dict(owner_step)] + sub["paths"][0]["path"]
+        steps[0]["private"] = link.get("visibility") != "public"
+        probs = [s["prob"] for s in steps[:-1] if s.get("prob") is not None]
+        pp, lc, fc = _path_probability(probs)
+        paths.append({"length": len(steps) - 1, "probability": round(pp, 6), "prob_label": _one_in(pp),
+                      "band": _viability_band(pp), "via_contact": node, "path": steps})
+    return {"paths": paths, "contacts_considered": len(by_idx)}
+
+
+@app.get("/api/my/reach")
+async def my_reach(request: Request, target: str = Query(..., max_length=300)):
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    contacts = _ml.list_links(_ml_db(), email)
+    owner = _display_name_for_email(email) or email
+    loop = asyncio.get_event_loop()
+    res = await loop.run_in_executor(None, _reach_via_contacts, owner, contacts, target, 3)
+    return _drop_removed_link_paths(res)
 
 
 # Fediverse: the crawlie account lives on GoToSocial at social.sixdegrees.net
