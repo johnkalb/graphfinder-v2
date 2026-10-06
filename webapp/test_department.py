@@ -205,6 +205,38 @@ def init_test_department_db(db_path: str) -> None:
         )
         """
     )
+    # Each user's own links (private-service spec, 2026-10-06). Private links
+    # are visible only to their owner and used only in the owner's searches;
+    # public ones (allowed only to verified public figures, max 50 per user)
+    # also go into the shared graph at the nightly rebuild. Deleting sets
+    # deleted_at, honoured at once everywhere (live searches filter deleted
+    # public links until the rebuild drops them).
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS my_links (
+            id {_PK},
+            owner_email TEXT NOT NULL,
+            contact TEXT NOT NULL,
+            contact_type TEXT NOT NULL DEFAULT 'PERSON',
+            relation TEXT NOT NULL DEFAULT 'SELF_ATTESTED_CONTACT',
+            source TEXT,
+            visibility TEXT NOT NULL DEFAULT 'private',
+            legacy_user_link_id INTEGER,
+            created_at TEXT NOT NULL,
+            deleted_at TEXT,
+            report_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_agreements (
+            email TEXT NOT NULL,
+            version TEXT NOT NULL,
+            accepted_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
