@@ -3358,6 +3358,16 @@ class VisibilityRequest(BaseModel):
     visibility: str = Field(..., max_length=10)
 
 
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page():
+    try:
+        return HTMLResponse(Path(__file__).with_name("terms.html").read_text(encoding="utf-8"),
+                            headers={"Cache-Control": "no-cache"})
+    except Exception:
+        logger.exception("terms page failed to load")
+        return HTMLResponse("<h1>User agreement unavailable</h1>", status_code=500)
+
+
 @app.get("/api/my/links")
 async def my_links_list(request: Request):
     email, err = _ml_guard(request, need_agreement=False)
@@ -4546,6 +4556,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <input type="file" id="linkedin-file" accept=".csv" style="display:none" onchange="doLinkedInImport(this)">
   </div>
 
+  <div class="psi-section" id="mylinks-section" style="display:none;">
+    <h3 style="margin:0 0 4px;">My links <span style="font-size:0.75rem;color:#d29922;border:1px solid #d29922;border-radius:4px;padding:1px 6px;margin-left:6px;">Beta &mdash; free while we test; not a subscription</span></h3>
+    <div id="mylinks-agree" style="display:none;" class="psi-note">
+      Your own links are <strong>private</strong> unless you make them public: only you see them, and they're used only in your searches.
+      Public links (allowed only to verified public figures) are visible to everyone, labelled &ldquo;self-reported&rdquo;.
+      Before using this, please read and accept the <a href="/terms" target="_blank">user agreement</a>.
+      <div style="margin-top:8px;"><button id="mylinks-accept-btn" onclick="myLinksAccept()">I have read and agree to the user agreement</button></div>
+    </div>
+    <div id="mylinks-main" style="display:none;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+        <input id="reach-target" type="text" placeholder="How do I reach&hellip; (a person or organization)" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myReach()">
+        <button onclick="myReach()">Find my best route</button>
+      </div>
+      <div id="reach-result" class="psi-note"></div>
+      <div id="mylinks-summary" class="psi-note" style="margin-top:10px;"></div>
+      <div id="mylinks-list" style="max-height:320px;overflow:auto;margin-top:4px;"></div>
+      <div class="psi-note" style="margin-top:6px;"><a href="/api/my/links/export">Download my links (CSV)</a></div>
+    </div>
+  </div>
+
   <div class="footer-meta" style="margin-top: 2rem; border-top: 1px solid #30363d; padding-top: 1.5rem; text-align: center;">
     <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
       <button class="secondary-btn" onclick="window.open('https://docs.google.com/forms/d/e/1FAIpQLSfOR_ydz782hR27PzVrQ_xhqjl0k_ek_49c8RSuFTfp7ciP_A/viewform?usp=sf_link', '_blank')">💬 Give Feedback</button>
@@ -5629,10 +5659,16 @@ async function doAddMeSubmit(btn) {
     const data = await res.json();
     if (data.success) {
       addMeSubmittedCount++;
-      btn.outerHTML = data.duplicate
-        ? ' <span style="color:#8b949e">✓ Already submitted</span>'
-        : ' <span style="color:#3fb950">✓ Submitted for review</span>';
+      btn.outerHTML = data.private_link
+        ? ' <span style="color:#3fb950">✓ Added to your private links</span>'
+        : data.duplicate
+          ? ' <span style="color:#8b949e">✓ Already submitted</span>'
+          : ' <span style="color:#3fb950">✓ Submitted for review</span>';
       updateAddMeSummary();
+      if (data.private_link) myLinksLoad();
+    } else if (data.error === 'agreement_required') {
+      btn.outerHTML = ' <span style="color:#d29922">Accept the user agreement under "My links" first</span>';
+      myLinksLoad();
     } else {
       btn.outerHTML = ` <span style="color:#f85149">Error: ${escHtml(data.error || 'failed')}</span>`;
     }
@@ -5870,6 +5906,71 @@ function csvSplitLine(line) {
   fields.push(cur);
   return fields;
 }
+
+// --- My links (private-service beta) ---------------------------------------
+async function myLinksLoad() {
+  let res;
+  try { res = await fetch('/api/my/links'); } catch (e) { return; }
+  if (!res.ok) return;   // not in the beta: the panel stays hidden
+  const d = await res.json();
+  document.getElementById('mylinks-section').style.display = 'block';
+  document.getElementById('mylinks-agree').style.display = d.agreement_accepted ? 'none' : 'block';
+  document.getElementById('mylinks-main').style.display = d.agreement_accepted ? 'block' : 'none';
+  if (!d.agreement_accepted) return;
+  const pub = d.public_count, max = d.max_public;
+  document.getElementById('mylinks-summary').textContent =
+    `${d.links.length} link${d.links.length === 1 ? '' : 's'} — ${pub} public (max ${max}), the rest private (only you see them).`;
+  const list = document.getElementById('mylinks-list');
+  list.innerHTML = d.links.map(l => {
+    const isPub = l.visibility === 'public';
+    const badge = isPub ? '<span style="color:#58a6ff">public</span>' : '<span style="color:#8b949e">private</span>';
+    const toggle = `<button class="add-me-btn" onclick="myLinkVisibility(${l.id}, '${isPub ? 'private' : 'public'}')">${isPub ? 'Make private' : 'Make public'}</button>`;
+    return `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;"><span style="flex:1">${escHtml(l.contact)}</span>${badge}${toggle}`
+         + `<button class="add-me-btn" title="Delete" onclick="myLinkDelete(${l.id}, this)">✕</button></div>`;
+  }).join('') || '<div class="psi-note">No links yet — use Check My Contacts or Check My LinkedIn Connections above, then "+ Add me".</div>';
+}
+
+async function myLinksAccept() {
+  const r = await fetch('/api/agreement/accept', { method: 'POST' });
+  if (r.ok) myLinksLoad();
+}
+
+async function myLinkVisibility(id, visibility) {
+  const r = await fetch(`/api/my/links/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ visibility }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alertLike(d.error || 'Could not change that link.'); return; }
+  myLinksLoad();
+}
+
+async function myLinkDelete(id, btn) {
+  btn.disabled = true;
+  const r = await fetch(`/api/my/links/${id}`, { method: 'DELETE' });
+  if (!r.ok) { btn.disabled = false; alertLike('Could not delete that link.'); return; }
+  myLinksLoad();
+}
+
+function alertLike(msg) {
+  const el = document.getElementById('mylinks-summary');
+  el.textContent = msg; el.style.color = '#f85149';
+  setTimeout(() => { el.style.color = ''; myLinksLoad(); }, 4000);
+}
+
+async function myReach() {
+  const target = document.getElementById('reach-target').value.trim();
+  const out = document.getElementById('reach-result');
+  if (!target) return;
+  out.textContent = 'Searching your links…';
+  const r = await fetch('/api/my/reach?target=' + encodeURIComponent(target));
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) { out.textContent = d.error || d.detail || 'Search failed.'; return; }
+  if (!d.paths || !d.paths.length) { out.textContent = d.note || 'No route found from your links.'; return; }
+  out.innerHTML = d.paths.map((p, i) =>
+    `<div style="margin:4px 0;"><strong>${i === 0 ? 'Best route' : 'Alternative'}</strong> (${p.length} step${p.length === 1 ? '' : 's'}, via ${escHtml(p.via_contact)}): `
+    + p.path.map(s => s.you ? '<strong>You</strong>' : escHtml(s.label || s.node)).join(' → ') + '</div>').join('');
+}
+
+document.addEventListener('DOMContentLoaded', myLinksLoad);
 
 async function doLinkedInImport(input) {
   const file = input.files[0];

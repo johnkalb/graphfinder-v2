@@ -104,3 +104,43 @@ def test_report_goes_to_the_review_queue(client, tester_data_dir):
     n = conn.execute("SELECT count(*) FROM service_items WHERE item_type = 'link_report'").fetchone()[0]
     conn.close()
     assert n >= 1
+
+
+def test_terms_page_and_panel_markup(client):
+    r = client.get("/terms")
+    assert r.status_code == 200 and "indemnify" in r.text and "not a subscription" in r.text
+    page = client.get("/").text
+    assert 'id="mylinks-section"' in page and "Beta &mdash; free while we test; not a subscription" in page
+
+
+def test_reach_routes_through_the_users_own_contacts(monkeypatch):
+    """Tiny graph: Alice - Bob - Target, and Carol - Dave - Erin - Target.
+    The user knows Alice and Carol (private links). Best route: You -> Alice -> Bob -> Target."""
+    import math
+    import numpy as np
+    import igraph as ig
+    names = ["Alice", "Bob", "Target", "Carol", "Dave", "Erin"]
+    edges = [(0, 1), (1, 2), (3, 4), (4, 5), (5, 2)]
+    probs = np.array([0.8] * len(edges))
+    fwd = -math.log(pf._FORWARD_PROB)
+    w = -np.log(probs) + fwd
+    g = ig.Graph(n=len(names), edges=edges)
+    for attr, val in {"_igraph_graph": g, "_igraph_nodes": names,
+                      "_igraph_name_to_idx": {n: i for i, n in enumerate(names)},
+                      "_igraph_weight": w, "_igraph_living_weight": w, "_igraph_prob": probs,
+                      "_igraph_cats_mask": np.zeros(len(edges), dtype=np.uint32), "_igraph_cats_vocab": [],
+                      "_igraph_deceased_idx": set()}.items():
+        monkeypatch.setattr(pf, attr, val)
+    monkeypatch.setattr(pf, "_load_igraph", lambda: None)
+    monkeypatch.setattr(pf, "_load_deceased", lambda: {})
+    monkeypatch.setattr(pf, "_get_label", lambda n: n)
+    monkeypatch.setattr(pf, "_get_node_sci", lambda n: 50)
+    contacts = [{"contact": "Alice", "visibility": "private"}, {"contact": "Carol", "visibility": "private"}]
+    res = pf._reach_via_contacts("Test User", contacts, "Target", k=2)
+    assert [s["node"] for s in res["paths"][0]["path"]] == ["Test User", "Alice", "Bob", "Target"]
+    assert res["paths"][0]["path"][0]["you"] is True and res["paths"][0]["path"][0]["prob"] == pf._OWNER_LINK_PROB
+    assert res["paths"][0]["via_contact"] == "Alice"
+    assert [s["node"] for s in res["paths"][1]["path"]][:2] == ["Test User", "Carol"]
+    # a contact who IS the target: one step
+    direct = pf._reach_via_contacts("Test User", [{"contact": "Target"}], "Target", k=1)
+    assert [s["node"] for s in direct["paths"][0]["path"]] == ["Test User", "Target"]
