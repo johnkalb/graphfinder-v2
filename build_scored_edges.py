@@ -156,6 +156,22 @@ if os.path.exists(FEC_NAMES):
 print(f"FEC committee names: {len(committee_names):,}")
 n_fec_named = n_fec_dropped = 0
 n_private_user_links = 0
+# A political donation is a connection only when it's big enough to get a
+# candidate's attention -- $100K+ in total from that donor to that committee
+# (operator decision 2026-10-07). Smaller donations stay in the database for
+# questions ("who funds X") but don't become graph edges. LittleSis donations
+# without an amount (largely foundation grants) are kept.
+MIN_DONATION_LINK_USD = 100_000
+n_small_donations = 0
+_AMOUNT_RE = re.compile(r'"(?:total_usd|amount)":\s*"?([0-9.]+)')
+
+
+def _donation_usd(ev):
+    m = _AMOUNT_RE.search(ev or "")
+    try:
+        return float(m.group(1)) if m else None
+    except ValueError:
+        return None
 pre = conn.cursor(name="split_prepass_fec")
 pre.itersize = 100_000
 pre.execute("SELECT source_name, evidence FROM relationships "
@@ -215,7 +231,8 @@ def _stream(cur, n=250_000):
 stream_cur = conn.cursor(name="build_scored_edges_stream")
 stream_cur.itersize = 250_000
 stream_cur.execute("SELECT source_name, target_name, relation_type, source_data, "
-                   "CASE WHEN source_data IN ('FEC', 'FEC_INDIV', 'PATENT_COINVENTOR') THEN evidence END FROM relationships")
+                   "CASE WHEN source_data IN ('FEC', 'FEC_INDIV', 'PATENT_COINVENTOR') "
+                   "OR (source_data = 'LITTLESIS' AND relation_type = 'DONATION') THEN evidence END FROM relationships")
 c = stream_cur
 n_raw = n_drop = n_selfmerge = 0
 for s, t, r, src, ev in _stream(c):
@@ -233,6 +250,12 @@ for s, t, r, src, ev in _stream(c):
     # (private-service spec, decision 2, applied to existing links 2026-10-06).
     # Links to private people stay in the database as the owner's private links
     # (for the per-user overlay, once built) but never enter the shared graph.
+    if r == "DONATION" and src in ("FEC_INDIV", "LITTLESIS"):
+        usd = _donation_usd(ev)
+        if (usd is not None or src == "FEC_INDIV") and (usd or 0) < MIN_DONATION_LINK_USD:
+            n_small_donations += 1
+            n_drop += 1
+            continue
     if src == "USER_SUGGESTION" and canon_key(t) not in exempt:
         n_private_user_links += 1
         n_drop += 1
@@ -285,6 +308,7 @@ print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}, "
       f"self-loops after canonicalization: {n_selfmerge}")
 print(f"Unique scorable pairs: {len(pair_rels)}")
 print(f"FEC donations: {n_fec_named:,} given committee names, {n_fec_dropped:,} dropped (conduit or no id)")
+print(f"Donations under ${MIN_DONATION_LINK_USD:,} left out of the graph: {n_small_donations:,}")
 print(f"Self-reported user links kept private (other person not a verified public figure): {n_private_user_links}")
 print(f"Common-name splits: {splitter.split} edge endpoints moved to {len(split_base)} per-employer/company nodes; "
       f"{splitter.dropped} unattributable edges dropped")

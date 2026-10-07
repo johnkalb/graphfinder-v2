@@ -798,7 +798,10 @@ _ORG_WORDS = re.compile(
     r"Ventures|Associates|Media|Properties|Realty|Organization|Association|Society|"
     r"School|Hospital|Church|Authority|Commission|Bureau|Agency|Department|"
     r"National|International|Global|Network|Union|League|Academy|Museum|Library|"
-    r"Times|Post|Journal|News|Press|Labs|Laboratory|Office|Board)\b",
+    r"Times|Post|Journal|News|Press|Labs|Laboratory|Office|Board|"
+    # political committees ("TRUMP VICTORY", "MARCO RUBIO FOR SENATE",
+    # "FRIENDS OF X") otherwise read as people (2026-10-07)
+    r"Victory|PAC|For|Friends|Campaign|Party|Caucus|Majority|Action|Elect|Election|Republicans?|Democrats?)\b",
     re.I,
 )
 
@@ -874,6 +877,11 @@ def _find_entry_cached(q):
     # "musk" inside "3Musketeers").
     if len(scores) < 50:
         q_parts = q.split()
+        # Matches on only SOME of a multi-word query ("marc" of "marc ehrlich"
+        # hitting "MARCO RUBIO FOR SENATE") are kept aside and used only if
+        # nothing better matched -- ranked by links, they filled the dropdown
+        # with big committees that share one word with the name typed (2026-10-07).
+        partial = {}
         for i, (entry, (canon_lower, parts, _is_p)) in enumerate(zip(_search_index, _search_index_meta)):
             if i in scores:
                 continue
@@ -884,10 +892,16 @@ def _find_entry_cached(q):
             else:
                 canon_parts = set(parts)
                 matching = sum(1 for qp in q_parts if any(cp.startswith(qp) for cp in canon_parts))
-                if matching > 0:
+                if matching == len(q_parts):
                     scores[i] = 20 + matching * 5
+                elif matching > 0:
+                    partial[i] = 20 + matching * 5
+        if not scores:
+            scores = partial
 
-    results = [(s, _search_index[i]) for i, s in scores.items()]
+    # people before organizations within the same match quality ("trump" ->
+    # Donald Trump ahead of TRUMP MAKE AMERICA GREAT AGAIN COMMITTEE)
+    results = [(s + (0.5 if _search_index_meta[i][2] else 0.0), _search_index[i]) for i, s in scores.items()]
     # Name-match quality (the tier above) is the dominant sort key -- degree
     # no longer boosts score into a HIGHER TIER. That previously let a
     # well-connected hub outrank a more precise match (e.g. a common-surname
