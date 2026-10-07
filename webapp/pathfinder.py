@@ -805,6 +805,11 @@ _ORG_WORDS = re.compile(
     re.I,
 )
 
+_COMMITTEE_WORDS = re.compile(
+    r"\b(committee|pac|victory|for|friends|campaign|elect|congress|senate|"
+    r"president|governor|caucus)\b")
+
+
 def _looks_like_person(name):
     if _ORG_WORDS.search(name):
         return False
@@ -898,6 +903,18 @@ def _find_entry_cached(q):
                     partial[i] = 20 + matching * 5
         if not scores:
             scores = partial
+
+    # A name that is exactly a person ("mark greene") hides that person's own
+    # campaign committees ("MARK GREENE FOR CONGRESS CAMPAIGN COMMITTEE",
+    # "FRIENDS OF ...") -- ranking them below the person still left them in
+    # the dropdown (2026-10-07). Typing a committee word, or the committee's
+    # full name, still finds them; non-committee orgs (foundations, firms)
+    # are unaffected.
+    if not _COMMITTEE_WORDS.search(q) and any(
+            s == 100 and _search_index_meta[i][2] for i, s in scores.items()):
+        scores = {i: s for i, s in scores.items()
+                  if s == 100 or _search_index_meta[i][2]
+                  or not _COMMITTEE_WORDS.search(_search_index_meta[i][0])}
 
     # people before organizations within the same match quality ("trump" ->
     # Donald Trump ahead of TRUMP MAKE AMERICA GREAT AGAIN COMMITTEE)
