@@ -1334,7 +1334,7 @@ def _load_igraph():
     _igraph_deceased_idx = deceased_idx
 
 
-def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False):
+def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=None, tgt_via=None):
     """igraph-backed replacement for _find_path(). Opt-in via
     PATHFINDER_BACKEND=igraph (see _find_path_dispatch()) -- validated
     against _find_path() in webapp/tests/test_pathfinder_igraph.py. Reuses
@@ -1355,7 +1355,15 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False):
     living-only path exists, the masked search returns infinite total
     weight, which is treated as no path -- the same outcome _find_path()'s
     subgraph exclusion reaches (a deceased intermediary removed from the
-    subgraph can't be routed through either)."""
+    subgraph can't be routed through either).
+
+    src_via / tgt_via pick WHICH person a common name means (2026-10-07):
+    "Mark Peters" is one node holding a DOI commissioner, a union officer,
+    an Iowa credit-union director and more, and nothing in the graph tells
+    them apart reliably (their links don't connect to each other). The user
+    names one connection -- "the Mark Peters at NYC Dept of Investigation" --
+    and every other link on that endpoint gets infinite weight, using the
+    same copy-and-mask approach as a deceased endpoint."""
     _load_igraph()
     if _igraph_graph is None or _igraph_graph.vcount() == 0:
         return {"error": "Graph not loaded"}
@@ -1370,6 +1378,14 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False):
     tgt_idx = _igraph_name_to_idx.get(tgt_node)
     if src_idx is None or tgt_idx is None:
         return {"paths": [], "src_found": src_idx is not None, "tgt_found": tgt_idx is not None}
+
+    via_idx = {}
+    for end_idx, via in ((src_idx, src_via), (tgt_idx, tgt_via)):
+        if via:
+            vi = _igraph_name_to_idx.get(via)
+            if vi is None or _igraph_graph.get_eid(end_idx, vi, error=False) < 0:
+                return {"error": f"Connection '{via}' not found"}
+            via_idx[end_idx] = vi
 
     import math
     deceased = _load_deceased()
@@ -1387,9 +1403,28 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False):
             for idx in (src_idx, tgt_idx):
                 for eid in _igraph_graph.incident(idx):
                     weights[eid] = _igraph_weight[eid]
+    if via_idx:
+        if weights is _igraph_weight or weights is _igraph_living_weight:
+            weights = weights.copy()
+        for end, vi in via_idx.items():
+            for eid in _igraph_graph.incident(end):
+                e = _igraph_graph.es[eid]
+                if (e.target if e.source == end else e.source) != vi:
+                    weights[eid] = math.inf
+    # Search between the picked connections and add the endpoint hops
+    # afterwards: same paths as searching the masked endpoints directly,
+    # but measured 2x faster (26s vs 48s, Gates -> Mark Peters via Iowa
+    # Credit Union League) -- Yen's spur searches waste time on inf edges.
+    search_src = via_idx.get(src_idx, src_idx)
+    search_tgt = via_idx.get(tgt_idx, tgt_idx)
 
     try:
-        vpaths = _igraph_graph.get_k_shortest_paths(src_idx, tgt_idx, k=k, weights=weights, output="vpath")
+        if search_src == search_tgt:
+            vpaths = [[search_src]]
+        else:
+            vpaths = _igraph_graph.get_k_shortest_paths(search_src, search_tgt, k=k, weights=weights, output="vpath")
+        vpaths = [([src_idx] if search_src != src_idx else []) + list(vp) + ([tgt_idx] if search_tgt != tgt_idx else [])
+                  for vp in vpaths]
     except Exception:
         logger.exception("igraph pathfind failed for %r -> %r", src_name, tgt_name)
         return {"error": "pathfind_failed", "detail": "path search failed (see server logs)"}
@@ -1447,7 +1482,8 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False):
             break
 
     return {"paths": paths, "src_found": True, "tgt_found": True,
-            "deceased_excluded": excluded_deceased, "include_deceased": include_deceased}
+            "deceased_excluded": excluded_deceased, "include_deceased": include_deceased,
+            "src_via": src_via, "tgt_via": tgt_via}
 
 
 # igraph is the default: validated equivalent to NetworkX (7/7 tests in
@@ -1463,11 +1499,13 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False):
 _PATHFINDER_BACKEND = os.environ.get("PATHFINDER_BACKEND", "igraph")
 
 
-def _find_path_dispatch(src_name, tgt_name, max_depth=6, k=3, include_deceased=False):
+def _find_path_dispatch(src_name, tgt_name, max_depth=6, k=3, include_deceased=False, src_via=None, tgt_via=None):
     if _PATHFINDER_BACKEND == "pgrouting" and db.IS_POSTGRES:
         return _find_path_pg(src_name, tgt_name, k=k, include_deceased=include_deceased)
     if _PATHFINDER_BACKEND == "igraph":
-        return _find_path_igraph(src_name, tgt_name, k=k, include_deceased=include_deceased)
+        return _find_path_igraph(src_name, tgt_name, k=k, include_deceased=include_deceased,
+                                 src_via=src_via, tgt_via=tgt_via)
+    # src_via/tgt_via are igraph-only; the escape-hatch backends ignore them
     return _find_path(src_name, tgt_name, max_depth=max_depth, k=k, include_deceased=include_deceased)
 
 
@@ -1853,7 +1891,8 @@ async def search(request: Request, q: str = Query(default="")):
 
 @app.get("/api/path")
 async def path(request: Request, src_name: str = Query(default=""), tgt_name: str = Query(default=""),
-               include_deceased: bool = Query(default=False)):
+               include_deceased: bool = Query(default=False),
+               src_via: str = Query(default=""), tgt_via: str = Query(default="")):
     if not src_name or not tgt_name:
         return {"error": "Both src_name and tgt_name required"}
     if not _graph_backend_ready():
@@ -1868,17 +1907,21 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
     # under threading, confirmed live (see that function's docstring).
     # Falls back to a direct call for the pgrouting backend (I/O-bound, no
     # pool needed) or if the pool hasn't finished warming up yet.
+    src_via, tgt_via = src_via.strip() or None, tgt_via.strip() or None
     if _path_process_pool is not None:
         loop = asyncio.get_event_loop()
         try:
             res = await loop.run_in_executor(
-                _path_process_pool, _find_path_dispatch, src_name.strip(), tgt_name.strip(), 6, 3, include_deceased
+                _path_process_pool, _find_path_dispatch, src_name.strip(), tgt_name.strip(), 6, 3, include_deceased,
+                src_via, tgt_via
             )
         except concurrent.futures.process.BrokenProcessPool:
             logger.exception("path process pool broken -- falling back to inline call for this request")
-            res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+            res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased,
+                                      src_via=src_via, tgt_via=tgt_via)
     else:
-        res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased)
+        res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased,
+                                  src_via=src_via, tgt_via=tgt_via)
     _log_tester_usage(
         request,
         "path_found" if "paths" in res and len(res.get("paths", [])) > 0 else "path_not_found",
@@ -1887,6 +1930,11 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
 
     # deleted public self-reported links: honoured at once (my_links, decision 10)
     res = _drop_removed_link_paths(res)
+    # verified public figures skip the "not the one you meant?" hint
+    if res.get("paths"):
+        chain = res["paths"][0]["path"]
+        res["src_public"] = _is_verified_public(chain[0]["label"])
+        res["tgt_public"] = _is_verified_public(chain[-1]["label"])
 
     # AI Narrative Briefing: attach it only if already cached from a prior
     # request for this same path chain -- never call Gemini inline here.
@@ -4353,6 +4401,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     color: #6e7681; margin: 1rem 0 0.3rem; }
   #whois-modal .wi-news-btn { margin-top: 1rem; }
   #whois-modal .wi-news a { display: block; color: #58a6ff; font-size: 0.82rem; margin-top: 0.4rem; }
+  #whois-modal .wi-pick { cursor: pointer; border-radius: 4px; padding-left: 0.4rem; padding-right: 0.4rem; }
+  #whois-modal .wi-pick:hover, #whois-modal .wi-pick:focus { background: #1f6feb22; outline: none; }
+  #whois-modal .wi-pick.wi-on { background: #1f6feb33; }
+  .selected-tag .via { color: #8b949e; margin-left: 0.4rem; font-size: 0.82rem; }
+  .selected-tag .which { margin-left: 0.6rem; color: #8b949e; font-size: 0.8rem; text-decoration: underline; cursor: pointer; }
+  .selected-tag .which:hover { color: #58a6ff; }
+  .namesake-hint { color: #8b949e; font-size: 0.82rem; margin: 0 0 0.8rem; text-align: left; }
+  .namesake-hint a { color: #58a6ff; }
   .selected-tag { display: inline-flex; align-items: center; background: #1f6feb22;
                    border: 1px solid #1f6feb44; border-radius: 6px; padding: 0.4rem 0.8rem;
                    margin: 0.5rem 0; font-size: 0.9rem; color: #58a6ff; }
@@ -4774,7 +4830,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 
 <script>
-const state = { src: { selected: null }, tgt: { selected: null } };
+// via: the one connection that says WHICH person a shared name means
+// ("Mark Peters" at NYC Dept of Investigation, not the union officer) --
+// see _find_path_igraph()'s src_via/tgt_via.
+const state = { src: { selected: null, via: null, viaLabel: null }, tgt: { selected: null, via: null, viaLabel: null } };
 let _pathGen = 0;  // guards against a slow narrative fetch from a stale search landing after a newer one
 let searchTimeout = null;
 
@@ -4901,6 +4960,7 @@ window.selectItem = function(prefix, idx) {
   if (idx < 0 || idx >= items.length) return;
   const name = items[idx].getAttribute('data-name') || items[idx].querySelector('.name').childNodes[0].textContent.trim();
   state[prefix].selected = name;
+  state[prefix].via = state[prefix].viaLabel = null;
   document.getElementById(prefix + '-input').value = name;
   dd.classList.remove('show');
   updateSelected(prefix);
@@ -4910,8 +4970,13 @@ window.selectItem = function(prefix, idx) {
 function updateSelected(prefix) {
   const el = document.getElementById(prefix + '-selected');
   if (state[prefix].selected) {
+    const via = state[prefix].viaLabel;
     el.innerHTML = '<div class="selected-tag">'
       + escHtml(state[prefix].selected)
+      + (via ? '<span class="via">· via ' + escHtml(via) + '</span>' : '')
+      + '<span class="which" role="button" tabindex="0" title="Several people can share a name -- pick yours by one of their connections"'
+      + ' onclick="openWhichOne(\'' + prefix + '\')" onkeydown="if(event.key===\'Enter\'){openWhichOne(\'' + prefix + '\');}">'
+      + (via ? 'change' : 'which one?') + '</span>'
       + ' <span class="clear" onclick="clearSelection(\'' + prefix + '\')">✕</span></div>';
   } else {
     el.innerHTML = '';
@@ -4920,6 +4985,7 @@ function updateSelected(prefix) {
 
 window.clearSelection = function(prefix) {
   state[prefix].selected = null;
+  state[prefix].via = state[prefix].viaLabel = null;
   document.getElementById(prefix + '-input').value = '';
   document.getElementById(prefix + '-selected').innerHTML = '';
   updateButton();
@@ -4940,6 +5006,8 @@ async function findPath() {
     const incDec = !!(document.getElementById('include-deceased') && document.getElementById('include-deceased').checked);
     const params = new URLSearchParams({ src_name: state.src.selected, tgt_name: state.tgt.selected });
     if (incDec) params.set('include_deceased', 'true');
+    if (state.src.via) params.set('src_via', state.src.via);
+    if (state.tgt.via) params.set('tgt_via', state.tgt.via);
     const res = await fetch('/api/path?' + params.toString(), {
       headers: { 'Accept': 'application/json' }
     });
@@ -4965,6 +5033,10 @@ async function findPath() {
       html = '<div class="error-msg">' + escHtml(data.error) + '</div>';
     } else if (!data.paths || data.paths.length === 0) {
       html = '<div class="no-path">No ' + (incDec ? '' : 'living ') + 'path found between <strong>' + escHtml(state.src.selected) + '</strong> and <strong>' + escHtml(state.tgt.selected) + '</strong>';
+      ['src', 'tgt'].forEach(pf => {
+        if (state[pf].via) html += '<div style="margin-top:8px;font-size:0.85rem;">Only paths through ' + escHtml(state[pf].viaLabel)
+          + ' were allowed for ' + escHtml(state[pf].selected) + '. <a href="#" onclick="setVia(\'' + pf + '\', -1); return false;" style="color:#58a6ff;">Allow any ' + escHtml(state[pf].selected) + '</a></div>';
+      });
       if (!incDec && data.deceased_excluded > 0) {
         html += '<div style="margin-top:8px;font-size:0.85rem;">' + data.deceased_excluded + ' deceased ' + (data.deceased_excluded===1?'person was':'people were') + ' excluded as possible go-betweens. <a href="#" onclick="document.getElementById(\'include-deceased\').checked=true; findPath(); return false;" style="color:#58a6ff;">Include deceased intermediaries</a> to see historical connections.</div>';
       }
@@ -4994,6 +5066,7 @@ async function findPath() {
         html += '  <div style="font-size:0.9rem; color:#c9d1d9; line-height:1.6; font-style:normal;">' + escHtml(data.narrative) + '</div>';
         html += '</div>';
       }
+      html += namesakeHint(data.paths[0], data);
       data.paths.forEach((p, idx) => {
         const bandColors = {Strong:'#3fb950', Plausible:'#d29922', Weak:'#db6d28', Tenuous:'#8b949e'};
         const bc = bandColors[p.band] || '#8b949e';
@@ -5358,14 +5431,52 @@ window.showWhois = function(prefix, idx) {
   }
 };
 
-async function openWhoisModal(name) {
+// "Which Mark Peters?" -- the identity card in pick mode: each connection
+// is a choice, and the path must then reach the person through it.
+let _whichPrefix = null, _whichConns = [];
+
+function openWhichOne(prefix) {
+  whoisTriggerEl = document.querySelector('#' + prefix + '-selected .which');
+  whoisTriggerFallback = document.getElementById(prefix + '-input');
+  openWhoisModal(state[prefix].selected, prefix);
+}
+
+window.setVia = function(prefix, i) {
+  const c = i >= 0 ? _whichConns[i] : null;
+  state[prefix].via = c ? c.name : null;
+  state[prefix].viaLabel = c ? c.label : null;
+  if (document.getElementById('whois-modal').classList.contains('show')) closeWhoisModal();
+  updateSelected(prefix);
+  if (state.src.selected && state.tgt.selected) findPath();
+};
+
+// One line above the results saying which link each end was reached
+// through, so a path to the wrong namesake is visible and fixable.
+function namesakeHint(p, data) {
+  if (!p || !p.path || p.path.length < 2) return '';
+  const ends = { src: p.path[1], tgt: p.path[p.path.length - 2] };
+  const lines = [];
+  ['src', 'tgt'].forEach(pf => {
+    const who = escHtml(state[pf].selected);
+    if (state[pf].via) {
+      lines.push(who + ': only paths through ' + escHtml(state[pf].viaLabel)
+        + ' · <a href="#" onclick="setVia(\'' + pf + '\', -1); return false;">allow any ' + who + '</a>');
+    } else if (!data[pf + '_public']) {
+      lines.push(who + ' is reached through ' + escHtml(ends[pf].label || ends[pf].node)
+        + '. Not the ' + who + ' you meant? <a href="#" onclick="openWhichOne(\'' + pf + '\'); return false;">Pick which one</a>');
+    }
+  });
+  return lines.length ? '<div class="namesake-hint">' + lines.join('<br>') + '</div>' : '';
+}
+
+async function openWhoisModal(name, pickFor) {
   const body = document.getElementById('whois-body');
   document.getElementById('modal-overlay').classList.add('show');
   document.getElementById('whois-modal').classList.add('show');
   document.getElementById('whois-close-btn').focus();
   body.innerHTML = '<div class="wi-hdr">' + escHtml(name) + '</div><div class="wi-meta">Loading connections…</div>';
   try {
-    const res = await fetch('/api/entity?name=' + encodeURIComponent(name));
+    const res = await fetch('/api/entity?name=' + encodeURIComponent(name) + (pickFor ? '&limit=40' : ''));
     const d = await res.json();
     if (!d.found) {
       body.innerHTML = '<div class="wi-hdr">' + escHtml(name) + '</div><div class="wi-meta">No record found for this name.</div>';
@@ -5378,9 +5489,22 @@ async function openWhoisModal(name) {
     html += '<div class="wi-meta">' + total + ' connection' + (total === 1 ? '' : 's') + ' in the network</div>';
     if (d.aliases && d.aliases.length) html += '<div class="wi-alias">Also known as: ' + escHtml(d.aliases.join(', ')) + '</div>';
     const conns = d.connections || [];
+    if (pickFor) {
+      _whichPrefix = pickFor;
+      _whichConns = conns;
+      html += '<div class="wi-meta">Several people can share this name, and their records are stored together. '
+        + 'Pick a connection that belongs to the person you mean, and paths will reach them only through it.</div>';
+      html += '<div class="wi-conn wi-pick' + (state[pickFor].via ? '' : ' wi-on') + '" role="button" tabindex="0" onclick="setVia(\'' + pickFor + '\', -1)"'
+        + ' onkeydown="if(event.key===\'Enter\'){setVia(\'' + pickFor + '\', -1);}"><span>Any ' + escHtml(d.name) + '</span><span class="wi-rel">all records</span></div>';
+    }
     if (conns.length) {
-      const rowHtml = c => '<div class="wi-conn"><span' + (c.is_org ? ' class="wi-org"' : '') + '>' + escHtml(c.label)
-        + '</span><span class="wi-rel">' + escHtml(c.relation_label || c.relation || '—') + '</span></div>';
+      const rowHtml = c => {
+        const i = conns.indexOf(c);
+        const pick = pickFor ? ' wi-pick' + (state[pickFor].via === c.name ? ' wi-on' : '') + '" role="button" tabindex="0" onclick="setVia(\'' + pickFor + '\', ' + i + ')"'
+          + ' onkeydown="if(event.key===\'Enter\'){setVia(\'' + pickFor + '\', ' + i + ');}' : '';
+        return '<div class="wi-conn' + pick + '"><span' + (c.is_org ? ' class="wi-org"' : '') + '>' + escHtml(c.label)
+          + '</span><span class="wi-rel">' + escHtml(c.relation_label || c.relation || '—') + '</span></div>';
+      };
       const orgs = conns.filter(c => c.is_org);
       const ppl = conns.filter(c => !c.is_org);
       if (orgs.length) html += '<div class="wi-sec">Organizations</div>' + orgs.map(rowHtml).join('');
