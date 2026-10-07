@@ -144,3 +144,22 @@ def test_reach_routes_through_the_users_own_contacts(monkeypatch):
     # a contact who IS the target: one step
     direct = pf._reach_via_contacts("Test User", [{"contact": "Target"}], "Target", k=1)
     assert [s["node"] for s in direct["paths"][0]["path"]] == ["Test User", "Target"]
+    # an UNMATCHED contact has no node: "Alice" here is a namesake, not the user's Alice
+    unmatched = pf._reach_via_contacts("Test User", [{"contact": "Alice", "contact_type": "UNMATCHED"}], "Target", k=1)
+    assert unmatched["paths"] == []
+
+
+def test_none_of_these_and_wrong_person(client):
+    client.post("/api/agreement/accept", headers=USER)
+    r = client.post("/api/my/links/unmatched", json={"contact": "Mark Greene", "source": "linkedin"}, headers=USER)
+    assert r.status_code == 200 and r.json()["link"]["contact_type"] == "UNMATCHED"
+    pub = client.post("/api/my/links", json={"contact": "Barack Obama", "visibility": "public"},
+                      headers=USER).json()["link"]
+    r = client.post(f"/api/my/links/{pub['id']}/wrong-person", headers=USER)
+    assert r.status_code == 200 and r.json()["link"]["contact_type"] == "UNMATCHED"
+    links = client.get("/api/my/links", headers=USER).json()["links"]
+    pairs = {(l["contact"], l["contact_type"]) for l in links}   # the DB is shared across this module's tests
+    assert {("Mark Greene", "UNMATCHED"), ("Barack Obama", "UNMATCHED")} <= pairs
+    assert ("Barack Obama", "PERSON") not in pairs
+    other = {"Cf-Access-Authenticated-User-Email": "someone.else@example.com"}
+    assert client.post(f"/api/my/links/{pub['id']}/wrong-person", headers=other).status_code == 404

@@ -418,6 +418,28 @@ class TestManifestCorrectness:
         assert len(hits) == 1, "shared phonetic code must produce exactly one bundled entry"
         assert {m["id"] for m in hits[0]["matches"]} == {101, 102}
 
+    def test_split_namesakes_share_the_bare_name_exact_bundle(self, test_secret, key_version):
+        # A LinkedIn "Michael Smith" must see every employer-split namesake,
+        # so the browser can pick the one at the contact's company.
+        db = [
+            {"id": "michael smith", "name": "michael smith", "score": 500},
+            {"id": "gs", "name": "Michael Smith (Goldman Sachs)", "score": 9},
+            {"id": "tc", "name": "Michael Smith (Tencent Technology (Shenzhen) Company Limited)", "score": 3},
+        ]
+        manifest, _ = cm.build_manifest(db, test_secret, key_version)
+        aes_key = co.full_eval(test_secret, key_version, "exact", ck.normalize_exact("Michael Smith"))
+        hits = cm.lookup(manifest, aes_key)
+        assert len(hits) == 1
+        assert [m["id"] for m in hits[0]["matches"]] == ["michael smith", "gs", "tc"]
+        # the full split name still matches itself exactly
+        own = co.full_eval(test_secret, key_version, "exact", ck.normalize_exact("Michael Smith (Goldman Sachs)"))
+        assert [m["id"] for m in cm.lookup(manifest, own)[0]["matches"]] == ["gs"]
+
+    def test_base_name(self):
+        assert cm.base_name("Wei Wang (Tencent Technology (Shenzhen) Company Limited)") == "Wei Wang"
+        assert cm.base_name("Barack Obama") == "Barack Obama"
+        assert cm.base_name("(Untitled)") == "(Untitled)"
+
 
 class TestFalsePositiveRate:
 

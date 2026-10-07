@@ -3497,6 +3497,36 @@ async def my_links_delete(link_id: int, request: Request):
     return {"success": True}
 
 
+class UnmatchedRequest(BaseModel):
+    contact: str = Field(..., min_length=2, max_length=300)
+    source: Optional[str] = Field(None, max_length=30)
+
+
+@app.post("/api/my/links/unmatched")
+async def my_links_unmatched(req: UnmatchedRequest, request: Request):
+    """'None of these': the contact isn't any of the graph's candidates."""
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    link, e = _ml.add_unmatched(_ml_db(), email, req.contact,
+                                source="linkedin" if req.source == "linkedin" else "contacts")
+    if e:
+        return JSONResponse(status_code=400, content={"success": False, "error": e})
+    return {"success": True, "link": link}
+
+
+@app.post("/api/my/links/{link_id}/wrong-person")
+async def my_links_wrong_person(link_id: int, request: Request):
+    email, err = _ml_guard(request, need_agreement=False)
+    if err:
+        return err
+    link, e = _ml.mark_wrong_person(_ml_db(), email, link_id)
+    if e:
+        return JSONResponse(status_code=404, content={"success": False, "error": e})
+    _invalidate_removed_links()
+    return {"success": True, "link": link}
+
+
 @app.get("/api/my/links/export")
 async def my_links_export(request: Request):
     email, err = _ml_guard(request, need_agreement=False)
@@ -3590,6 +3620,8 @@ def _reach_via_contacts(owner_name, contacts, target_name, k=3):
         return {"error": f"'{target_name}' not found"}
     by_idx = {}
     for c in contacts:
+        if c.get("contact_type") == _ml.UNMATCHED:
+            continue   # no graph node -- resolving the bare name would pick a namesake
         node = _resolve_name(c["contact"])
         if node in _igraph_name_to_idx:
             by_idx[_igraph_name_to_idx[node]] = (node, c)
@@ -5772,7 +5804,7 @@ async function selectAllAddMe() {
   // :not(#select-all-btn) -- this button reuses .add-me-btn for its
   // styling, so a plain '.add-me-btn' query would include itself and try
   // to submit a match with no data-name.
-  const buttons = Array.from(document.querySelectorAll('.add-me-btn:not(#select-all-btn)'));
+  const buttons = Array.from(document.querySelectorAll('.add-me-btn:not(#select-all-btn):not(.psi-unsure):not(.psi-none-btn)'));
   if (!buttons.length) return;
   const names = buttons.map(b => b.dataset.name);
   if (!confirm(
@@ -5909,6 +5941,83 @@ function contactPsiPhoneticKey(name) {
   const normalized = contactPsiNormalizeExact(name);
   if (!normalized) return '';
   return normalized.split(' ').map(contactPsiSoundexToken).sort().join('|');
+}
+
+// "Mark Greene (Ibm)" -> "Mark Greene": split namesakes carry their employer
+// in parentheses (webapp/disambiguation.py, contact_psi.manifest.base_name).
+function contactPsiBaseName(name) {
+  const i = name.indexOf(' (');
+  return name.endsWith(')') && i > 0 ? name.slice(0, i) : name;
+}
+
+function contactPsiNodeOrg(name) {
+  const i = name.indexOf(' (');
+  return name.endsWith(')') && i > 0 ? name.slice(i + 2, -1) : '';
+}
+
+const PSI_ORG_STOP = new Set(['inc', 'llc', 'llp', 'lp', 'ltd', 'limited', 'co', 'corp', 'corporation', 'company',
+  'the', 'group', 'plc', 'holdings', 'sa', 'ag', 'gmbh', 'of', 'and', 'us', 'usa']);
+function contactPsiOrgTokens(org) {
+  return (org || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(t => t && !PSI_ORG_STOP.has(t));
+}
+
+// 0..1: how well a LinkedIn company names a candidate's employer.
+// "IBM" ~ "International Business Machines Corporation" via initials.
+function contactPsiOrgScore(company, nodeOrg) {
+  const a = contactPsiOrgTokens(company), b = contactPsiOrgTokens(nodeOrg);
+  if (!a.length || !b.length) return 0;
+  const A = new Set(a), B = new Set(b);
+  if (a.join(' ') === b.join(' ')) return 1;
+  const initials = t => t.map(w => w[0]).join('');
+  if ((a.length === 1 && a[0].length > 1 && a[0] === initials(b))
+      || (b.length === 1 && b[0].length > 1 && b[0] === initials(a))) return 0.9;
+  const shared = [...A].filter(t => B.has(t)).length;
+  if (shared && (shared === A.size || shared === B.size)) return 0.8;
+  return shared / new Set([...A, ...B]).size;
+}
+
+let psiCandidates = {};
+
+function psiRowCandidate(el) {
+  const row = el.closest('.psi-row');
+  const cands = psiCandidates[row.dataset.row] || [];
+  const sel = row.querySelector('.psi-pick');
+  return cands[sel ? Number(sel.value) : 0];
+}
+
+function psiPickChanged(sel) {
+  const c = psiRowCandidate(sel);
+  const row = sel.closest('.psi-row');
+  const btn = row.querySelector('.add-me-btn:not(.psi-none-btn)');
+  if (btn) btn.dataset.name = c.name;
+  const tier = row.querySelector('.psi-tier');
+  if (tier) tier.textContent = `(${{ exact: 'Definite', phonetic: 'Likely', possible: 'Possible' }[c.tier]})`;
+}
+
+function psiWhois(btn) {
+  whoisTriggerEl = btn;
+  whoisTriggerFallback = null;
+  openWhoisModal(psiRowCandidate(btn).name);
+}
+
+async function psiNoneOfThese(btn) {
+  btn.disabled = true;
+  const r = await fetch('/api/my/links/unmatched', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contact: btn.dataset.contact, source: btn.dataset.source }),
+  }).catch(() => null);
+  const d = r ? await r.json().catch(() => ({})) : {};
+  const row = btn.closest('.psi-row');
+  if (r && r.ok) {
+    row.querySelectorAll('button, select').forEach(el => el.remove());
+    row.insertAdjacentHTML('beforeend', ' <span style="color:#8b949e">Kept privately as not in the database yet</span>');
+    myLinksLoad();
+  } else {
+    btn.disabled = false;
+    btn.insertAdjacentHTML('afterend', ` <span style="color:#f85149">${escHtml(d.error === 'agreement_required'
+      ? 'Accept the user agreement under "My links" first' : (d.error || 'Could not save that'))}</span>`);
+  }
 }
 
 function contactPsiTrigrams(name) {
@@ -6063,10 +6172,12 @@ function csvSplitLine(line) {
 }
 
 // --- My links (private-service beta) ---------------------------------------
+let myLinksEnabled = false;   // set once /api/my/links answers (user is in the beta)
 async function myLinksLoad() {
   let res;
   try { res = await fetch('/api/my/links'); } catch (e) { return; }
   if (!res.ok) return;   // not in the beta: the panel stays hidden
+  myLinksEnabled = true;
   const d = await res.json();
   document.getElementById('mylinks-section').style.display = 'block';
   document.getElementById('mylinks-agree').style.display = d.agreement_accepted ? 'none' : 'block';
@@ -6077,10 +6188,16 @@ async function myLinksLoad() {
     `${d.links.length} link${d.links.length === 1 ? '' : 's'} — ${pub} public (max ${max}), the rest private (only you see them).`;
   const list = document.getElementById('mylinks-list');
   list.innerHTML = d.links.map(l => {
+    if (l.contact_type === 'UNMATCHED') {
+      return `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;"><span style="flex:1">${escHtml(l.contact)}</span>`
+           + '<span style="color:#8b949e" title="Not matched to anyone in the database; not used in searches">not in database yet</span>'
+           + `<button class="add-me-btn" title="Delete" onclick="myLinkDelete(${l.id}, this)">✕</button></div>`;
+    }
     const isPub = l.visibility === 'public';
     const badge = isPub ? '<span style="color:#58a6ff">public</span>' : '<span style="color:#8b949e">private</span>';
     const toggle = `<button class="add-me-btn" onclick="myLinkVisibility(${l.id}, '${isPub ? 'private' : 'public'}')">${isPub ? 'Make private' : 'Make public'}</button>`;
-    return `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;"><span style="flex:1">${escHtml(l.contact)}</span>${badge}${toggle}`
+    const wrong = `<button class="add-me-btn" title="This is a namesake, not my contact" onclick="myLinkWrongPerson(${l.id}, this)">Wrong person</button>`;
+    return `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;"><span style="flex:1">${escHtml(l.contact)}</span>${badge}${toggle}${wrong}`
          + `<button class="add-me-btn" title="Delete" onclick="myLinkDelete(${l.id}, this)">✕</button></div>`;
   }).join('') || '<div class="psi-note">No links yet — use Check My Contacts or Check My LinkedIn Connections above, then "+ Add me".</div>';
 }
@@ -6095,6 +6212,13 @@ async function myLinkVisibility(id, visibility) {
                                                 body: JSON.stringify({ visibility }) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) { alertLike(d.error || 'Could not change that link.'); return; }
+  myLinksLoad();
+}
+
+async function myLinkWrongPerson(id, btn) {
+  btn.disabled = true;
+  const r = await fetch(`/api/my/links/${id}/wrong-person`, { method: 'POST' });
+  if (!r.ok) { btn.disabled = false; alertLike('Could not change that link.'); return; }
   myLinksLoad();
 }
 
@@ -6147,13 +6271,22 @@ async function doLinkedInImport(input) {
   const header = csvSplitLine(lines[headerIdx]).map(h => h.trim().toLowerCase());
   const firstIdx = header.findIndex(h => h.includes('first'));
   const lastIdx = header.findIndex(h => h.includes('last'));
+  const companyIdx = header.findIndex(h => h === 'company');
+  const positionIdx = header.findIndex(h => h === 'position');
+  // company/position never leave the browser: they only rank same-named
+  // candidates locally (contactPsiOrgScore) and are shown next to each match
+  const meta = {};
   const names = lines.slice(headerIdx + 1)
     .map(line => {
       const cols = csvSplitLine(line);
-      return `${(cols[firstIdx] || '').trim()} ${(cols[lastIdx] || '').trim()}`.trim();
+      const name = `${(cols[firstIdx] || '').trim()} ${(cols[lastIdx] || '').trim()}`.trim();
+      const company = companyIdx >= 0 ? (cols[companyIdx] || '').trim() : '';
+      const position = positionIdx >= 0 ? (cols[positionIdx] || '').trim() : '';
+      if (name && (company || position)) meta[name] = { company, position };
+      return name;
     })
     .filter(name => name.length > 3);
-  await checkContacts(names, 'No connections found in file', 'linkedin');
+  await checkContacts(names, 'No connections found in file', 'linkedin', meta);
 }
 
 async function pickContactsNative() {
@@ -6174,7 +6307,7 @@ async function pickContactsNative() {
   await checkContacts(names, 'No named contacts selected');
 }
 
-async function checkContacts(names, emptyMessage, source = 'contacts') {
+async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}) {
   const btn = document.getElementById('psi-btn');
   const result = document.getElementById('psi-result');
   const loading = document.getElementById('psi-loading');
@@ -6323,7 +6456,10 @@ async function checkContacts(names, emptyMessage, source = 'contacts') {
     await Promise.all(Array.from({ length: Math.min(4, batches.length) }, batchWorker));
 
     const tierRank = { exact: 0, phonetic: 1, possible: 2 };
-    const bestByContact = {};
+    // Every plausible graph node per contact, not just the top one: a common
+    // name has namesakes ("Mark Greene", "Michael Smith (Goldman Sachs)", ...)
+    // and the server-side order is by degree, not by who the contact is.
+    const candsByContact = {};
     for (const q of queries) {
       const aesKeyBytes = q.aesKeyBytes;
       const entries = buckets[q.prefix] || [];
@@ -6350,40 +6486,77 @@ async function checkContacts(names, emptyMessage, source = 'contacts') {
           // no such check since its OPRF item IS the normalized string.
           let similarity = 1;
           if (q.tier !== 'exact') {
-            similarity = contactPsiJaccard(contactPsiTrigrams(q.name), contactPsiTrigrams(m.name));
+            similarity = contactPsiJaccard(contactPsiTrigrams(q.name), contactPsiTrigrams(contactPsiBaseName(m.name)));
             if (similarity < 0.5) continue; // phonetic/band collision, not a real resemblance
           }
           const rank = tierRank[q.tier];
-          const current = bestByContact[q.name];
+          const cands = candsByContact[q.name] || (candsByContact[q.name] = {});
+          const current = cands[m.id];
           if (!current || rank < current.rank || (rank === current.rank && similarity > current.similarity)) {
-            bestByContact[q.name] = { rank, similarity, tier: q.tier, name: m.name, id: m.id };
+            cands[m.id] = { rank, similarity, tier: q.tier, name: m.name, id: m.id,
+                            order: current ? current.order : Object.keys(cands).length };
           }
         }
       }
     }
 
     const tierLabel = { exact: 'Definite', phonetic: 'Likely', possible: 'Possible' };
-    const matchedContacts = Object.keys(bestByContact);
+    const matchedContacts = Object.keys(candsByContact);
+    const rankedFor = contact => {
+      const company = (meta[contact] || {}).company || '';
+      return Object.values(candsByContact[contact])
+        .map(c => Object.assign(c, { org: contactPsiOrgScore(company, contactPsiNodeOrg(c.name)) }))
+        .sort((a, b) => (b.org >= 0.5) - (a.org >= 0.5) || a.rank - b.rank || b.org - a.org
+                        || b.similarity - a.similarity || a.order - b.order)
+        .slice(0, 12);
+    };
+    psiCandidates = {};
     const warningHtml = shardsGaveUp > 0
       ? `<div style="color:#d29922;margin-top:6px;">Note: ${shardsGaveUp} of ${neededShardIds.length} lookup shard${shardsGaveUp === 1 ? '' : 's'} `
-        + `couldn\u2019t be reached after retrying \u2014 a few matches may be missing. Try again in a moment for a complete check.</div>`
+        + `couldn’t be reached after retrying — a few matches may be missing. Try again in a moment for a complete check.</div>`
       : '';
     if (!matchedContacts.length) {
-      result.innerHTML = `Checked ${names.length} contact${names.length === 1 ? '' : 's'} privately \u2014 no matches found` + warningHtml;
+      result.innerHTML = `Checked ${names.length} contact${names.length === 1 ? '' : 's'} privately — no matches found` + warningHtml;
     } else {
-      const addableCount = matchedContacts.filter(c => bestByContact[c].tier !== 'possible').length;
-      const rows = matchedContacts.map(contact => {
-        const m = bestByContact[contact];
-        const addBtn = m.tier === 'possible' ? '' :
-          ` <button class="add-me-btn" data-name="${escHtml(m.name)}" data-source="${source}" onclick="submitAddMe(this)">+ Add me</button>`;
-        return `<div>${escHtml(contact)} \u2192 <strong>${escHtml(m.name)}</strong> <span style="color:#8b949e">(${tierLabel[m.tier]})</span>${addBtn}</div>`;
+      let addableCount = 0;
+      const rows = matchedContacts.map((contact, rowIdx) => {
+        const cands = rankedFor(contact);
+        psiCandidates[rowIdx] = cands;
+        const top = cands[0];
+        const info = meta[contact] || {};
+        // "Add all" only takes rows where the pick isn't a guess between namesakes
+        const confident = top.tier !== 'possible' && (cands.length === 1 || top.org >= 0.5);
+        if (confident) addableCount++;
+        const pick = cands.length === 1
+          ? `<strong>${escHtml(top.name)}</strong>`
+          : `<select class="psi-pick" onchange="psiPickChanged(this)" aria-label="Which ${escHtml(contact)}?">`
+            + cands.map((c, i) => `<option value="${i}">${escHtml(c.name)}${c.org >= 0.5 ? ' ★' : ''}</option>`).join('')
+            + '</select>';
+        const addBtn = top.tier === 'possible' ? '' :
+          ` <button class="add-me-btn${confident ? '' : ' psi-unsure'}" data-name="${escHtml(top.name)}" data-source="${source}" onclick="submitAddMe(this)">+ Add me</button>`;
+        const noneBtn = myLinksEnabled
+          ? ` <button class="add-me-btn psi-none-btn" data-contact="${escHtml(contact)}" data-source="${source}" onclick="psiNoneOfThese(this)">None of these</button>`
+          : '';
+        const whois = ` <button class="whois-btn" title="Who is this?" aria-label="Who is this?" onclick="psiWhois(this)">ⓘ</button>`;
+        let note = '';
+        if (info.company || info.position) {
+          note = `LinkedIn: ${escHtml([info.company, info.position].filter(Boolean).join(' — '))}`;
+          if (info.company && top.org < 0.5)
+            note += cands.length > 1 ? ' · none of these names mention that company — check ⓘ before adding'
+                                     : ' · check ⓘ that this is the same person';
+        } else if (cands.length > 1) {
+          note = `${cands.length} people share this name — pick the right one (ⓘ shows who each is)`;
+        }
+        return `<div class="psi-row" data-row="${rowIdx}">${escHtml(contact)} → ${pick} `
+          + `<span class="psi-tier" style="color:#8b949e">(${tierLabel[top.tier]})</span>${whois}${addBtn}${noneBtn}`
+          + (note ? `<div class="psi-note" style="margin:0 0 4px 1.2em;">${note}</div>` : '') + '</div>';
       }).join('');
       const selectAllBtn = addableCount > 1
-        ? ` <button id="select-all-btn" class="add-me-btn" onclick="selectAllAddMe()">\u2713 Add all ${addableCount} matches</button>`
+        ? ` <button id="select-all-btn" class="add-me-btn" onclick="selectAllAddMe()">✓ Add all ${addableCount} clear matches</button>`
         : '';
       addMeSubmittedCount = 0;
       result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>${selectAllBtn}`
-        + `<div class="psi-note" style="margin:6px 0;">Only use "+ Add me" for people who\u2019d actually take your call today \u2014 not a casual or stale contact you just happen to have saved.</div>`
+        + `<div class="psi-note" style="margin:6px 0;">Only use "+ Add me" for people who’d actually take your call today — not a casual or stale contact you just happen to have saved.</div>`
         + rows + warningHtml;
     }
   } catch (error) {
