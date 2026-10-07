@@ -40,6 +40,10 @@ QID_MAP = os.environ.get("QID_MAP_PATH", os.path.join(os.path.expanduser("~"), "
 # imports) already carry their QID -- Meryl Streep, MrBeast. Exported from
 # those rows' evidence on 2026-10-01; re-export if the imports are rerun.
 QID_IMPORTS = os.environ.get("QID_IMPORTS_PATH", os.path.join(os.path.expanduser("~"), "qid_map_imports.jsonl"))
+# people public by ROLE (candidates, legislators, judges, SEC insiders,
+# lobbyists) -- build_public_by_role.py; part of the public set for the demo,
+# public links and query rules, but not used to pick crawlie subjects
+PUBLIC_BY_ROLE = os.environ.get("PUBLIC_BY_ROLE_PATH", os.path.join(os.path.expanduser("~"), "public_by_role.json"))
 
 MIN_DEGREE = 15          # exclude near-isolated stub nodes -- "surprising" divergence there is just noise
 MAX_PAIR_FACTOIDS = 20
@@ -596,8 +600,17 @@ def main():
     with gzip.open(OUT, "wt", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
 
+    # the PUBLIC set (notable + public by role) for the demo, public links and
+    # question rules; crawlie subjects above stay notable-only
+    public = set(verified)
+    try:
+        with open(PUBLIC_BY_ROLE, encoding="utf-8") as f:
+            public |= {n.lower() for n in json.load(f)}
+    except FileNotFoundError:
+        print(f"WARNING: {PUBLIC_BY_ROLE} not found -- public set is notable people only", flush=True)
     with gzip.open(VERIFIED_OUT, "wt", encoding="utf-8") as f:
-        json.dump(sorted(verified), f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(sorted(public), f, ensure_ascii=False, separators=(",", ":"))
+    print(f"Public people (notable + by role): {len(public):,}", flush=True)
 
     print(f"Wrote {len(records)} crawlie facts ({len(publishable)} publishable, "
           f"{len(verified)} verified public figures) to {OUT}", flush=True)
