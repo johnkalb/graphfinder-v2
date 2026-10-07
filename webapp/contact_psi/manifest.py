@@ -14,14 +14,32 @@ logger = logging.getLogger(__name__)
 MAX_MANIFEST_BYTES = 150 * 1024 * 1024
 POSSIBLE_TIER_MAX_ENTITIES = None
 MAX_BUNDLE_MATCHES = 20
+# Exact-tier bundles hold every same-named node -- common names are split by
+# employer into "Michael Smith (Goldman Sachs)" etc. (disambiguation.py), and
+# the browser picks between them using the contact's LinkedIn company, so a
+# low cap would hide the right one behind higher-degree namesakes.
+MAX_EXACT_BUNDLE_MATCHES = 200
 
 def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
+
+def base_name(name: str) -> str:
+    """'Wei Wang (Tencent Technology (Shenzhen) Company Limited)' -> 'Wei Wang';
+    names without a trailing parenthetical come back unchanged."""
+    name = name.strip()
+    i = name.find(" (")
+    return name[:i].strip() if name.endswith(")") and i > 0 else name
 
 def _items(name: str):
     exact = keys.normalize_exact(name)
     if exact:
         yield "exact", exact
+    # A split namesake is also findable by the bare name a contact list holds.
+    base = base_name(name)
+    if base != name:
+        base_exact = keys.normalize_exact(base)
+        if base_exact and base_exact != exact:
+            yield "exact", base_exact
     phonetic = keys.phonetic_key(name)
     if phonetic:
         yield "phonetic", phonetic
@@ -44,7 +62,8 @@ def build_manifest(db_records, secret_scalar: bytes, key_version: int):
 
     buckets = defaultdict(list)
     for (tier, item), matches in groups.items():
-        matches = [m for _, m in sorted(matches, key=lambda pair: pair[0], reverse=True)[:MAX_BUNDLE_MATCHES]]
+        cap = MAX_EXACT_BUNDLE_MATCHES if tier == "exact" else MAX_BUNDLE_MATCHES
+        matches = [m for _, m in sorted(matches, key=lambda pair: pair[0], reverse=True)[:cap]]
         key = oprf.full_eval(secret_scalar, key_version, tier, item)
         payload = json.dumps({"tier": tier, "matches": matches}, separators=(",", ":"), ensure_ascii=False).encode()
         nonce = os.urandom(12)

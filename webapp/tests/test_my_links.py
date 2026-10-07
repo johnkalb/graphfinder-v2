@@ -101,3 +101,35 @@ def test_export_csv(dbp):
     out = ml.export_csv(dbp, "a@x.org")
     assert out.splitlines()[0] == "contact,type,relation,source,visibility,added"
     assert "Jane Doe,PERSON,SELF_ATTESTED_CONTACT,linkedin,private" in out
+
+
+def test_none_of_these_keeps_an_unmatched_private_contact(dbp):
+    link, err = ml.add_unmatched(dbp, "a@x.org", "  Mark   Greene ", source="linkedin")
+    assert err is None
+    assert (link["contact"], link["contact_type"], link["visibility"], link["relation"]) == \
+        ("Mark Greene", ml.UNMATCHED, "private", "LINKEDIN_CONNECTION")
+    again, _ = ml.add_unmatched(dbp, "a@x.org", "Mark Greene")
+    assert again["id"] == link["id"]
+    _, err = ml.set_visibility(dbp, "a@x.org", link["id"], "public", lambda n: True)
+    assert err and "only be private" in err
+    assert ml.public_links(dbp) == []
+
+
+def test_matching_later_replaces_the_unmatched_placeholder(dbp):
+    ml.add_unmatched(dbp, "a@x.org", "Mark Greene")
+    ml.add_link(dbp, "a@x.org", "Mark Greene (Ibm)")
+    assert [(l["contact"], l["contact_type"]) for l in ml.list_links(dbp, "a@x.org")] == \
+        [("Mark Greene (Ibm)", "PERSON")]
+
+
+def test_wrong_person_unmatches_and_withdraws_a_public_link(dbp):
+    pub, _ = ml.add_link(dbp, "a@x.org", "Barack Obama", visibility="public", is_verified=is_verified)
+    new, err = ml.mark_wrong_person(dbp, "a@x.org", pub["id"])
+    assert err is None and new["contact_type"] == ml.UNMATCHED and new["visibility"] == "private"
+    assert [l["contact"] for l in ml.removed_public_links(dbp)] == ["Barack Obama"]
+    assert ml.public_links(dbp) == []
+    split, _ = ml.add_link(dbp, "a@x.org", "Mark Greene (Texas Senate)")
+    new, _ = ml.mark_wrong_person(dbp, "a@x.org", split["id"])
+    assert new["contact"] == "Mark Greene"
+    assert sorted(l["contact"] for l in ml.list_links(dbp, "a@x.org")) == ["Barack Obama", "Mark Greene"]
+    assert ml.mark_wrong_person(dbp, "b@x.org", new["id"]) == (None, "link not found")

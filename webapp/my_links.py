@@ -8,6 +8,10 @@ Spec decisions this implements (plan: ~/.claude/plans/resilient-doodling-graham.
   11 existing approved self-reported links became private links
   12 the user agreement must be accepted first
 
+A contact the user couldn't find in the graph ("None of these") or whose
+match was a namesake ("Wrong person") is kept as an UNMATCHED link: private,
+never in searches, kept so it can be matched once the person is in the graph.
+
 Pure database functions over the app DB (db.connect, '?' placeholders, so the
 same code runs on SQLite in tests and Postgres in production); the HTTP layer
 lives in pathfinder.py.
@@ -22,6 +26,7 @@ except ImportError:  # imported as webapp.my_links
 MAX_PUBLIC_LINKS = 50
 AGREEMENT_VERSION = "beta-1"
 SELF_REPORTED = ("SELF_ATTESTED_CONTACT", "LINKEDIN_CONNECTION")
+UNMATCHED = "UNMATCHED"   # contact_type of a contact with no graph node (yet)
 
 
 def _now():
@@ -71,8 +76,10 @@ def public_count(db_path, owner):
     return int(r["n"])
 
 
-def _check_public(db_path, owner, contact, is_verified, exclude_id=None):
+def _check_public(db_path, owner, contact, is_verified, exclude_id=None, contact_type="PERSON"):
     """None if the link may be public, else the reason it may not."""
+    if contact_type == UNMATCHED:
+        return "This contact isn't matched to anyone in the database, so it can only be private."
     if not is_verified(contact):
         return ("Only links to verified public figures can be public; links to private people "
                 "stay private to protect them.")
@@ -90,24 +97,56 @@ def add_link(db_path, owner, contact, *, contact_type="PERSON", relation="SELF_A
         return None, "visibility must be 'private' or 'public'"
     conn = db.connect(db_path)
     existing = conn.execute("SELECT id, visibility FROM my_links WHERE owner_email = ? AND contact = ? "
-                            "AND deleted_at IS NULL", (owner, contact)).fetchone()
+                            "AND contact_type = ? AND deleted_at IS NULL", (owner, contact, contact_type)).fetchone()
     conn.close()
     if existing:
         if visibility == "public" and existing["visibility"] != "public":
             return set_visibility(db_path, owner, existing["id"], "public", is_verified)
         return get_link(db_path, owner, existing["id"]), None
     if visibility == "public":
-        err = _check_public(db_path, owner, contact, is_verified)
+        err = _check_public(db_path, owner, contact, is_verified, contact_type=contact_type)
         if err:
             return None, err
     conn = db.connect(db_path)
+    if contact_type != UNMATCHED:
+        # matching a contact that was waiting as UNMATCHED replaces the placeholder
+        i = contact.find(" (")
+        base = contact[:i] if contact.endswith(")") and i > 0 else contact
+        conn.execute("UPDATE my_links SET deleted_at = ? WHERE owner_email = ? AND contact_type = ? "
+                     "AND lower(contact) = lower(?) AND deleted_at IS NULL", (_now(), owner, UNMATCHED, base))
     conn.execute("INSERT INTO my_links (owner_email, contact, contact_type, relation, source, visibility, created_at) "
                  "VALUES (?, ?, ?, ?, ?, ?, ?)", (owner, contact, contact_type, relation, source, visibility, _now()))
     conn.commit()
-    r = conn.execute("SELECT id FROM my_links WHERE owner_email = ? AND contact = ? AND deleted_at IS NULL",
-                     (owner, contact)).fetchone()
+    r = conn.execute("SELECT id FROM my_links WHERE owner_email = ? AND contact = ? AND contact_type = ? "
+                     "AND deleted_at IS NULL", (owner, contact, contact_type)).fetchone()
     conn.close()
     return get_link(db_path, owner, r["id"]), None
+
+
+def add_unmatched(db_path, owner, contact, source=None):
+    """'None of these': keep the contact, privately, without a graph match."""
+    contact = " ".join((contact or "").split())
+    if not contact:
+        return None, "contact name required"
+    relation = "LINKEDIN_CONNECTION" if source == "linkedin" else "SELF_ATTESTED_CONTACT"
+    return add_link(db_path, owner, contact, contact_type=UNMATCHED, relation=relation, source=source)
+
+
+def mark_wrong_person(db_path, owner, link_id):
+    """'Wrong person': the match was a namesake. The link leaves searches at
+    once (a public one is withdrawn like a delete) and the contact is kept as
+    UNMATCHED under the base name, e.g. 'Mark Greene (Ibm)' -> 'Mark Greene'."""
+    link = get_link(db_path, owner, link_id)
+    if not link:
+        return None, "link not found"
+    if link["contact_type"] == UNMATCHED:
+        return link, None
+    name = link["contact"].strip()
+    i = name.find(" (")
+    if name.endswith(")") and i > 0:
+        name = name[:i]
+    delete_link(db_path, owner, link_id)
+    return add_unmatched(db_path, owner, name, link["source"])
 
 
 def get_link(db_path, owner, link_id):
@@ -126,7 +165,7 @@ def set_visibility(db_path, owner, link_id, visibility, is_verified=lambda name:
     if visibility not in ("private", "public"):
         return None, "visibility must be 'private' or 'public'"
     if visibility == "public" and link["visibility"] != "public":
-        err = _check_public(db_path, owner, link["contact"], is_verified)
+        err = _check_public(db_path, owner, link["contact"], is_verified, contact_type=link["contact_type"])
         if err:
             return None, err
     if visibility == "private" and link["visibility"] == "public":
@@ -139,8 +178,8 @@ def set_visibility(db_path, owner, link_id, visibility, is_verified=lambda name:
                      "VALUES (?, ?, ?, ?, ?, 'private', ?)",
                      (owner, link["contact"], link["contact_type"], link["relation"], link["source"], now))
         conn.commit()
-        r = conn.execute("SELECT id FROM my_links WHERE owner_email = ? AND contact = ? AND deleted_at IS NULL",
-                         (owner, link["contact"])).fetchone()
+        r = conn.execute("SELECT id FROM my_links WHERE owner_email = ? AND contact = ? AND contact_type = ? "
+                         "AND deleted_at IS NULL", (owner, link["contact"], link["contact_type"])).fetchone()
         conn.close()
         return get_link(db_path, owner, r["id"]), None
     conn = db.connect(db_path)
