@@ -6367,6 +6367,20 @@ async function pickContactsNative() {
   await checkContacts(names, 'No named contacts selected');
 }
 
+// "Done" on the match list: close it and show the result in My links. Nothing
+// is lost -- every contact already added is saved; unanswered rows just go.
+function psiDone() {
+  const result = document.getElementById('psi-result');
+  result.innerHTML = '';
+  result.style.display = 'none';
+  psiCandidates = {};
+  if (myLinksEnabled) {
+    myLinksLoad();
+    const sec = document.getElementById('mylinks-section');
+    if (sec && sec.style.display !== 'none') sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
 async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}) {
   const btn = document.getElementById('psi-btn');
   const result = document.getElementById('psi-result');
@@ -6615,9 +6629,11 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
         ? ` <button id="select-all-btn" class="add-me-btn" onclick="selectAllAddMe()">✓ Add all ${addableCount} clear matches</button>`
         : '';
       addMeSubmittedCount = 0;
-      result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>${selectAllBtn}`
+      const doneBtn = ` <button class="add-me-btn" onclick="psiDone()" title="Close this list; your added contacts are in My links">Done</button>`;
+      result.innerHTML = `<strong>${matchedContacts.length} of ${names.length} contact${names.length === 1 ? '' : 's'} found:</strong>${selectAllBtn}${doneBtn}`
         + `<div class="psi-note" style="margin:6px 0;">Only use "+ Add me" for people who’d actually take your call today — not a casual or stale contact you just happen to have saved.</div>`
-        + rows + warningHtml;
+        + rows + warningHtml
+        + `<div style="margin-top:8px;">${doneBtn}</div>`;
     }
   } catch (error) {
     result.textContent = 'Error: ' + error.message;
