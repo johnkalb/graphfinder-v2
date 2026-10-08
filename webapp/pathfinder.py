@@ -779,6 +779,8 @@ _PLACEHOLDER_ENTITY_PATTERNS = [
                                                           # committee bucketed into one node.
     re.compile(r"^Q\d{5,}$"),                            # unresolved Wikidata QID
     re.compile(r"^A\d{8,}$"),                            # unresolved SEC/IARD-style ID
+    re.compile(r".* \(classes of \d{4}–\d{4}\)$"),        # class-year node (build_scored_edges.py):
+                                                          # appears inside paths, never searched for
 ]
 
 
@@ -6221,9 +6223,43 @@ async function myLinksLoad() {
           ? `<button class="add-me-btn" title="Adds you, linked to this public figure, to the shared graph that everyone searches" onclick="myLinkVisibility(${l.id}, 'public')">Make public</button>`
           : '');
     const wrong = `<button class="add-me-btn" title="This is a namesake, not my contact" onclick="myLinkWrongPerson(${l.id}, this)">Wrong person</button>`;
-    return `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;"><span style="flex:1">${escHtml(l.contact)}</span>${badge}${toggle}${wrong}`
+    // Who the database matched, so a namesake is visible before it's used:
+    // a one-line summary (filled in below) and the full identity card (ⓘ).
+    const who = `<button class="whois-btn" title="Who is this in the database?" onclick="myLinkWhois(${l.id}, this)">ⓘ</button>`;
+    return `<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid #21262d;">`
+         + `<div style="flex:1;min-width:0;"><div>${escHtml(l.contact)} ${who}</div>`
+         + `<div class="psi-note" id="ml-who-${l.id}" style="font-size:0.78rem;margin:0;">Looking up who this is in the database…</div></div>`
+         + `${badge}${toggle}${wrong}`
          + `<button class="add-me-btn" title="Delete" onclick="myLinkDelete(${l.id}, this)">✕</button></div>`;
   }).join('') || '<div class="psi-note">No links yet — use Check My Contacts or Check My LinkedIn Connections above, then "+ Add me".</div>';
+  _myLinksById = Object.fromEntries(d.links.map(l => [l.id, l]));
+  d.links.filter(l => l.contact_type !== 'UNMATCHED').forEach(myLinkSummary);
+}
+
+let _myLinksById = {};
+
+// "In database: Mark Greene — 17 connections, e.g. Texas House of
+// Representatives (Public Office), ..." -- enough to spot a namesake.
+async function myLinkSummary(l) {
+  const el = document.getElementById('ml-who-' + l.id);
+  if (!el) return;
+  let d;
+  try { d = await (await fetch('/api/entity?limit=3&name=' + encodeURIComponent(l.contact))).json(); }
+  catch (e) { el.textContent = ''; return; }
+  if (!d || !d.found) { el.textContent = 'Not found in the database any more.'; return; }
+  const ex = (d.connections || []).map(c => escHtml(c.label || c.name)
+    + (c.relation_label ? ' <span style="opacity:.7">(' + escHtml(c.relation_label) + ')</span>' : '')).join(', ');
+  el.innerHTML = 'In database: <strong>' + escHtml(d.name) + '</strong> — ' + (d.total_connections || 0)
+    + ' connection' + (d.total_connections === 1 ? '' : 's') + (ex ? ', e.g. ' + ex : '')
+    + '. Not your contact? Use “Wrong person”.';
+}
+
+function myLinkWhois(id, btn) {
+  const l = _myLinksById[id];
+  if (!l) return;
+  whoisTriggerEl = btn;
+  whoisTriggerFallback = null;
+  openWhoisModal(l.contact);
 }
 
 async function myLinksAccept() {
