@@ -45,6 +45,8 @@ def test_agreement_gate_then_full_lifecycle(client):
     listing = client.get("/api/my/links", headers=USER).json()
     assert {l["contact"] for l in listing["links"]} == {"Jane Doe", "Barack Obama"}
     assert listing["public_count"] == 1 and listing["agreement_accepted"] is True
+    # the panel offers "Make public" only for verified public figures
+    assert {l["contact"]: l["can_be_public"] for l in listing["links"]} == {"Jane Doe": False, "Barack Obama": True}
 
     export = client.get("/api/my/links/export", headers=USER)
     assert export.status_code == 200 and "Barack Obama" in export.text
