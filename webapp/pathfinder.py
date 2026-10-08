@@ -3453,7 +3453,12 @@ async def my_links_list(request: Request):
     if err:
         return err
     p = _ml_db()
-    return {"success": True, "links": _ml.list_links(p, email), "public_count": _ml.public_count(p, email),
+    links = _ml.list_links(p, email)
+    # Only a link to a verified public figure may be public (decision 2), so
+    # the panel offers "Make public" only there -- not on every link.
+    for l in links:
+        l["can_be_public"] = l.get("contact_type") != "UNMATCHED" and _is_verified_public(l.get("contact"))
+    return {"success": True, "links": links, "public_count": _ml.public_count(p, email),
             "max_public": _ml.MAX_PUBLIC_LINKS, "agreement_accepted": _ml.agreement_accepted(p, email),
             "agreement_version": _ml.AGREEMENT_VERSION}
 
@@ -4684,6 +4689,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div style="margin-top:8px;"><button id="mylinks-accept-btn" onclick="myLinksAccept()">I have read and agree to the user agreement</button></div>
     </div>
     <div id="mylinks-main" style="display:none;">
+      <div class="psi-note" style="margin:4px 0 6px;">
+        These are the people you know who matched someone in our database. They're <strong>private</strong>:
+        only you see them, and they're used only in your own searches. You aren't in the shared database
+        yourself (the one everyone else searches) unless you make a link public.
+      </div>
+      <div class="psi-note" style="margin:0 0 6px;">
+        <strong>Find my best route</strong>: type anyone in the database. We find which of your contacts is
+        closest to them and show the route &mdash; <em>You &rarr; your contact &rarr; &hellip; &rarr; them</em> &mdash;
+        plus up to two alternatives through other contacts.
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
         <input id="reach-target" type="text" placeholder="How do I reach&hellip; (a person or organization)" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myReach()">
         <button onclick="myReach()">Find my best route</button>
@@ -6185,7 +6200,10 @@ async function myLinksLoad() {
   if (!d.agreement_accepted) return;
   const pub = d.public_count, max = d.max_public;
   document.getElementById('mylinks-summary').textContent =
-    `${d.links.length} link${d.links.length === 1 ? '' : 's'} — ${pub} public (max ${max}), the rest private (only you see them).`;
+    `${d.links.length} link${d.links.length === 1 ? '' : 's'} — ${pub} public (max ${max}), the rest private (only you see them).`
+    + (pub === 0 && !d.links.some(l => l.can_be_public)
+        ? ' None of your contacts is a verified public figure, so none can be made public.'
+        : ' Only links to verified public figures can be made public.');
   const list = document.getElementById('mylinks-list');
   list.innerHTML = d.links.map(l => {
     if (l.contact_type === 'UNMATCHED') {
@@ -6195,7 +6213,13 @@ async function myLinksLoad() {
     }
     const isPub = l.visibility === 'public';
     const badge = isPub ? '<span style="color:#58a6ff">public</span>' : '<span style="color:#8b949e">private</span>';
-    const toggle = `<button class="add-me-btn" onclick="myLinkVisibility(${l.id}, '${isPub ? 'private' : 'public'}')">${isPub ? 'Make private' : 'Make public'}</button>`;
+    // "Make public" only where it's allowed: the contact is a verified public
+    // figure. A public link is what puts you in the shared graph.
+    const toggle = isPub
+      ? `<button class="add-me-btn" onclick="myLinkVisibility(${l.id}, 'private')">Make private</button>`
+      : (l.can_be_public
+          ? `<button class="add-me-btn" title="Adds you, linked to this public figure, to the shared graph that everyone searches" onclick="myLinkVisibility(${l.id}, 'public')">Make public</button>`
+          : '');
     const wrong = `<button class="add-me-btn" title="This is a namesake, not my contact" onclick="myLinkWrongPerson(${l.id}, this)">Wrong person</button>`;
     return `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;"><span style="flex:1">${escHtml(l.contact)}</span>${badge}${toggle}${wrong}`
          + `<button class="add-me-btn" title="Delete" onclick="myLinkDelete(${l.id}, this)">✕</button></div>`;
