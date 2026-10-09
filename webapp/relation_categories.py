@@ -57,6 +57,8 @@ def categorize(rt):
         return "SAME_ORG_OVERLAP"
     if r == "SAME_SCHOOL_OVERLAP":
         return "SAME_SCHOOL_OVERLAP"
+    if r == "SCHOOL_AFFILIATION":
+        return "SCHOOL_AFFILIATION"
     if r in ("CO_INVENTOR", "CO_INVENTOR_WITH"):
         return "CO_INVENTOR"
     if r == "PATENT_ASSIGNED_TO":
