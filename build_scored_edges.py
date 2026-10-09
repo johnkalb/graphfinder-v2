@@ -356,9 +356,16 @@ def best_display(key):
     votes = display_votes.get(key)
     if not votes:
         return key
-    # most frequent form; tie-break toward the form with the most punctuation
-    # (kept its apostrophes/periods) then the longest
-    return max(votes, key=lambda d: (votes[d], sum(not ch.isalnum() and not ch.isspace() for ch in d), len(d)))
+    # Properly-cased forms first ("Bill Clinton" over "bill clinton" or
+    # "BILL CLINTON"), then all-caps over all-lowercase: frequency alone let a
+    # source that stores names lowercased win once the $100K cutoff dropped
+    # the donation rows that had carried the proper spelling (2026-10-09:
+    # ~6K labels, Bill Clinton among them). Then the most frequent form;
+    # tie-break toward the most punctuation (kept its apostrophes/periods),
+    # then the longest.
+    def case_rank(d):
+        return 2 if d != d.lower() and d != d.upper() else (1 if d != d.lower() else 0)
+    return max(votes, key=lambda d: (case_rank(d), votes[d], sum(not ch.isalnum() and not ch.isspace() for ch in d), len(d)))
 
 # --- Merge Wikidata time-overlap edges (if harvested) ---
 # Only connect people who ALREADY exist as graph nodes, so we densify the
