@@ -204,6 +204,29 @@ print(f"Ambiguous names to split: {len(splitter.fec_ambiguous)} FEC donors, "
       f"{len(splitter.inv_ambiguous)} inventors ({len(exempt)} verified exempt)")
 split_base = {}   # split node key -> the name key it was split from
 
+# --- Alumni by class year (user decision 2026-10-08) ---
+# Two people who went to the same school are linked at full EDUCATION
+# strength only if their graduation years are within COHORT_SPAN. Each dated
+# person-school link joins the class-year nodes "<School> (classes of Y-3–Y)"
+# for Y = grad..grad+3: two people share one exactly when their years differ
+# by <= 3, at 4 edges per person rather than an edge per pair. Every
+# person-school link also gets SCHOOL_AFFILIATION, which is weak, so alumni
+# decades apart (or with no year) still connect, but only faintly.
+# Years: education_years, built by build_education_years.py.
+EDU_RELS = {"EDUCATION", "ALMA_MATER", "ALUMNI", "ALUMNI_OF", "EDUCATED_AT"}
+COHORT_SPAN = 3
+edu_years = {}
+try:
+    pre = conn.cursor()
+    pre.execute("SELECT person, school, source_data, grad_year FROM education_years")
+    edu_years = {(p, s, src): y for p, s, src, y in pre.fetchall()}
+    pre.close()
+except Exception as e:   # table not built yet: every school link is weak
+    conn.rollback()
+    print(f"education_years not available ({e}); no class-year nodes")
+print(f"Education links with a graduation year: {len(edu_years):,}")
+n_edu_dated = n_edu_undated = 0
+
 # Gather relations per undirected pair (preserving ALL types).
 # Pair keys are canon_key()'d so punctuation/diacritic variants of one person
 # land on ONE node. display_votes[key] tallies the raw display forms seen for
@@ -300,10 +323,26 @@ for s, t, r, src, ev in _stream(c):
         display_votes[sk][s] += 1
         display_votes[sk][t] += 1
         continue
-    pair_rels[tuple(sorted([sk, tk]))].add(r)
     display_votes[sk][s] += 1
     display_votes[tk][t] += 1
+    if r in EDU_RELS:
+        # Wikipedia's education rows run school -> person
+        (p_raw, pk), (sc_raw, sck) = ((t, tk), (s, sk)) if src == "WIKIPEDIA" else ((s, sk), (t, tk))
+        pair_rels[tuple(sorted([pk, sck]))].add("SCHOOL_AFFILIATION")
+        y = edu_years.get((p_raw.lower(), sc_raw.lower(), src))
+        if y is None:
+            n_edu_undated += 1
+            continue
+        n_edu_dated += 1
+        for top in range(y, y + COHORT_SPAN + 1):
+            label = f"{sc_raw} (classes of {top - COHORT_SPAN}–{top})"
+            ck = canon_key(label)
+            pair_rels[tuple(sorted([pk, ck]))].add(r)
+            display_votes[ck][label] += 1
+        continue
+    pair_rels[tuple(sorted([sk, tk]))].add(r)
 conn.close()
+print(f"Education links: {n_edu_dated:,} joined class-year nodes, {n_edu_undated:,} undated (weak school link only)")
 print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}, "
       f"self-loops after canonicalization: {n_selfmerge}")
 print(f"Unique scorable pairs: {len(pair_rels)}")
