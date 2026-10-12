@@ -69,6 +69,13 @@ def categorize(rt):
         return "CREATIVE_COLLAB"
     if r == "AWARD_RECEIVED":
         return "AWARD"
+    # Person-to-person ties read from news articles by gdelt_haiku_classify.py
+    # (2026-10-12): co-stars are a credit-sharing tie; colleagues/teammates/
+    # running mates who worked together are an employment-strength tie.
+    if r == "CO_STAR":
+        return "CREATIVE_COLLAB"
+    if r == "WORKED_WITH":
+        return "EMPLOYMENT"
     # Must precede the "PARTNER" substring check below (executive titles like
     # MANAGING_PARTNER), which otherwise swallows it -- it's listed under
     # FRIEND further down but was unreachable (found 2026-09-28).
