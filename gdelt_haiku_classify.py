@@ -36,15 +36,20 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-sys.path.insert(0, r"C:\Users\johnk\AppData\Local\hermes\scripts")
-from pg_secret import load_secret  # noqa: E402
-
-os.environ.setdefault("DATABASE_URL", load_secret("DATABASE_URL"))
+# The fetch stage also runs on the ideacentre (Linux; DATABASE_URL from its
+# own env, CODE_ROOT pointing at its src/ copy): Windows' Norton HTTPS
+# interception collapses under many parallel downloads (2026-10-12).
+sys.path.insert(0, os.environ.get("CODE_ROOT", HERE))
+if os.name == "nt":
+    sys.path.insert(0, r"C:\Users\johnk\AppData\Local\hermes\scripts")
+    from pg_secret import load_secret  # noqa: E402
+    os.environ.setdefault("DATABASE_URL", load_secret("DATABASE_URL"))
 import psycopg2  # noqa: E402
 import psycopg2.extras  # noqa: E402
 import gdelt_classify_new_people as rebel_job  # noqa: E402  (canon_key, pick_urls, load_graph_people)
@@ -60,9 +65,16 @@ SPEND_CAP_USD = 400.0
 PRICE_IN_PER_TOK = 0.10 / 1_000_000
 PRICE_OUT_PER_TOK = 0.50 / 1_000_000
 MAX_OUT_TOKENS = 400
-BATCH_SIZE = 5000
-FETCH_WORKERS = 96
-FETCH_CHUNK = 2000
+# Uploads of 1,000+ requests (9+ MB in one POST) fail with APIConnectionError
+# through this machine's HTTPS interception; 300 (2.5 MB) went through in 1s
+# (2026-10-12).
+BATCH_SIZE = 250
+# trafilatura's HTML extraction is CPU-bound, so threads alone stall on the
+# GIL (96 threads in one process: 2,000 pairs/hour, 2026-10-12). Fan out to
+# FETCH_PROCS processes with FETCH_THREADS download threads each.
+FETCH_PROCS = int(os.environ.get("GDELT_HAIKU_FETCH_PROCS", 8))
+FETCH_THREADS = int(os.environ.get("GDELT_HAIKU_FETCH_THREADS", 24))
+FETCH_CHUNK = 4000
 # 6 articles + neighbouring paragraphs (user decision 2026-10-12, after a
 # 3-article pilot lost relationships stated just before/after a name)
 MAX_DOCS_WITH_BOTH = 6
@@ -255,16 +267,42 @@ def name_terms(name):
     return {name.lower(), sur} if len(sur) >= 3 else {name.lower()}
 
 
+URL_DEADLINE_SEC = 20
+URL_MAX_BYTES = 3_000_000
+
+
 def fetch_text(url):
+    """Download with a hard wall-clock deadline and size cap (requests'
+    timeout is per socket read, so a slow-trickle server could otherwise hold
+    a worker for minutes), then extract the article text."""
     import requests
     import trafilatura
     try:
-        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (sixdegrees research)"})
-        if r.status_code != 200 or not r.text:
+        t0 = time.time()
+        with requests.get(url, timeout=10, stream=True,
+                          headers={"User-Agent": "Mozilla/5.0 (sixdegrees research)"}) as r:
+            if r.status_code != 200:
+                return None
+            buf = bytearray()
+            for chunk in r.iter_content(65536):
+                buf += chunk
+                if len(buf) > URL_MAX_BYTES or time.time() - t0 > URL_DEADLINE_SEC:
+                    return None
+            html = buf.decode(r.encoding or r.apparent_encoding or "utf-8", errors="replace")
+        if not html:
             return None
-        return trafilatura.extract(r.text)
+        with _EXTRACT_LOCK:
+            return trafilatura.extract(html)
     except Exception:
         return None
+
+
+# lxml (under trafilatura) is not safe to call from several threads at once:
+# with 16 threads per process the workers died with "double free or
+# corruption" / "free(): invalid pointer" every few chunks (ideacentre,
+# 2026-10-12). Downloads stay parallel; parsing is one page at a time per
+# process, which costs little since the GIL serialised most of it anyway.
+_EXTRACT_LOCK = threading.Lock()
 
 
 def excerpt(text, ta, tb):
@@ -289,12 +327,13 @@ def excerpt(text, ta, tb):
     return "\n".join(paras[i][:EXCERPT_CHARS_PER_DOC] for i in sorted(picked))
 
 
-def build_excerpts(row):
+def build_excerpts(row, texts):
+    """row = (hash, a, b, urls); texts = {url: article text or None}."""
     h, a, b, urls = row
     ta, tb = name_terms(a), name_terms(b)
     parts, used, seen_texts = [], [], []
     for url in urls:
-        text = fetch_text(url)
+        text = texts.get(url)
         if not text:
             continue
         ex = excerpt(text, ta, tb)
@@ -308,16 +347,52 @@ def build_excerpts(row):
     return h, ("\n\n".join(parts)[:EXCERPT_CHARS_TOTAL] if parts else None), used
 
 
+def build_excerpts_threaded(rows):
+    """One worker process: download every URL of its slice in parallel (not
+    pair by pair, so one slow site can't stall a pair's other five), then
+    assemble each pair's excerpts."""
+    urls = sorted({u for r in rows for u in r[3]})
+    with cf.ThreadPoolExecutor(FETCH_THREADS) as ex:
+        texts = dict(zip(urls, ex.map(fetch_text, urls)))
+    return [build_excerpts(r, texts) for r in rows]
+
+
+def excerpts_isolating_crashes(rows):
+    """Process-pool build_excerpts_threaded over rows. Some page crashes a
+    worker outright (twice on the ideacentre, 2026-10-12, with GBs of memory
+    free -- likely a C-level parser crash), which would fail the same chunk
+    forever; on a crash, split the rows in half and retry each, so only the
+    pair that crashes comes back without text."""
+    try:
+        slices = [rows[i::FETCH_PROCS] for i in range(FETCH_PROCS)]
+        with cf.ProcessPoolExecutor(FETCH_PROCS) as ex:
+            return [r for part in ex.map(build_excerpts_threaded, slices) for r in part]
+    except cf.process.BrokenProcessPool:
+        if len(rows) == 1:
+            log(f"fetch: pair {rows[0][1]} <-> {rows[0][2]} crashes the parser; skipping it")
+            return [(rows[0][0], None, [])]
+        log(f"fetch: worker crashed on a {len(rows)}-pair chunk; splitting it")
+        mid = len(rows) // 2
+        return excerpts_isolating_crashes(rows[:mid]) + excerpts_isolating_crashes(rows[mid:])
+
+
 def fetch(db, limit=None):
     cur = db.cursor()
-    cur.execute("SELECT pair_hash, name_a, name_b, urls FROM gdelt_haiku_review WHERE stage = 'selected' "
-                "ORDER BY occurrence_count DESC LIMIT %s", (limit or FETCH_CHUNK,))
+    # Claim rows atomically so fetchers on several machines never overlap;
+    # claims older than 2h (a crashed fetcher) go back to 'selected'.
+    cur.execute("UPDATE gdelt_haiku_review SET stage='selected' WHERE stage='fetching' "
+                "AND updated_at < now() - interval '2 hours'")
+    cur.execute("UPDATE gdelt_haiku_review SET stage='fetching', updated_at=now() WHERE pair_hash IN ("
+                "SELECT pair_hash FROM gdelt_haiku_review WHERE stage = 'selected' "
+                "ORDER BY occurrence_count DESC LIMIT %s FOR UPDATE SKIP LOCKED) "
+                "RETURNING pair_hash, name_a, name_b, urls", (limit or FETCH_CHUNK,))
     rows = cur.fetchall()
+    db.commit()
     if not rows:
         return 0
     t0 = time.time()
-    with cf.ThreadPoolExecutor(FETCH_WORKERS) as ex:
-        results = list(ex.map(build_excerpts, rows))
+    slices = [rows[i::FETCH_PROCS] for i in range(FETCH_PROCS)]
+    results = excerpts_isolating_crashes(rows)
     w = db.cursor()
     for h, text, used in results:
         if text:
@@ -379,7 +454,17 @@ def submit(db, client, limit=None):
         log(f"submit: STOP -- spent ${actual:.2f} + in flight ${pending:.2f} + this batch ${worst:.2f} "
             f"would exceed the ${SPEND_CAP_USD:.0f} cap")
         return -1
-    batch = client.messages.batches.create(requests=reqs)
+    import anthropic
+    for attempt in range(5):
+        try:
+            batch = client.messages.batches.create(requests=reqs)
+            break
+        except anthropic.APIConnectionError as e:
+            log(f"submit: connection error ({e}); retry {attempt + 1}/5")
+            time.sleep(30 * (attempt + 1))
+    else:
+        log("submit: giving up on this round; pairs stay 'fetched' for the next one")
+        return 0
     w = db.cursor()
     w.execute("INSERT INTO gdelt_haiku_batches (batch_id, n_requests, worst_case_usd) VALUES (%s, %s, %s)",
               (batch.id, len(reqs), worst))
@@ -453,7 +538,10 @@ def collect(db, client):
         cur.execute("SELECT pair_hash, name_a, name_b, excerpts, occurrence_count FROM gdelt_haiku_review WHERE batch_id = %s", (bid,))
         rows = {r[0]: r for r in cur.fetchall()}
         counts, final = {}, {}
-        for res in client.messages.batches.results(bid):
+        # read every result before writing anything: a dropped connection
+        # mid-stream must not leave links written for pairs still 'submitted'
+        all_results = list(client.messages.batches.results(bid))
+        for res in all_results:
             row = rows.get(res.custom_id)
             if row is None:
                 continue
@@ -500,7 +588,7 @@ def summary(db):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["select", "fetch", "submit", "collect", "run", "summary"])
+    ap.add_argument("cmd", choices=["select", "fetch", "fetch-loop", "submit", "collect", "run", "summary"])
     ap.add_argument("--limit", type=int)
     args = ap.parse_args()
     db = connect()
@@ -509,6 +597,9 @@ def main():
         select(db, args.limit)
     elif args.cmd == "fetch":
         fetch(db, args.limit)
+    elif args.cmd == "fetch-loop":   # fetch-only worker (the ideacentre)
+        while fetch(db, args.limit):
+            pass
     elif args.cmd == "submit":
         submit(db, anthropic_client(), args.limit)
     elif args.cmd == "collect":
@@ -521,14 +612,28 @@ def main():
         cur = db.cursor()
         select(db, args.limit)   # idempotent: only takes still-'unreviewed' pairs
         capped = False
+        import anthropic
         while True:
-            collect(db, client)
-            fetched_now = fetch(db)
+            try:
+                collect(db, client)
+            except anthropic.APIConnectionError as e:
+                # this machine's API connections drop intermittently (2026-10-12)
+                log(f"run: connection error during collect ({e}); retrying next round")
+                db.rollback()
+                time.sleep(60)
+                continue
+            # GDELT_HAIKU_NO_FETCH=1: another machine runs fetch-loop
+            fetched_now = 0 if os.environ.get("GDELT_HAIKU_NO_FETCH") else fetch(db)
             cur.execute("SELECT count(*) FROM gdelt_haiku_review WHERE stage = 'fetched'")
             ready = cur.fetchone()[0]
             if not capped and (ready >= BATCH_SIZE or (fetched_now == 0 and ready)):
-                capped = submit(db, client) == -1
-            cur.execute("SELECT count(*) FILTER (WHERE stage IN ('selected', 'fetched', 'submitted')), "
+                # small batches (see BATCH_SIZE), so drain everything ready each round
+                while True:
+                    n = submit(db, client)
+                    capped = n == -1
+                    if n < BATCH_SIZE:
+                        break
+            cur.execute("SELECT count(*) FILTER (WHERE stage IN ('selected', 'fetching', 'fetched', 'submitted')), "
                         "count(*) FILTER (WHERE stage = 'submitted') FROM gdelt_haiku_review")
             open_n, submitted_n = cur.fetchone()
             if open_n == 0 or (capped and submitted_n == 0):
