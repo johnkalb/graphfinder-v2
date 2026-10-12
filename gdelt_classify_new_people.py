@@ -37,7 +37,11 @@ import time
 import unicodedata
 from datetime import datetime
 
-sys.path.insert(0, "/home/john/.hermes" if os.name != "nt" else r"C:\Users\johnk\Desktop\sixdegrees")
+# CODE_ROOT / GRAPH_PEOPLE_PATH / GDELT_CLASSIFY_* let the job run on a machine
+# other than optiplex (since 2026-10-12 it runs continuously on the ideacentre,
+# from ~/gdelt-classify, with a 1-hour budget per tick).
+sys.path.insert(0, os.environ.get(
+    "CODE_ROOT", "/home/john/.hermes" if os.name != "nt" else r"C:\Users\johnk\Desktop\sixdegrees"))
 from src.config import DB_PATH
 from src.data import pg_shim
 from src.data.pg_shim import connect as _pg_connect
@@ -49,11 +53,11 @@ GRAPH_PEOPLE = os.environ.get(
     "/home/john/.hermes/agents/gdelt-full/graph_people.tsv.gz" if os.name != "nt"
     else r"C:\Users\johnk\graphfinder-clean\webapp\data\graph_people.tsv.gz")
 SCAN_BATCH = 2000
-MAX_PAIRS_PER_RUN = 60
+MAX_PAIRS_PER_RUN = int(os.environ.get("GDELT_CLASSIFY_MAX_PAIRS", 60))
 # smart_runner kills the remote run at 1800s (and returns no output at all
 # then), so stop starting pairs at 15 min and cap any single pair at 4 min --
 # the first run (2026-09-29) was killed mid-pair after ~18 pairs.
-MAX_RUN_SECONDS = 15 * 60
+MAX_RUN_SECONDS = int(os.environ.get("GDELT_CLASSIFY_MAX_RUN_SECONDS", 15 * 60))
 PAIR_TIMEOUT_SEC = 240
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "classify.log")
 
