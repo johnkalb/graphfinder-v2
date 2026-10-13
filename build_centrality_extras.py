@@ -35,11 +35,18 @@ Output: webapp/data/centrality_extras.json.gz
 import gzip
 import json
 import os
+import random
 import re
 import time
 
-import networkx as nx
-from networkx.algorithms.community import louvain_communities
+# NOTE (2026-10-13): was networkx. Its k=100 betweenness took 1825s + Louvain
+# 768s on the 2.0M-node graph of 2026-10-08, and from 2026-10-09 the step hit
+# rebuild_and_deploy.py's 3600s timeout every night (and its hour pushed the
+# whole rebuild into Task Scheduler's 2h30m limit). igraph runs the same
+# sampled-source BFS betweenness and Louvain (multilevel) in C. python-igraph
+# draws its randomness from Python's `random`, so seeding that keeps runs
+# repeatable.
+import igraph as ig
 
 SCORED = "webapp/data/graph_scored.json.gz"
 OUT = "webapp/data/centrality_extras.json.gz"
@@ -145,10 +152,9 @@ def main():
         degree[v] += 1
 
     print("Building unweighted graph...", flush=True)
-    G = nx.Graph()
-    G.add_nodes_from(range(len(nodes)))
-    G.add_edges_from((u, v) for u, v, _prob, _cats in edges)
-    print(f"  {G.number_of_nodes()} nodes, {G.number_of_edges()} edges", flush=True)
+    G = ig.Graph(n=len(nodes), edges=[(u, v) for u, v, _prob, _cats in edges])
+    G.simplify()  # nx.Graph collapsed duplicate pairs and self-loops; keep that
+    print(f"  {G.vcount()} nodes, {G.ecount()} edges", flush=True)
 
     # --- Top by degree ---
     person_idx = [i for i in range(len(nodes))
@@ -161,7 +167,14 @@ def main():
     # --- Betweenness (approximate, unweighted, sampled) ---
     print(f"Computing betweenness centrality (k={BETWEENNESS_SAMPLE_K} sampled sources)...", flush=True)
     t0 = time.time()
-    bc = nx.betweenness_centrality(G, k=BETWEENNESS_SAMPLE_K, seed=BETWEENNESS_SEED, normalized=True)
+    random.seed(BETWEENNESS_SEED)
+    n = G.vcount()
+    sources = random.sample(range(n), BETWEENNESS_SAMPLE_K)
+    raw = G.betweenness(directed=False, sources=sources)
+    # rescaled like networkx's normalized k-sample estimate (only the ranking
+    # is used downstream; the value is just carried into the output)
+    scale = n / BETWEENNESS_SAMPLE_K / ((n - 1) * (n - 2))
+    bc = {i: b * scale for i, b in enumerate(raw)}
     print(f"  done in {time.time() - t0:.0f}s", flush=True)
 
     bridge_candidates = sorted(
@@ -174,7 +187,8 @@ def main():
     # --- Louvain communities, for labeling what each bridge connects ---
     print("Running Louvain community detection...", flush=True)
     t0 = time.time()
-    comms = louvain_communities(G, weight="weight", seed=BETWEENNESS_SEED)
+    random.seed(BETWEENNESS_SEED)
+    comms = [set(c) for c in G.community_multilevel()]
     print(f"  done in {time.time() - t0:.0f}s, {len(comms)} communities", flush=True)
 
     node_to_comm = {}
