@@ -523,6 +523,15 @@ def midterm_facts(m):
              f"people) supplied {share(d['top1pct_dollar_share'])} of the itemized money; the top 1% of Republican "
              f"donors ({r['top1pct_donors']:,}) supplied {share(r['top1pct_dollar_share'])}.", ["top1pct"]),
     ]
+    if d.get("fec_committee_total") and r.get("fec_committee_total"):
+        dt = d["fec_individual_total"] + d["fec_committee_total"]
+        rt = r["fec_individual_total"] + r["fec_committee_total"]
+        out.append(fact("stats_midterm",
+                        f"PACs and other political committees have given {money(d['fec_committee_total'])} to "
+                        f"Democratic {scope} in the 2026 midterms and {money(r['fec_committee_total'])} to "
+                        f"Republican ones. With individuals' gifts, that's {money(dt)} for Democrats "
+                        f"({pct(d['fec_committee_total'] / dt)} from PACs) and {money(rt)} for Republicans "
+                        f"({pct(r['fec_committee_total'] / rt)}), per FEC filings as of {asof}.", ["pacs"]))
     for code, party, v in (("D", "Democratic", d), ("R", "Republican", r)):
         parts = []
         for b in v["buckets"]:

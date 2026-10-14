@@ -205,21 +205,25 @@ def donor_key(r):
 
 
 def fec_totals(party, kind):
-    """Individual contributions incl. unitemized, from FEC's summary files."""
-    tot = Counter()
+    """Individual contributions incl. unitemized, and contributions from PACs
+    and other political committees (FEC doesn't split those), from FEC's
+    summary files."""
+    tot, pac = Counter(), Counter()
     ends = []
     for r in rows_of(bulk("webl")):                  # House/Senate current campaigns
         p = PARTY.get(r[4])
         if p and r[0][:1] in ("H", "S"):
             tot[p] += float(r[17] or 0)
+            pac[p] += float(r[25] or 0)              # OTHER_POL_CMTE_CONTRIB
             if r[27]:
                 ends.append(r[27][6:] + r[27][:2] + r[27][3:5])
     for r in rows_of(bulk("webk")):                  # party committees
         if kind.get(r[0]) == "party":
             tot[party[r[0]]] += float(r[7] or 0)
+            pac[party[r[0]]] += float(r[8] or 0)     # OTHER_POL_CMTE_CONTRIB
             if r[-1]:
                 ends.append(r[-1][6:] + r[-1][:2] + r[-1][3:5])
-    return tot, (sorted(ends)[len(ends) // 2] if ends else None)
+    return tot, pac, (sorted(ends)[len(ends) // 2] if ends else None)
 
 
 def main():
@@ -289,7 +293,7 @@ def main():
             latest = ymd
     log(f"read indiv in {time.time() - t:.0f}s; skipped {dict(skipped)}; types {types.most_common(8)}")
 
-    fec_tot, coverage = fec_totals(party, kind)
+    fec_tot, fec_pac, coverage = fec_totals(party, kind)
     out = {"cycle": YEAR, "latest_gift": latest, "coverage_median_end": coverage,
            "fec_file": time.strftime("%Y-%m-%d", time.gmtime(os.path.getmtime(bulk("indiv")))), "parties": {}}
     for p in ("D", "R"):
@@ -305,7 +309,7 @@ def main():
                             "dollar_share": sum(sel) / dollars})
         out["parties"][p] = {
             "donors": n, "gifts": len(gifts[p]), "itemized_dollars": dollars,
-            "fec_individual_total": fec_tot[p],
+            "fec_individual_total": fec_tot[p], "fec_committee_total": fec_pac[p],
             "median_gift": statistics.median(gifts[p]), "median_donor_total": statistics.median(totals),
             "top1pct_donors": len(top1), "top1pct_dollar_share": sum(top1) / dollars,
             "buckets": buckets,
