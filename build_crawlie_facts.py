@@ -32,6 +32,7 @@ CENTRALITY_EXTRAS = "webapp/data/centrality_extras.json.gz"
 OUT = "webapp/data/crawlie_facts.json.gz"
 PAGERANK_LADDER = "webapp/data/pagerank_ladder.json"   # build_search_from_scored.py
 GRAPH_STATS = "webapp/data/graph_stats.json"           # build_graph_stats.py
+FEC_MIDTERM = "webapp/data/fec_midterm_2026.json"     # fec_midterm_stats.py (optiplex, weekly)
 # the public /demo only offers and names these (see pathfinder.py "Public demo")
 VERIFIED_OUT = "webapp/data/verified_people.json.gz"
 GRAPH_PEOPLE = "webapp/data/graph_people.tsv.gz"     # build_person_nodes.py
@@ -484,6 +485,61 @@ def stats_facts(stats):
     return out
 
 
+def share(x):
+    """Like pct() but keeps small shares visible: 0.2%, not 0%."""
+    return f"{x:.1%}" if x < 0.01 else pct(x)
+
+
+def money(x):
+    return f"${x / 1e9:.2f} billion" if x >= 1e9 else f"${x / 1e6:,.0f} million"
+
+
+def midterm_facts(m):
+    """2026 midterm donors by party, from fec_midterm_stats.py. Scope: House
+    and Senate campaigns plus party committees; donor counts are ITEMIZED
+    donors (committees need not itemize donors under $200 a cycle), totals are
+    FEC's own and include unitemized gifts. No people named."""
+    if not m or not m.get("parties"):
+        return []
+    d, r = m["parties"].get("D"), m["parties"].get("R")
+    if not d or not r:
+        return []
+    asof = datetime.strptime(m["fec_file"], "%Y-%m-%d").strftime("%b %-d, %Y") if os.name != "nt" else         datetime.strptime(m["fec_file"], "%Y-%m-%d").strftime("%b %#d, %Y")
+    scope = "House and Senate campaigns and party committees"
+    out = [
+        fact("stats_midterm",
+             f"So far in the 2026 midterms, {d['donors']:,} people have made itemized donations to Democratic "
+             f"{scope}, and {r['donors']:,} to Republican ones, per FEC filings as of {asof}.", ["donors"]),
+        fact("stats_midterm",
+             f"Individuals have given {money(d['fec_individual_total'])} to Democratic {scope} in the 2026 "
+             f"midterms so far, and {money(r['fec_individual_total'])} to Republican ones (FEC, as of {asof}).",
+             ["totals"]),
+        fact("stats_midterm",
+             f"The typical 2026 midterm donation is small: the median itemized gift is ${d['median_gift']:,.0f} "
+             f"to Democratic campaigns and committees and ${r['median_gift']:,.0f} to Republican ones.",
+             ["median"]),
+        fact("stats_midterm",
+             f"Midterm money is top-heavy: the 1% of Democratic donors who gave the most ({d['top1pct_donors']:,} "
+             f"people) supplied {share(d['top1pct_dollar_share'])} of the itemized money; the top 1% of Republican "
+             f"donors ({r['top1pct_donors']:,}) supplied {share(r['top1pct_dollar_share'])}.", ["top1pct"]),
+    ]
+    for code, party, v in (("D", "Democratic", d), ("R", "Republican", r)):
+        parts = []
+        for b in v["buckets"]:
+            label = (f"under ${b['hi']:,}" if not b["lo"] else
+                     f"${b['lo']:,}+" if b["hi"] is None else f"${b['lo']:,}–{b['hi'] - 1:,}")
+            parts.append(f"{label}: {share(b['donor_share'])} of donors, {share(b['dollar_share'])} of the money")
+        out.append(fact("stats_midterm",
+                        f"2026 {party} midterm donors (itemized) by how much they've given this cycle — "
+                        + "; ".join(parts) + ".", ["distribution", code]))
+    both = m.get("both")
+    if both and both.get("donors"):
+        out.append(fact("stats_midterm",
+                        f"{both['donors']:,} people have given to both parties in the 2026 midterms — "
+                        f"{money(both['to_D'])} to Democrats and {money(both['to_R'])} to Republicans.", ["both"]))
+    return out
+
+
 # Every fact that mentions a community carries this definition (operator's
 # rule, 2026-10-01): readers would otherwise take "community" in its everyday
 # sense. Community nicknames ("establishment") are ours, so they go in quotes.
@@ -658,6 +714,7 @@ def main():
     ladder_ticker, ladder_public = ladder_facts(load_optional_json(PAGERANK_LADDER), verified)
     graph_stats = load_optional_json(GRAPH_STATS) or {}
     stat_records = stats_facts(graph_stats)
+    stat_records += midterm_facts(load_optional_json(FEC_MIDTERM))
     stat_records += community_facts(graph_stats.get("establishment"), verified,
                                     (graph_stats.get("separation") or {}).get("median_steps"),
                                     unavailable_people(graph_stats.get("establishment")))
