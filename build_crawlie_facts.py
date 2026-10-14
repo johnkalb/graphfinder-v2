@@ -501,18 +501,73 @@ def _join(items):
 CORE_PEOPLE, CORE_WITHIN = 5, 30
 
 
-def _core_people(ranked, verified):
+def unavailable_people(est):
+    """Lowercased names, among the people a core crawlie could name, whom
+    Wikidata lists as dead (P570) or currently detained (a P2632 place of
+    detention with no end date) -- the core is a community's living, free
+    members (operator's rule, 2026-10-14: Ghislaine Maxwell is in prison,
+    Ross Perot died in 2019). None if Wikidata can't be asked, and then no
+    core crawlies are made: better none than one naming the dead or jailed.
+    Checked live because deceased.json covers only qid_map.jsonl, not the
+    imports, and the build directory's copy can be months old."""
+    if not est:
+        return set()
+    cands = {n for n, _k in est.get("top_connected", [])[:CORE_WITHIN]}
+    for sub in est.get("subcommunities", []):
+        cands |= {n for n, _o in sub.get("hub_people", [])[:CORE_WITHIN]}
+    qids = {}
+    for path in (QID_MAP, QID_IMPORTS):
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        r = json.loads(line)
+                        if r["name"] in cands:
+                            qids.setdefault(r["qid"], set()).add(r["name"].lower())
+        except FileNotFoundError:
+            pass
+    if not qids:
+        return set()
+    try:
+        import requests
+        try:
+            import pip_system_certs.wrapt_requests  # noqa: F401 -- Norton TLS interception on this machine
+        except ImportError:
+            pass
+        out = set()
+        ids = sorted(qids)
+        for i in range(0, len(ids), 100):
+            values = " ".join(f"wd:{q}" for q in ids[i:i + 100])
+            query = (f"SELECT DISTINCT ?p WHERE {{ VALUES ?p {{ {values} }} "
+                     "{ ?p wdt:P570 ?d } UNION { ?p p:P2632 ?s . FILTER NOT EXISTS { ?s pq:P582 ?e } } }")
+            r = requests.get("https://query.wikidata.org/sparql", params={"query": query, "format": "json"},
+                             headers={"User-Agent": "SixDegreesGraph/1.0 (sixdegrees.net)"}, timeout=90)
+            r.raise_for_status()
+            for b in r.json()["results"]["bindings"]:
+                out |= qids.get(b["p"]["value"].rsplit("/", 1)[-1], set())
+        print(f"Core crawlies: {len(out)} of {len(qids)} candidates dead or detained: {sorted(out)}", flush=True)
+        return out
+    except Exception as e:
+        print(f"WARNING: Wikidata check of dead/detained people failed ({e}) -- no core crawlies", flush=True)
+        return None
+
+
+def _core_people(ranked, verified, excluded):
     """ranked: (name, eligible) for a community's members, best-connected
-    first. The top CORE_PEOPLE eligible, verified figures among its
-    CORE_WITHIN best-connected members, or [] if there aren't that many. Only verified
+    first. The top CORE_PEOPLE eligible, verified, living and free figures
+    among its CORE_WITHIN best-connected members, or [] if there aren't that
+    many (or excluded is None: unknown who is dead or detained). Only verified
     people can be named, and the real top members often aren't (2026-10-01:
     naming verified ones ranked #65 and #101 as "best-connected" misled), so a
     community whose core is mostly unknown names gets no core crawlie."""
-    core = [n for n, ok in ranked[:CORE_WITHIN] if ok and n.lower() in verified and is_clean_label(n)]
+    if excluded is None:
+        return []
+    core = [n for n, ok in ranked[:CORE_WITHIN]
+            if ok and n.lower() in verified and n.lower() not in excluded and is_clean_label(n)]
     return core[:CORE_PEOPLE] if len(core) >= CORE_PEOPLE else []
 
 
-def community_facts(est, verified, sep_median=None):
+def community_facts(est, verified, sep_median=None, excluded=None):
     """The "establishment" community (build_graph_stats.community_stats).
     Every person named must be verified; ticker and posts get the same text."""
     if not est:
@@ -543,7 +598,7 @@ def community_facts(est, verified, sep_median=None):
         out.append(fact("community_establishment",
                         f'Members of the "establishment" community ({n:,} people) are typically {m} steps apart — '
                         f"{tail} {COMMUNITY_DEF}", ["hops"]))
-    core = _core_people([(n, True) for n, _k in est.get("top_connected", [])], verified)
+    core = _core_people([(n, True) for n, _k in est.get("top_connected", [])], verified, excluded)
     if core:
         out.append(fact("community_establishment",
                         f'The core of the "establishment" community: {_join(core)} — the best-known figures '
@@ -565,7 +620,7 @@ def community_facts(est, verified, sep_median=None):
                         f"centred on {_join(sorgs)}. {COMMUNITY_DEF}", ["sub", sorgs[0]]))
         # a separate crawlie for its core people (operator's request, 2026-10-14);
         # each must link directly to one of its hub organizations, see above
-        core = _core_people([(n, bool(hub_links)) for n, hub_links in sub.get("hub_people", [])], verified)
+        core = _core_people([(n, bool(hub_links)) for n, hub_links in sub.get("hub_people", [])], verified, excluded)
         if core:
             out.append(fact("community_establishment",
                             f'The core of the subcommunity centred on {_join(sorgs)}: {_join(core)} — the '
@@ -604,7 +659,8 @@ def main():
     graph_stats = load_optional_json(GRAPH_STATS) or {}
     stat_records = stats_facts(graph_stats)
     stat_records += community_facts(graph_stats.get("establishment"), verified,
-                                    (graph_stats.get("separation") or {}).get("median_steps"))
+                                    (graph_stats.get("separation") or {}).get("median_steps"),
+                                    unavailable_people(graph_stats.get("establishment")))
 
     records = (top_pagerank_facts(load_optional_json(PAGERANK_LADDER)) + group_facts(groups) + surprising_rank_facts(index)
                + top_degree_facts(extras) + bridge_facts(extras) + ladder_ticker + stat_records)
