@@ -2,7 +2,8 @@
 """Daily deceased-status updater for sixdegrees.net.
 
 Re-queries Wikidata P570 (date of death) for our verified-QID people
-(data/qid_map.jsonl), compares against the deployed data/deceased.json, and if
+(qid_map.jsonl, plus the media/cabinet imports in qid_map_imports.jsonl since
+2026-10-14 -- before that, e.g. Henry Kissinger was never checked), compares against the deployed data/deceased.json, and if
 anything changed, updates BOTH copies (webapp/data + data/), commits, and pushes
 to the deploy branch so DigitalOcean serves the new living/deceased status.
 
@@ -21,8 +22,11 @@ import os, sys, json, time, subprocess
 import requests
 
 HOME = os.path.expanduser("~")
-REPO = os.path.join(HOME, "graphfinder-clean")
+# Was graphfinder-clean, which had drifted 16+ commits behind the remote
+# (silently failing to push) -- repointed at the maintained checkout (2026-08-12).
+REPO = os.path.join(HOME, "Desktop", "sixdegrees")
 QID_MAP = os.path.join(HOME, "qid_map.jsonl")
+QID_IMPORTS = os.path.join(HOME, "qid_map_imports.jsonl")
 DECEASED_LOCAL = os.path.join(HOME, "webapp", "data", "deceased.json")
 DECEASED_REPO_WEBAPP = os.path.join(REPO, "webapp", "data", "deceased.json")
 DECEASED_REPO_DATA = os.path.join(REPO, "data", "deceased.json")
@@ -31,40 +35,53 @@ BRANCH = "scoring-model"
 ENDPOINT = "https://query.wikidata.org/sparql"
 HEADERS = {"User-Agent": "SixDegreesGraph/1.0 (research; sixdegrees.net)",
            "Accept": "application/sparql-results+json"}
-BATCH = 60
+# 60 per GET took ~90 queries and timed out the wrapper's 3 min on most days
+# from late Aug 2026; POST takes 400 at a time (~46 queries with the imports)
+BATCH = 400
 
 
 def fetch_deceased():
-    qid_to_name = {}
-    with open(QID_MAP, encoding="utf-8") as f:
-        for line in f:
-            r = json.loads(line)
-            qid_to_name[r["qid"]] = r["name"]
-    qids = list(qid_to_name.keys())
+    qid_to_names = {}
+    for path in (QID_MAP, QID_IMPORTS):
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    r = json.loads(line)
+                    qid_to_names.setdefault(r["qid"], set()).add(r["name"])
+    qids = sorted(qid_to_names)
     deceased = {}
+    failed = 0
     for i in range(0, len(qids), BATCH):
         batch = qids[i:i + BATCH]
         values = " ".join(f"wd:{q}" for q in batch)
         query = f"SELECT ?person ?death WHERE {{ VALUES ?person {{ {values} }} ?person wdt:P570 ?death . }}"
-        rows = []
+        rows = None
         for attempt in range(4):
             try:
-                resp = requests.get(ENDPOINT, params={"query": query, "format": "json"},
-                                    headers=HEADERS, timeout=90)
+                resp = requests.post(ENDPOINT, data={"query": query, "format": "json"},
+                                     headers=HEADERS, timeout=90)
                 if resp.status_code == 429:
                     time.sleep(4 * (attempt + 1)); continue
                 rows = resp.json()["results"]["bindings"]
                 break
             except Exception:
                 time.sleep(3 * (attempt + 1))
+        if rows is None:
+            failed += 1
+            rows = []
         for row in rows:
             qid = row.get("person", {}).get("value", "").rsplit("/", 1)[-1]
             death = row.get("death", {}).get("value", "")[:10]
-            name = qid_to_name.get(qid)
             # skip pre-1900 deaths = bad namesake QID matches
-            if name and death and death[:4].isdigit() and int(death[:4]) >= 1900:
-                deceased[name.lower()] = death
+            if death and death[:4].isdigit() and int(death[:4]) >= 1900:
+                for name in qid_to_names.get(qid, ()):
+                    deceased[name.lower()] = death
         time.sleep(1.0)
+    if failed:
+        # only ever adds deaths, so a missed batch just waits for tomorrow
+        print(f"WARNING: {failed} of {-(-len(qids) // BATCH)} Wikidata batches failed", file=sys.stderr)
     return deceased
 
 
@@ -113,10 +130,12 @@ def main():
     git("checkout", BRANCH)
     git("add", "webapp/data/deceased.json", "data/deceased.json")
     names = ", ".join(sorted(newly_dead))
-    c = git("commit", "-m", f"Daily deceased update: +{len(newly_dead)} ({names[:120]})")
+    # pathspec-limited: REPO is also a dev checkout, never sweep up other staged work
+    c = git("commit", "-m", f"Daily deceased update: +{len(newly_dead)} ({names[:120]})",
+            "--", "webapp/data/deceased.json", "data/deceased.json")
     if "nothing to commit" in (c.stdout + c.stderr):
         return
-    push = git("push", "fresh", f"{BRANCH}:{BRANCH}")
+    push = git("push", "origin", f"{BRANCH}:{BRANCH}")
     ok = push.returncode == 0
 
     # Report (this is the ONLY non-silent path -> gets delivered)
