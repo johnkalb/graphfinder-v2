@@ -504,7 +504,7 @@ def midterm_facts(m):
     d, r = m["parties"].get("D"), m["parties"].get("R")
     if not d or not r:
         return []
-    asof = datetime.strptime(m["fec_file"], "%Y-%m-%d").strftime("%b %-d, %Y") if os.name != "nt" else         datetime.strptime(m["fec_file"], "%Y-%m-%d").strftime("%b %#d, %Y")
+    asof = fmt_date(m["fec_file"])
     scope = "House and Senate campaigns and party committees"
     out = [
         fact("stats_midterm",
@@ -537,6 +537,82 @@ def midterm_facts(m):
         out.append(fact("stats_midterm",
                         f"{both['donors']:,} people have given to both parties in the 2026 midterms — "
                         f"{money(both['to_D'])} to Democrats and {money(both['to_R'])} to Republicans.", ["both"]))
+    return out + superpac_facts(m)
+
+
+_STATES = dict(s.split(":") for s in (
+    "AL:Alabama AK:Alaska AZ:Arizona AR:Arkansas CA:California CO:Colorado CT:Connecticut DE:Delaware "
+    "FL:Florida GA:Georgia HI:Hawaii ID:Idaho IL:Illinois IN:Indiana IA:Iowa KS:Kansas KY:Kentucky "
+    "LA:Louisiana ME:Maine MD:Maryland MA:Massachusetts MI:Michigan MN:Minnesota MS:Mississippi "
+    "MO:Missouri MT:Montana NE:Nebraska NV:Nevada NH:New_Hampshire NJ:New_Jersey NM:New_Mexico "
+    "NY:New_York NC:North_Carolina ND:North_Dakota OH:Ohio OK:Oklahoma OR:Oregon PA:Pennsylvania "
+    "RI:Rhode_Island SC:South_Carolina SD:South_Dakota TN:Tennessee TX:Texas UT:Utah VT:Vermont "
+    "VA:Virginia WA:Washington WV:West_Virginia WI:Wisconsin WY:Wyoming").replace("_", "\0").split())
+_STATES = {k: v.replace("\0", " ") for k, v in _STATES.items()}
+
+
+def fmt_date(ymd):
+    d = datetime.strptime(ymd, "%Y-%m-%d")
+    return f"{d:%b} {d.day}, {d.year}"
+
+
+def superpac_facts(m):
+    """Super PAC spending and fundraising, from fec_midterm_stats.py. Names
+    only organizations (super PACs) and states, never people."""
+    sp = m.get("superpacs")
+    if not sp or not sp.get("spending", {}).get("total"):
+        return []
+    s, rc = sp["spending"], sp["receipts"]
+    side = s["by_side"]
+    asof = fmt_date(s["file_date"])
+    out = [
+        fact("stats_superpac",
+             f"Super PACs have spent {money(s['total'])} on 2026 House and Senate races so far: "
+             f"{money(side.get('R', 0))} helping Republicans and {money(side.get('D', 0))} helping Democrats "
+             f"(FEC, as of {asof}).", ["spending"]),
+        fact("stats_superpac",
+             f"{pct(sum(s['attack'].values()) / s['total'])} of super PAC spending in the 2026 midterms pays for "
+             f"attacks on a candidate rather than support for one.", ["attack"]),
+    ]
+    lean = {"D": ", pro-Democratic", "R": ", pro-Republican"}
+    top = [f"{t['name']} ({money(t['spent'])}{lean.get(t['side'], '')})" for t in s["top_spenders"][:5]]
+    if len(top) >= 3:
+        out.append(fact("stats_superpac", "The biggest super PAC spenders in the 2026 midterms so far: "
+                        + _join(top) + ".", ["top_spenders"]))
+
+    def race(r):
+        st = _STATES.get(r["state"], r["state"])
+        return f"the {st} Senate race" if r["office"] == "S" else f"{r['state']}-{r['district']}'s House race"
+    races = [f"{race(r)} ({money(r['spent'])})" for r in s["top_races"][:3]]
+    if len(races) == 3:
+        out.append(fact("stats_superpac", "Where super PACs are spending most in the 2026 midterms: "
+                        + _join(races) + ".", ["races"]))
+    if rc.get("dollars") and rc.get("million_donors"):
+        out.append(fact("stats_superpac",
+                        f"Super PACs have raised {money(rc['dollars'])} this election cycle. Just "
+                        f"{rc['million_donors']:,} donors who gave $1 million or more supplied "
+                        f"{pct(rc['million_share'])} of it (FEC, as of {fmt_date(m['fec_file'])}).", ["concentration"]))
+        orgs = sp.get("receipts_from_orgs", 0)
+        if orgs:
+            out.append(fact("stats_superpac",
+                            f"{pct(orgs / rc['dollars'])} of the money super PACs have raised this cycle "
+                            f"({money(orgs)}) came from organizations — companies, unions, LLCs and nonprofits — "
+                            f"rather than individual people.", ["orgs"]))
+        campaigns = sum(p["fec_individual_total"] for p in m["parties"].values())
+        big = rc["million_share"] * rc["dollars"]
+        cmp = ("more than" if big > campaigns else "nearly as much as" if big >= 0.8 * campaigns
+               else f"{pct(big / campaigns)} of")
+        out.append(fact("stats_superpac",
+                        f"{rc['million_donors']:,} donors who each gave super PACs $1 million or more have put in "
+                        f"{money(big)} — {cmp} the {money(campaigns)} individuals have given all Democratic and "
+                        f"Republican House and Senate campaigns and party committees combined.", ["vs_campaigns"]))
+    by = sp.get("receipts_by_side", {})
+    if by.get("D", {}).get("dollars") and by.get("R", {}).get("dollars"):
+        out.append(fact("stats_superpac",
+                        f"Pro-Republican super PACs have raised {money(by['R']['dollars'])} this cycle, and their "
+                        f"100 biggest donors supplied {pct(by['R']['top100_share'])} of it; pro-Democratic super "
+                        f"PACs have raised {money(by['D']['dollars'])}, {pct(by['D']['top100_share'])} from their "
+                        f"top 100.", ["by_side"]))
     return out
 
 
