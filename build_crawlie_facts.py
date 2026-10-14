@@ -498,6 +498,20 @@ def _join(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + f" and {items[-1]}"
 
 
+CORE_PEOPLE, CORE_WITHIN = 5, 30
+
+
+def _core_people(ranked, verified):
+    """ranked: (name, eligible) for a community's members, best-connected
+    first. The top CORE_PEOPLE eligible, verified figures among its
+    CORE_WITHIN best-connected members, or [] if there aren't that many. Only verified
+    people can be named, and the real top members often aren't (2026-10-01:
+    naming verified ones ranked #65 and #101 as "best-connected" misled), so a
+    community whose core is mostly unknown names gets no core crawlie."""
+    core = [n for n, ok in ranked[:CORE_WITHIN] if ok and n.lower() in verified and is_clean_label(n)]
+    return core[:CORE_PEOPLE] if len(core) >= CORE_PEOPLE else []
+
+
 def community_facts(est, verified, sep_median=None):
     """The "establishment" community (build_graph_stats.community_stats).
     Every person named must be verified; ticker and posts get the same text."""
@@ -529,16 +543,19 @@ def community_facts(est, verified, sep_median=None):
         out.append(fact("community_establishment",
                         f'Members of the "establishment" community ({n:,} people) are typically {m} steps apart — '
                         f"{tail} {COMMUNITY_DEF}", ["hops"]))
+    core = _core_people([(n, True) for n, _k in est.get("top_connected", [])], verified)
+    if core:
+        out.append(fact("community_establishment",
+                        f'The core of the "establishment" community: {_join(core)} — the best-known figures '
+                        f"with the most links inside it. {COMMUNITY_DEF}", ["core"], core))
     orgs = [(short_company(o), k) for o, k in est.get("hub_orgs", []) if is_clean_label(o)]
     if len(orgs) >= 3:
         (o1, k1), (o2, k2), (o3, k3) = orgs[:3]
         out.append(fact("community_establishment",
                         f'{o1} is the biggest hub of the "establishment" community, with {k1:,} links inside it — '
                         f"ahead of {o2} ({k2:,}) and {o3} ({k3:,}). {COMMUNITY_DEF}", ["hub_org"]))
-    # Subcommunities are described by their organizations only. Naming people
-    # was tried and dropped (2026-10-01): only verified figures can be named,
-    # and those ranked far down (#65, #101) while the real hubs weren't
-    # verified, so "best-connected members" misled.
+    # Subcommunities are described by their organizations; their people get a
+    # crawlie of their own only when the core is well known (see _core_people).
     for sub in est.get("subcommunities", []):
         sorgs = [short_company(o) for o in sub["hub_orgs"] if is_clean_label(o)][:3]
         if len(sorgs) < 3:
@@ -546,6 +563,14 @@ def community_facts(est, verified, sep_median=None):
         out.append(fact("community_establishment",
                         f'Inside the "establishment" community is a subcommunity of {sub["people"]:,} people '
                         f"centred on {_join(sorgs)}. {COMMUNITY_DEF}", ["sub", sorgs[0]]))
+        # a separate crawlie for its core people (operator's request, 2026-10-14);
+        # each must link directly to one of its hub organizations, see above
+        core = _core_people([(n, bool(hub_links)) for n, hub_links in sub.get("hub_people", [])], verified)
+        if core:
+            out.append(fact("community_establishment",
+                            f'The core of the subcommunity centred on {_join(sorgs)}: {_join(core)} — the '
+                            f"best-known figures with the most ties to other people inside it. {COMMUNITY_DEF}",
+                            ["core", sorgs[0]], core))
     return out
 
 
