@@ -53,6 +53,13 @@ def categorize(rt):
         return "MEMBERSHIP"
     if r == "PAID_VENDOR":
         return "FINANCIAL"
+    # AI / neocloud financing web (load_ai_financing.py, 2026-10-15) and Form D
+    # sales-compensation recipients: money, credit or a contract between the
+    # two parties
+    if r in ("INVESTED_IN", "LENT_TO", "ARRANGED_FINANCING_FOR", "COMPUTE_CUSTOMER_OF",
+             "LEASES_FROM", "BACKSTOPS", "CHIP_CUSTOMER_OF", "WARRANT_TO", "ACQUIRED_BY",
+             "PLACEMENT_AGENT_FOR", "SPV_INVESTS_IN"):
+        return "FINANCIAL"
     if r == "SAME_ORG_OVERLAP":
         return "SAME_ORG_OVERLAP"
     if r == "SAME_SCHOOL_OVERLAP":
