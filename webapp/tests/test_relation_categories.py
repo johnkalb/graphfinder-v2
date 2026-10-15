@@ -163,3 +163,9 @@ def test_fec_structure_and_money_flow_types():
     assert categorize("COMMITTEE_TRANSFER") == "DONATION"
     assert categorize("PAC_SPONSOR") == "MEMBERSHIP"
     assert categorize("PAID_VENDOR") == "FINANCIAL"
+
+
+def test_ai_financing_and_form_d_recipient_types_are_financial():
+    for rt in ("INVESTED_IN", "LENT_TO", "ARRANGED_FINANCING_FOR", "COMPUTE_CUSTOMER_OF", "LEASES_FROM",
+               "BACKSTOPS", "CHIP_CUSTOMER_OF", "WARRANT_TO", "ACQUIRED_BY", "PLACEMENT_AGENT_FOR", "SPV_INVESTS_IN"):
+        assert categorize(rt) == "FINANCIAL", rt
