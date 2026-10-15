@@ -21,6 +21,7 @@ Three reversible sets, each with its own source_data:
 Undo: DELETE FROM relationships WHERE source_data IN ('AI_DEALS_2026',
       'AI_COMPANY_LEADERS', 'SEC_FORM_D_RECIPIENTS');
 """
+import argparse
 import csv
 import glob
 import io
@@ -243,7 +244,13 @@ def form_d_rows(zip_dir):
 
 
 def main():
-    zips = sys.argv[sys.argv.index("--zips") + 1] if "--zips" in sys.argv else None
+    ap = argparse.ArgumentParser(allow_abbrev=False)
+    ap.add_argument("--zips", help="dir of {q}_d.zip Form D data sets (omit to load only deals + leaders)")
+    ap.add_argument("--commit", action="store_true")
+    args = ap.parse_args()
+    if args.zips and not os.path.isdir(args.zips):
+        sys.exit(f"--zips: no such directory: {args.zips}")
+    zips = args.zips
     rows = deal_rows() + leader_rows() + (form_d_rows(zips) if zips else [])
     by = defaultdict(int)
     for r in rows:
@@ -251,7 +258,7 @@ def main():
     for k, v in sorted(by.items()):
         print(f"  {k[0]:24} {k[1]:24} {v:8,}")
     print(f"{len(rows):,} rows total")
-    if "--commit" not in sys.argv:
+    if not args.commit:
         print("dry run -- add --commit to insert")
         return
     sys.path.insert(0, r"C:\Users\johnk\AppData\Local\hermes\scripts")
