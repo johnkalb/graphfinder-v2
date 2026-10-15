@@ -615,6 +615,19 @@ def superpac_facts(m):
                         f"{rc['million_donors']:,} donors who each gave super PACs $1 million or more have put in "
                         f"{money(big)} — {cmp} the {money(campaigns)} individuals have given all Democratic and "
                         f"Republican House and Senate campaigns and party committees combined.", ["vs_campaigns"]))
+    d, r = m["parties"]["D"], m["parties"]["R"]
+    if d.get("fec_committee_total") and r.get("fec_committee_total") and side.get("D") and side.get("R"):
+        # given to campaigns/party committees + super PAC money spent on that
+        # side's behalf; super PAC spending with no clear side is left out
+        def all_in(p, v):
+            return v["fec_individual_total"] + v["fec_committee_total"] + side[p]
+        out.append(fact("stats_superpac",
+                        f"All told, {money(all_in('D', d))} has gone to the Democratic side of the 2026 House and "
+                        f"Senate midterms — {money(d['fec_individual_total'])} from individuals and "
+                        f"{money(d['fec_committee_total'])} from PACs to campaigns and party committees, plus "
+                        f"{money(side['D'])} super PACs spent helping them — and {money(all_in('R', r))} to the "
+                        f"Republican side ({money(r['fec_individual_total'])}, {money(r['fec_committee_total'])} "
+                        f"and {money(side['R'])}).", ["all_in"]))
     by = sp.get("receipts_by_side", {})
     if by.get("D", {}).get("dollars") and by.get("R", {}).get("dollars"):
         out.append(fact("stats_superpac",
