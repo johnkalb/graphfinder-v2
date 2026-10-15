@@ -482,6 +482,46 @@ def stats_facts(stats):
         out.append(fact("stats_scale",
                         f"sixdegrees maps {sc['nodes'] / 1e6:.2f} million people and organizations, linked by "
                         f"{sc['edges'] / 1e6:.1f} million relationships drawn from public records.", ["size"]))
+        out += density_facts(sc)
+    return out
+
+
+# Facebook's whole friend graph, May 2011: Ugander, Karrer, Backstrom & Marlow,
+# "The Anatomy of the Facebook Social Graph" (arXiv:1111.4503). Only published
+# full-network counts here -- no estimates for networks that publish none.
+FB_2011_USERS, FB_2011_FRIENDSHIPS = 721e6, 69e9
+
+
+def one_in(density):
+    """1.34e-6 -> '750,000' (two significant figures)."""
+    n = 1 / density
+    return f"{round(n, -len(str(int(n))) + 2):,.0f}"
+
+
+def density_facts(sc):
+    n, e = sc["nodes"], sc["edges"]
+    if n < 2 or not e:
+        return []
+    d = 2 * e / (n * (n - 1))
+    avg = 2 * e / n
+    fb_d = 2 * FB_2011_FRIENDSHIPS / (FB_2011_USERS * (FB_2011_USERS - 1))
+    fb_avg = 2 * FB_2011_FRIENDSHIPS / FB_2011_USERS
+    out = [
+        fact("stats_density",
+             f"Only 1 in {one_in(d)} possible pairs in sixdegrees is directly linked. Facebook's friend network "
+             f"was sparser: 1 in {one_in(fb_d)} pairs in a 2011 study of all {FB_2011_USERS / 1e6:.0f} million "
+             f"users. Every large network is sparse; public records alone put sixdegrees in the usual range for social networks.", ["vs_facebook"]),
+        fact("stats_density",
+             f"The average Facebook user had about {fb_avg:.0f} friends in 2011; the average person or "
+             f"organization in sixdegrees has {avg:.1f} public-record links. Yet sixdegrees is "
+             f"{d / fb_d:.0f}× denser, because density divides by every possible pair, and Facebook had "
+             f"{FB_2011_USERS / n:,.0f}× as many members.", ["per_member"]),
+    ]
+    if sc.get("median_degree") is not None and sc.get("max_degree"):
+        out.append(fact("stats_density",
+                        f"Links in sixdegrees are very uneven: the typical person or organization has "
+                        f"{sc['median_degree']} direct link{'s' if sc['median_degree'] != 1 else ''}, the most "
+                        f"connected has {sc['max_degree']:,}. Those hubs keep paths short.", ["hubs"]))
     return out
 
 

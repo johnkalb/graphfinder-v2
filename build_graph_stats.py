@@ -376,6 +376,8 @@ def main():
 
     stats = {"generated_at": datetime.now(timezone.utc).isoformat(),
              "scale": {"nodes": G.vcount(), "edges": G.ecount(), "people": sum(people_mask)}}
+    deg = sorted(G.degree())
+    stats["scale"].update(median_degree=deg[len(deg) // 2], max_degree=deg[-1])
     stats["separation"] = separation_stats(G, people_mask)
     log(f"separation: {stats['separation']}")
 
