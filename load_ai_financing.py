@@ -18,6 +18,7 @@ Three reversible sets, each with its own source_data:
 
   python load_ai_financing.py --zips <dir of {q}_d.zip Form D data sets>            # dry run
   python load_ai_financing.py --zips <dir> --commit                                 # insert
+  python load_ai_financing.py --zips <dir> --commit --replace-form-d                # reload Form D: delete its rows + insert
 Undo: DELETE FROM relationships WHERE source_data IN ('AI_DEALS_2026',
       'AI_COMPANY_LEADERS', 'SEC_FORM_D_RECIPIENTS');
 """
@@ -30,7 +31,7 @@ import os
 import re
 import sys
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "exports"))
@@ -171,6 +172,22 @@ def is_person(name, crd):
             and not any(ch.isdigit() for ch in name))
 
 
+# firms whose names pass is_person()
+PERSON_LIKE_FIRMS = re.compile(r"(Morgan Stanley|Raymond James|Edward Jones|Charles Schwab|Stifel Nicolaus|"
+                               r"Robert W\.? Baird|Janney Montgomery|Piper Sandler|Oppenheimer|Cantor Fitzgerald|"
+                               r"Wells Fargo|Merrill Lynch|Goldman Sachs|Lazard|Evercore|Houlihan Lokey)\b", re.I)
+_FIRM_SUFFIX = re.compile(r"[,.]?\s+(LLC|L\.L\.C\.|Inc\.?|Incorporated|Corp\.?|Corporation|Ltd\.?|L\.?P\.?|LLP|Co\.?)$", re.I)
+
+
+def short_firm(firm):
+    """'H & L Equities, LLC' -> 'H & L Equities' for rep labels."""
+    for _ in range(2):                       # 'Foo Securities Co., LLC'
+        firm = _FIRM_SUFFIX.sub("", firm).strip(" ,")
+    if firm.isupper():                       # keep acronyms: 'UBS FINANCIAL SERVICES' -> 'UBS Financial Services'
+        firm = " ".join(w if len(w) <= 3 else w.title() for w in firm.split())
+    return firm
+
+
 def _money(v):
     try:
         return float(v)
@@ -198,7 +215,34 @@ def form_d_rows(zip_dir):
             if inv is not None and (ev["max_investors"] or 0) < inv:
                 ev["max_investors"] = int(inv)
 
-    for path in sorted(glob.glob(os.path.join(zip_dir, "*_d.zip")) + glob.glob(os.path.join(zip_dir, "20??q?.zip"))):
+    rep_names, rep_firms = defaultdict(Counter), defaultdict(Counter)    # CRD -> spellings / firms
+    rep_events = []
+
+    def rep_label(rid):
+        name = rep_names[rid].most_common(1)[0][0]
+        parts = [p.strip() for p in name.split(",")]
+        if len(parts) == 2 and all(parts):          # 'Shollmier, Dudley' -> 'Dudley Shollmier'
+            name = f"{parts[1]} {parts[0]}"
+        elif len(parts) == 3 and parts[1].rstrip(".").lower() in ("jr", "sr", "ii", "iii"):
+            name = f"{parts[2]} {parts[0]} {parts[1]}"   # 'Lopez, Jr., Luis O' -> 'Luis O Lopez Jr.'
+        if name.isupper():
+            name = name.title()
+        if not rep_firms[rid]:
+            return name
+        return f"{name} ({short_firm(rep_firms[rid].most_common(1)[0][0])})"
+
+    paths = sorted(glob.glob(os.path.join(zip_dir, "*_d.zip")) + glob.glob(os.path.join(zip_dir, "20??q?.zip")))
+    # Some filings swap the fields (recipient 'Morgan Stanley', broker-dealer
+    # 'Micah Todd Lowry'). A recipient name seen more often as a broker-dealer
+    # than as a recipient is a firm.
+    as_bd, as_rn = Counter(), Counter()
+    for path in paths:
+        for r in _tsv(zipfile.ZipFile(path), "RECIPIENTS.TSV"):
+            as_bd[clean(r.get("ASSOCIATEDBDNAME")).lower()] += 1
+            as_rn[clean(r.get("RECIPIENTNAME")).lower()] += 1
+    firm_names = {n for n, c in as_bd.items() if n and c > as_rn[n]}
+
+    for path in paths:
         q = re.search(r"(\d{4}q\d)", os.path.basename(path)).group(1)
         z = zipfile.ZipFile(path)
         issuer = {}
@@ -216,15 +260,25 @@ def form_d_rows(zip_dir):
             rn, rcrd = clean(r.get("RECIPIENTNAME")), (r.get("RECIPIENTCRDNUMBER") or "").strip()
             bd, bdcrd = clean(r.get("ASSOCIATEDBDNAME")), (r.get("ASSOCIATEDBDCRDNUMBER") or "").strip()
             bdcrd = bdcrd if bdcrd.strip("0").isdigit() else ""
-            rep = rn if rn and rn != bd and is_person(rn, rcrd) else ""
-            firm = bd or ("" if rep else rn)
+            if rn and rn.lower() in firm_names and rn.lower() != bd.lower():
+                rep, firm = "", rn                  # swapped fields: the 'broker-dealer' is a person
+            else:
+                rep = rn if rn and rn != bd and is_person(rn, rcrd) else ""
+                firm = bd or ("" if rep else rn)
+            if firm and is_person(firm, "1") and not PERSON_LIKE_FIRMS.match(firm):
+                # a person in the firm field: as a bare-name ORG node it would
+                # merge with namesakes. A one-off is a misfiled rep (dropped);
+                # a regular one is a one-person broker-dealer ('Gary Cutson').
+                firm = f"{firm.title() if firm.isupper() else firm} (broker-dealer)" if firm.lower() in firm_names else ""
             if firm:
                 add(firm, "ORG", iname, "PLACEMENT_AGENT_FOR", f"CRD:{bdcrd}" if bdcrd and bd else None, cik, q, acc, off)
             if rep:
                 rid = f"CRD:{rcrd.lstrip('0')}"
-                add(rep, "PERSON", iname, "PLACEMENT_AGENT_FOR", rid, cik, q, acc, off)
+                rep_names[rid][rep] += 1
                 if firm:
-                    add(rep, "PERSON", firm, "EMPLOYED_BY", rid, f"CRD:{bdcrd}" if bdcrd else None, q, acc, None)
+                    rep_firms[rid][firm] += 1
+                offsub = {k: off.get(k) for k in ("TOTALAMOUNTSOLD", "TOTALNUMBERALREADYINVESTED")} if off else None
+                rep_events.append((rid, firm, bdcrd, iname, cik, q, acc, offsub))
         # AI-company SPVs: the vehicle buys into the company its name points at
         for acc, (iname, cik) in issuer.items():
             m = AI_SPV.search(iname)
@@ -234,6 +288,15 @@ def form_d_rows(zip_dir):
                 target = SPV_TARGET.get(key)
                 if target and target.lower() not in iname.lower():
                     add(iname, "ORG", target, "SPV_INVESTS_IN", cik, None, q, acc, offer.get(acc))
+    # Reps are keyed by CRD and named "Name (Firm)" after their most frequent
+    # firm: a bare name merged brokers with their namesakes in the graph
+    # ("Scott Harrison" of H & L Equities had 3,543 links on 2026-10-16), and
+    # one firm per CRD keeps a rep who changed firms a single node.
+    for rid, firm, bdcrd, iname, cik, q, acc, offsub in rep_events:
+        label = rep_label(rid)
+        add(label, "PERSON", iname, "PLACEMENT_AGENT_FOR", rid, cik, q, acc, offsub)
+        if firm:
+            add(label, "PERSON", firm, "EMPLOYED_BY", rid, f"CRD:{bdcrd}" if bdcrd else None, q, acc, None)
     rows = []
     for (src, stype, tgt, rel, sid, tid), ev in agg.items():
         if src.lower() == tgt.lower():
@@ -247,7 +310,12 @@ def main():
     ap = argparse.ArgumentParser(allow_abbrev=False)
     ap.add_argument("--zips", help="dir of {q}_d.zip Form D data sets (omit to load only deals + leaders)")
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--replace-form-d", action="store_true",
+                    help="first delete every SEC_FORM_D_RECIPIENTS row (e.g. after a labelling change); "
+                         "same transaction as the insert")
     args = ap.parse_args()
+    if args.replace_form_d and not args.zips:
+        sys.exit("--replace-form-d needs --zips, or the Form D rows would only be deleted")
     if args.zips and not os.path.isdir(args.zips):
         sys.exit(f"--zips: no such directory: {args.zips}")
     zips = args.zips
@@ -267,6 +335,9 @@ def main():
     from psycopg2.extras import execute_values
     conn = psycopg2.connect(os.environ.get("DATABASE_URL") or pg_secret.load_secret("DATABASE_URL"))
     cur = conn.cursor()
+    if args.replace_form_d:
+        cur.execute("DELETE FROM relationships WHERE source_data = 'SEC_FORM_D_RECIPIENTS'")
+        print(f"deleted {cur.rowcount:,} old SEC_FORM_D_RECIPIENTS rows")
     inserted = execute_values(
         cur, "INSERT INTO relationships (source_id, source_name, source_type, target_id, target_name, target_type, "
              "relation_type, source_data, evidence) VALUES %s ON CONFLICT DO NOTHING RETURNING 1",
