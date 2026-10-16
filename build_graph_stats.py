@@ -14,6 +14,8 @@ the webapp.
   charities   the IRS Business Master File candidates ($10M+ assets) and how
               many of them the harvester has processed so far
   law_firms   AMLAW_ROSTER attorneys per firm (only the firms we harvest)
+  advisers    owners/control persons of SEC-registered investment advisers
+              (SEC_ADV_OWNERS): count, most connected, highest PageRank
   establishment  the "establishment" community (Leiden): size, partisan
               links, median hops, top bridges/hubs, subcommunities
 
@@ -111,6 +113,43 @@ def separation_stats(G, people_mask):
         "reach90_share_within_typical": round(sum(1 for r in reach90 if r <= typical_reach) / len(reach90), 3),
         "longest_seen": longest,
     }
+
+
+def adviser_stats(conn, nodes, edges, people_mask):
+    """Owners and control persons of SEC-registered investment advisers, from
+    load_sec_adv_owners.py (source_data SEC_ADV_OWNERS: Form ADV owners with
+    the parser's junk removed, each a "Name (Firm)" node): how many, and who
+    among them has the most connections and the highest PageRank. Ranks are
+    among all people, by the site's PageRank."""
+    cur = conn.cursor()
+    cur.execute("SELECT count(DISTINCT evidence::json->>'crd'), count(DISTINCT target_name), "
+                "count(DISTINCT source_name) FROM relationships WHERE source_data = 'SEC_ADV_OWNERS'")
+    firms_crd, firms_named, owners = cur.fetchone()
+    if not owners:
+        return None
+    cur.execute("SELECT DISTINCT source_name FROM relationships WHERE source_data = 'SEC_ADV_OWNERS'")
+    exact = {n: i for i, n in enumerate(nodes)}
+    idx = {exact[n] for (n,) in cur.fetchall() if n in exact and people_mask[exact[n]]}
+
+    # the site's PageRank (build_search_from_scored.py: networkx Graph, so one
+    # edge per pair with the last weight seen, then pagerank_util's exact solver)
+    w = {}
+    for e in edges:
+        a, b = (e[0], e[1]) if e[0] <= e[1] else (e[1], e[0])
+        w[(a, b)] = float(e[2])
+    G = ig.Graph(n=len(nodes), edges=list(w), directed=False)
+    pr = np.array(G.pagerank(weights=list(w.values()), damping=0.85))
+    deg = np.array(G.degree())
+    people_pr = np.sort(pr[np.array(people_mask, dtype=bool)])[::-1]
+    rank = lambda i: int(np.searchsorted(-people_pr, -pr[i], side="left")) + 1   # noqa: E731
+
+    def entry(i):
+        return {"name": nodes[i], "degree": int(deg[i]), "rank": rank(i)}
+    return {"firms": firms_crd or firms_named, "owners": owners, "in_graph": len(idx),
+            "people_ranked": len(people_pr),
+            "median_degree": int(np.median(deg[list(idx)])) if idx else 0,
+            "top_degree": [entry(i) for i in sorted(idx, key=lambda i: -deg[i])[:25]],
+            "top_pagerank": [entry(i) for i in sorted(idx, key=lambda i: -pr[i])[:25]]}
 
 
 def charity_stats(conn):
@@ -404,6 +443,11 @@ def main():
             log(f"inventors: {stats['inventors']}")
         except Exception as e:
             log(f"inventor stats skipped: {e}")
+        try:
+            stats["advisers"] = adviser_stats(conn, nodes, g["edges"], people_mask) or {}
+            log(f"advisers: {json.dumps(stats['advisers'])[:400]}")
+        except Exception as e:
+            log(f"adviser stats skipped: {e}")
         conn.close()
 
     try:

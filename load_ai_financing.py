@@ -176,7 +176,7 @@ def is_person(name, crd):
 PERSON_LIKE_FIRMS = re.compile(r"(Morgan Stanley|Raymond James|Edward Jones|Charles Schwab|Stifel Nicolaus|"
                                r"Robert W\.? Baird|Janney Montgomery|Piper Sandler|Oppenheimer|Cantor Fitzgerald|"
                                r"Wells Fargo|Merrill Lynch|Goldman Sachs|Lazard|Evercore|Houlihan Lokey)\b", re.I)
-_FIRM_SUFFIX = re.compile(r"[,.]?\s+(LLC|L\.L\.C\.|Inc\.?|Incorporated|Corp\.?|Corporation|Ltd\.?|L\.?P\.?|LLP|Co\.?)$", re.I)
+_FIRM_SUFFIX = re.compile(r"[,.]?\s+(LLC|L\.L\.C\.|Inc\.?|Incorporated|Corp\.?|Corporation|Ltd\.?|Limited|L\.?P\.?|LLP|Co\.?)$", re.I)
 
 
 def short_firm(firm):
@@ -184,7 +184,7 @@ def short_firm(firm):
     for _ in range(2):                       # 'Foo Securities Co., LLC'
         firm = _FIRM_SUFFIX.sub("", firm).strip(" ,")
     if firm.isupper():                       # keep acronyms: 'UBS FINANCIAL SERVICES' -> 'UBS Financial Services'
-        firm = " ".join(w if len(w) <= 3 else w.title() for w in firm.split())
+        firm = " ".join(w if len(w.strip("()")) <= 3 else w.title() for w in firm.split())
     return firm
 
 
