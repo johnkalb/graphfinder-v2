@@ -483,6 +483,41 @@ def stats_facts(stats):
                         f"sixdegrees maps {sc['nodes'] / 1e6:.2f} million people and organizations, linked by "
                         f"{sc['edges'] / 1e6:.1f} million relationships drawn from public records.", ["size"]))
         out += density_facts(sc)
+    out += adviser_facts(stats.get("advisers"))
+    return out
+
+
+def _of_firm(label):
+    """'Gery Sadzewicz (Foo Advisors)' -> 'Gery Sadzewicz of Foo Advisors'."""
+    name, sep, firm = label.partition(" (")
+    return f"{name} of {firm[:-1]}" if sep and firm.endswith(")") else label
+
+
+def adviser_facts(a):
+    """SEC-registered investment advisers' owners and executives
+    (build_graph_stats.adviser_stats). The named ones list private people, so
+    they're ticker-only: none of them is on the verified list."""
+    if not a or not a.get("owners"):
+        return []
+    out = [fact("stats_advisers",
+                f"sixdegrees maps {a['owners']:,} owners and executives of {a['firms']:,} SEC-registered "
+                f"investment advisory firms, from the firms' Form ADV filings. The typical one has "
+                f"{a['median_degree']} direct connection{'s' if a['median_degree'] != 1 else ''} in the network.",
+                ["count"])]
+    top = a.get("top_degree", [])[:3]
+    if len(top) == 3:
+        out.append(fact("stats_advisers",
+                        "The investment-adviser owners and executives with the most connections in sixdegrees: "
+                        + ", ".join(f"{_of_firm(e['name'])} ({e['degree']:,})" for e in top[:2])
+                        + f" and {_of_firm(top[2]['name'])} ({top[2]['degree']:,}).",
+                        ["top_degree"], [e["name"] for e in top]))
+    pr = a.get("top_pagerank", [])
+    if pr:
+        e = pr[0]
+        out.append(fact("stats_advisers",
+                        f"The investment-adviser owner or executive with the highest PageRank in sixdegrees is "
+                        f"{_of_firm(e['name'])}, #{e['rank']:,} of {a['people_ranked']:,} people in the network.",
+                        ["top_pagerank"], [e["name"]]))
     return out
 
 
