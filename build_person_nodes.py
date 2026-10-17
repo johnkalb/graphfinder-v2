@@ -28,6 +28,7 @@ PEOPLE_TSV = "webapp/data/graph_people.tsv.gz"
 _COMBINING = dict.fromkeys(range(0x300, 0x370))
 _CK_KEEP = re.compile(r"[^\w ]|_")
 _CK_WS = re.compile(r"\s+")
+_FIRM_SUFFIX = re.compile(r"\s*\((?:[^()]|\([^()]*\))*\)\s*$")   # trailing "(Firm)", one nested level
 
 
 def canon_key(name):
@@ -86,7 +87,11 @@ def main():
     from build_crawlie_facts import _ORG_WORDS
     def is_person(i, n):
         base = splits.get(i, n)
-        return canon_key(base) in person_keys and not _ORG_WORDS.search(base)
+        # Loader labels like "Gery Sadzewicz (Abridge Partners)" (Form ADV
+        # owners, Form D reps) carry the firm in brackets: the DB types the
+        # whole label PERSON, and the firm's org word is checked only on the
+        # name, like the split nodes above (2026-10-17).
+        return canon_key(base) in person_keys and not _ORG_WORDS.search(_FIRM_SUFFIX.sub("", base))
     idx = [i for i, n in enumerate(nodes) if is_person(i, n)]
     with gzip.open(OUT, "wt", encoding="utf-8") as f:
         json.dump(idx, f, separators=(",", ":"))
