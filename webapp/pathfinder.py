@@ -3278,7 +3278,60 @@ async def internal_latency(request: Request, hours: float = Query(default=24, gt
     shown = routes[:40] + [d for d in routes[40:] if d["slow"]]   # busiest, plus any slow one
     return {"hours": hours, "slow_ms": slow_ms, "rows": len(rows), "routes": shown,
             "slowest": [{"route": r["route"], "ms": round(r["latency_ms"]), "status": r["status_code"],
-                         "at": str(r["timestamp"])} for r in slowest[:25]]}
+                         "at": str(r["timestamp"])} for r in slowest[:25]],
+            "memory": _memory_snapshot()}
+
+
+def _memory_snapshot():
+    """Container and process memory in MB (2026-10-18), for check_latency.py.
+    Pss splits pages shared by the forked path workers between them, so the
+    per-process numbers add up to real use; Linux only, {} elsewhere."""
+    def kb_field(path, key):
+        try:
+            with open(path) as f:
+                for line in f:
+                    if line.startswith(key + ":"):
+                        return int(line.split()[1])
+        except OSError:
+            return None
+        return None
+
+    def read_int(path):
+        try:
+            with open(path) as f:
+                v = f.read().strip()
+            return None if v == "max" else int(v)
+        except (OSError, ValueError):
+            return None
+
+    mb = lambda b: None if b is None else round(b / 2**20)
+    out = {}
+    for cur, lim in (("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.max"),
+                     ("/sys/fs/cgroup/memory/memory.usage_in_bytes", "/sys/fs/cgroup/memory/memory.limit_in_bytes")):
+        if os.path.exists(cur):
+            out["cgroup_used_mb"], out["cgroup_limit_mb"] = mb(read_int(cur)), mb(read_int(lim))
+            break
+    for key in ("MemTotal", "MemAvailable"):
+        v = kb_field("/proc/meminfo", key)
+        if v is not None:
+            out[key + "_mb"] = round(v / 1024)
+    me = os.getpid()
+    procs = []
+    try:
+        pids = [int(d) for d in os.listdir("/proc") if d.isdigit()]
+    except OSError:
+        pids = []
+    for pid in pids:
+        if pid != me and kb_field(f"/proc/{pid}/status", "PPid") != me:
+            continue
+        pss = kb_field(f"/proc/{pid}/smaps_rollup", "Pss")
+        rss = kb_field(f"/proc/{pid}/status", "VmRSS")
+        procs.append({"pid": pid, "role": "app" if pid == me else "child",
+                      "pss_mb": None if pss is None else round(pss / 1024),
+                      "rss_mb": None if rss is None else round(rss / 1024)})
+    if procs:
+        out["processes"] = procs
+    return out
 
 
 @app.post("/api/contacts/add-me")

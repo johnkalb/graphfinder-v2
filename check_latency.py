@@ -10,7 +10,8 @@ request_logs table the web app writes for every request.
 
 --alert-ms sends a Telegram message (same bot and chat as
 pipeline_health_check.py) only when a visitor-facing route had a request over
-the threshold, or when the check itself fails; otherwise it just prints.
+the threshold, the app uses over 85% of the container's memory, or the check
+itself fails; otherwise it just prints.
 """
 import argparse
 import os
@@ -25,6 +26,7 @@ import pg_secret  # noqa: E402
 URL = os.environ.get("LATENCY_URL", "https://sixdegrees.net/api/internal/user-links/latency")
 WATCH = ("/api/search", "/api/path", "/api/entity", "/")
 NOT_VISITOR = ("/api/internal", "/admin", "/api/admin", "/debug")   # our own tooling
+MEM_ALERT = 0.85   # alert when the app's processes use more than this share of the container's memory
 
 
 def fetch(hours, slow_ms):
@@ -45,16 +47,35 @@ def report(d):
     print("\nSlowest requests:")
     for x in d["slowest"][:15]:
         print(f"  {x['ms']:>7} ms  {x['status']}  {x['at']}  {x['route']}")
+    m = d.get("memory") or {}
+    if m:
+        print(f"\nMemory: app processes {memory_use(m)[0]:,} MB of {memory_use(m)[1] or '?'} MB; "
+              f"container {m.get('cgroup_used_mb')} / {m.get('cgroup_limit_mb')} MB (includes file cache); "
+              f"MemAvailable {m.get('MemAvailable_mb')} of {m.get('MemTotal_mb')} MB")
+        for p in m.get("processes", []):
+            print(f"  {p['role']:5} pid {p['pid']:>6}  pss {p['pss_mb']} MB  rss {p['rss_mb']} MB")
+
+
+def memory_use(m):
+    """(MB used by the app and its path workers, MB limit). Pss, not the
+    cgroup's count, which includes reclaimable cache of the graph files."""
+    used = sum(p["pss_mb"] or p["rss_mb"] or 0 for p in m.get("processes", []))
+    limit = m.get("cgroup_limit_mb") or m.get("MemTotal_mb")
+    return used, limit
 
 
 def alert_text(d):
     """The Telegram message, or None when nothing visitor-facing was slow."""
     slow = [x for x in d["routes"] if x["slow"] and not x["route"].startswith(NOT_VISITOR)]
+    used, limit = memory_use(d.get("memory") or {})
+    mem_line = (f"sixdegrees memory: app uses {used:,} MB of {limit:,} MB ({used / limit:.0%})"
+                if limit and used > MEM_ALERT * limit else None)
     if not slow:
-        return None
+        return mem_line
     secs = d["slow_ms"] / 1000
-    lines = [f"sixdegrees latency: {sum(x['slow'] for x in slow)} request(s) over {secs:g} s "
-             f"in the last {d['hours']:g} h"]
+    lines = ([mem_line] if mem_line else []) + [
+        f"sixdegrees latency: {sum(x['slow'] for x in slow)} request(s) over {secs:g} s "
+        f"in the last {d['hours']:g} h"]
     for x in sorted(slow, key=lambda x: -x["slow"]):
         lines.append(f"  {x['route']}: {x['slow']} of {x['n']} slow, p90 {x['p90'] / 1000:.1f} s, "
                      f"max {x['max'] / 1000:.1f} s")
