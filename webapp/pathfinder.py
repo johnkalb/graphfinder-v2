@@ -1,6 +1,6 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
-import os, pickle, json, sqlite3, hashlib, re, html, bisect
+import os, pickle, json, sqlite3, hashlib, re, html, bisect, array, heapq
 import asyncio
 import concurrent.futures
 import functools
@@ -244,8 +244,43 @@ def _append_user_submitted_fact(sentence: str):
     os.replace(tmp, fpath)
 
 
+_search_blob = _search_blob_starts = None            # see _load_search()
+_alias_blob = _alias_blob_starts = _alias_blob_owner = None
+
+
+def _line_starts(lines):
+    """Offsets where each line begins in "\\n".join(lines)."""
+    starts, pos = array.array("q"), 0
+    for s in lines:
+        starts.append(pos)
+        pos += len(s) + 1
+    return starts
+
+
+def _blob_lines_containing(blob, starts, q):
+    """Indices of the lines of blob (a "\\n"-joined list) that contain q."""
+    hits = []
+    pos = blob.find(q)
+    while pos != -1:
+        line = bisect.bisect_right(starts, pos) - 1
+        hits.append(line)
+        nxt = starts[line + 1] if line + 1 < len(starts) else len(blob)
+        pos = blob.find(q, nxt)     # one hit per line is enough
+    return hits
+
+
+_search_load_lock = threading.Lock()
+
+
 def _load_search():
-    """Load just the search index — fast, independent of graph."""
+    """Load just the search index — fast, independent of graph. Locked
+    because /api/search runs in worker threads: a second caller waits for
+    the index instead of seeing it half-built."""
+    with _search_load_lock:
+        _load_search_unlocked()
+
+
+def _load_search_unlocked():
     global _search_index, _search_index_meta, _canonical_map, _labels
     global _search_exact_index, _search_canon_keys, _search_canon_refs, _search_token_keys, _search_token_refs
     spath = DATA_DIR / "search_index.json.gz"
@@ -297,6 +332,20 @@ def _load_search():
         _search_canon_refs = [i for _, i in canon_pairs]
         _search_token_keys = [k for k, _ in token_pairs]
         _search_token_refs = [i for _, i in token_pairs]
+        # Substring blobs for the slow-path tiers (2026-10-18): every lowercase
+        # name (and alias) joined by "\n" so a substring test is one C-speed
+        # str.find over the blob instead of a Python loop over 3.2M entries.
+        global _search_blob, _search_blob_starts, _alias_blob, _alias_blob_starts, _alias_blob_owner
+        _search_blob = "\n".join(m[0] for m in _search_index_meta)
+        _search_blob_starts = _line_starts(m[0] for m in _search_index_meta)
+        alias_lines, owners = [], array.array("q")
+        for i, e in enumerate(_search_index):
+            for a in e.get("aliases", ()):
+                alias_lines.append(a.lower())
+                owners.append(i)
+        _alias_blob = "\n".join(alias_lines)
+        _alias_blob_starts = _line_starts(alias_lines)
+        _alias_blob_owner = owners
     cpath = DATA_DIR / "canonical_map.json"
     if _canonical_map is None and cpath.exists():
         with open(cpath, "r", encoding="utf-8") as f:
@@ -883,26 +932,14 @@ def _find_entry_cached(q):
     # overlap against "Bonnie R Cohen", or a substring buried mid-word like
     # "musk" inside "3Musketeers").
     if len(scores) < 50:
-        q_parts = q.split()
         # Matches on only SOME of a multi-word query ("marc" of "marc ehrlich"
         # hitting "MARCO RUBIO FOR SENATE") are kept aside and used only if
         # nothing better matched -- ranked by links, they filled the dropdown
         # with big committees that share one word with the name typed (2026-10-07).
-        partial = {}
-        for i, (entry, (canon_lower, parts, _is_p)) in enumerate(zip(_search_index, _search_index_meta)):
-            if i in scores:
-                continue
-            if q in canon_lower:
-                scores[i] = 50
-            elif any(q in a.lower() for a in entry.get("aliases", ())):
-                scores[i] = 40
-            else:
-                canon_parts = set(parts)
-                matching = sum(1 for qp in q_parts if any(cp.startswith(qp) for cp in canon_parts))
-                if matching == len(q_parts):
-                    scores[i] = 20 + matching * 5
-                elif matching > 0:
-                    partial[i] = 20 + matching * 5
+        if "\n" in q or _search_blob is None:
+            partial = _slow_tiers_scan(q, scores)
+        else:
+            partial = _slow_tiers_indexed(q, scores)
         if not scores:
             scores = partial
 
@@ -935,23 +972,108 @@ def _find_entry_cached(q):
     # has no notion of who's actually well-known. Phonebook order (surname,
     # given name) is the final tiebreak only when degree is also equal.
     # Both fields are already loaded on each entry, so neither costs anything.
-    results.sort(key=lambda x: (-x[0], -x[1].get("degree", 0), _name_sort_key(x[1]["canonical"])))
+    def cheap(x):
+        return (-x[0], -x[1].get("degree", 0))
+
+    def full(x):
+        return cheap(x) + (_name_sort_key(x[1]["canonical"]),)
+    # Short prefixes ("jo", "john") match hundreds of thousands of entries, and
+    # sorting them all by the full key took 2-6 s (2026-10-18). Only entries
+    # whose (tier, degree) reaches the 200th best can be in the top 50, so the
+    # full sort runs on just those -- same order, since the full key starts
+    # with (tier, degree). 200 leaves room for the de-duplication below.
+    head = results
+    if len(results) > 400:
+        cut = cheap(heapq.nsmallest(200, results, key=cheap)[-1])
+        head = [x for x in results if cheap(x) <= cut]
+    head.sort(key=full)
     # Dedup by canon_lower, keeping the best-ranked (already-sorted-first)
     # occurrence -- scores is keyed by entry_idx, not name, so two distinct
     # entries that happen to share a lowercase name (none exist in today's
     # data, checked directly, but nothing in the index build guarantees
     # that stays true after a future refresh) would otherwise both appear.
-    out = []
-    dedup_seen = set()
-    for _, entry in results:
-        cl = entry["canonical"].lower()
-        if cl in dedup_seen:
-            continue
-        dedup_seen.add(cl)
-        out.append(entry)
-        if len(out) >= 50:
-            break
+    def top50(ranked):
+        out = []
+        dedup_seen = set()
+        for _, entry in ranked:
+            cl = entry["canonical"].lower()
+            if cl in dedup_seen:
+                continue
+            dedup_seen.add(cl)
+            out.append(entry)
+            if len(out) >= 50:
+                break
+        return out
+    out = top50(head)
+    if len(out) < 50 and len(head) < len(results):   # duplicates ate the slack
+        results.sort(key=full)
+        out = top50(results)
     return out
+
+def _slow_tiers_scan(q, scores):
+    """The slow-path tiers by checking every entry: 50 = q is a substring of
+    the name, 40 = of an alias, 20 + 5*k = all k query words prefix some name
+    word. Fills scores (skipping entries already in it) and returns the
+    partial (some-words) matches. Took 11-20 s for two-word queries on the
+    3.2M-entry index (2026-10-18), so _slow_tiers_indexed() is used instead;
+    this stays as the reference it is tested against."""
+    q_parts = q.split()
+    partial = {}
+    for i, (entry, (canon_lower, parts, _is_p)) in enumerate(zip(_search_index, _search_index_meta)):
+        if i in scores:
+            continue
+        if q in canon_lower:
+            scores[i] = 50
+        elif any(q in a.lower() for a in entry.get("aliases", ())):
+            scores[i] = 40
+        else:
+            canon_parts = set(parts)
+            matching = sum(1 for qp in q_parts if any(cp.startswith(qp) for cp in canon_parts))
+            if matching == len(q_parts):
+                scores[i] = 20 + matching * 5
+            elif matching > 0:
+                partial[i] = 20 + matching * 5
+    return partial
+
+
+def _token_prefix_refs(qp):
+    """Entry indices with a name word starting with qp (may repeat)."""
+    lo = bisect.bisect_left(_search_token_keys, qp)
+    hi = bisect.bisect_left(_search_token_keys, qp + "￿")
+    return _search_token_refs[lo:hi]
+
+
+def _slow_tiers_indexed(q, scores):
+    """Same result as _slow_tiers_scan(), from the substring blobs and the
+    word-prefix index instead of a loop over every entry."""
+    for i in _blob_lines_containing(_search_blob, _search_blob_starts, q):
+        if i not in scores:
+            scores[i] = 50
+    for line in _blob_lines_containing(_alias_blob, _alias_blob_starts, q):
+        i = _alias_blob_owner[line]
+        if i not in scores:
+            scores[i] = 40
+    q_parts = q.split()
+    if not q_parts:
+        return {}
+    # every word matches: only entries in the smallest word's prefix range
+    # can qualify, so check just those
+    ranges = [(len(r), r) for r in (_token_prefix_refs(qp) for qp in q_parts)]
+    rarest = min(ranges, key=lambda x: x[0])[1]
+    full = 20 + 5 * len(q_parts)
+    for i in set(rarest):
+        if i in scores:
+            continue
+        parts = _search_index_meta[i][1]
+        if all(any(cp.startswith(qp) for cp in parts) for qp in q_parts):
+            scores[i] = full
+    if scores or len(q_parts) == 1:
+        return {}               # partial matches are only used when nothing else matched
+    counts = collections.Counter()
+    for _, r in ranges:
+        counts.update(set(r))
+    return {i: 20 + 5 * k for i, k in counts.items() if k < len(q_parts) and i not in scores}
+
 
 def _name_sort_key(canon):
     """(last_name, rest_of_name) for phonebook-style ordering -- a plain
@@ -1902,7 +2024,9 @@ async def crawlie():
     return {"facts": data.get("facts", []) + user_facts}
 
 @app.get("/api/search")
-async def search(request: Request, q: str = Query(default="")):
+def search(request: Request, q: str = Query(default="")):
+    # plain def: FastAPI runs it in a worker thread, so a slow search can't
+    # stall every other request on the event loop the way async def did
     if not q or len(q.strip()) < 2:
         return []
     _log_tester_usage(request, "search", {"query": q.strip()})
@@ -2997,6 +3121,44 @@ async def internal_user_links(request: Request, since_id: int = Query(default=0,
         out["public_links"] = [shaped(l) for l in _ml.public_links(p)]
         out["removed_links"] = [shaped(dict(l, contact_type="PERSON")) for l in _ml.removed_public_links(p)]
     return out
+
+
+@app.get("/api/internal/user-links/latency")
+async def internal_latency(request: Request, hours: float = Query(default=24, gt=0, le=24 * 30)):
+    """Response-time percentiles per route from request_logs (written by the
+    log_requests middleware), for check_latency.py (2026-10-18). Lives under
+    the user-links path only because that prefix is already a Cloudflare
+    Bypass; same token, and 404 without it."""
+    import hmac
+    token = os.environ.get("USER_LINKS_SYNC_TOKEN") or ""
+    supplied = request.headers.get("X-Sync-Token") or ""
+    if not token or not hmac.compare_digest(supplied.encode(), token.encode()):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = db.connect(DATA_DIR / "ops_metrics.db")
+    rows = conn.execute("SELECT route, latency_ms, status_code, timestamp FROM request_logs "
+                        "WHERE timestamp >= ? ORDER BY id DESC LIMIT 200000", (cutoff,)).fetchall()
+    conn.close()
+    by_route = collections.defaultdict(list)
+    slowest = []
+    for r in rows:
+        r = dict(r)
+        by_route[r["route"]].append(r["latency_ms"])
+        slowest.append(r)
+
+    def pct(xs, p):
+        return round(xs[min(len(xs) - 1, int(p / 100 * len(xs)))], 1)
+    routes = []
+    for route, xs in by_route.items():
+        xs.sort()
+        routes.append({"route": route, "n": len(xs), "p50": pct(xs, 50), "p90": pct(xs, 90),
+                       "p99": pct(xs, 99), "max": round(xs[-1], 1), "over_2s": sum(1 for x in xs if x > 2000)})
+    routes.sort(key=lambda d: -d["n"])
+    slowest.sort(key=lambda r: -r["latency_ms"])
+    return {"hours": hours, "rows": len(rows), "routes": routes[:40],
+            "slowest": [{"route": r["route"], "ms": round(r["latency_ms"]), "status": r["status_code"],
+                         "at": str(r["timestamp"])} for r in slowest[:25]]}
 
 
 @app.post("/api/contacts/add-me")
