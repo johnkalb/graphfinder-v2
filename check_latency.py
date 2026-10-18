@@ -60,7 +60,9 @@ def memory_use(m):
     """(MB used by the app and its path workers, MB limit). Pss, not the
     cgroup's count, which includes reclaimable cache of the graph files."""
     used = sum(p["pss_mb"] or p["rss_mb"] or 0 for p in m.get("processes", []))
-    limit = m.get("cgroup_limit_mb") or m.get("MemTotal_mb")
+    limit, total = m.get("cgroup_limit_mb"), m.get("MemTotal_mb")
+    if not limit or (total and limit > total):   # cgroup v1 reports "no limit" as ~8e12 MB
+        limit = total
     return used, limit
 
 
