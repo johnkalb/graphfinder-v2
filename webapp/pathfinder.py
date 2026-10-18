@@ -4605,7 +4605,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>🔗 Network Pathfinder</h1>
-  <p class="sub">Explore <strong>9 million relationships</strong> among 2.3 million people and organizations, drawn from FEC campaign finance, SEC filings, IRS nonprofit filings, lobbying disclosures, court records, patents, GDELT news, Wikidata and released Epstein documents. Find hidden paths between any two people or organizations. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
+  <p class="sub">Explore <strong>9 million relationships</strong> among 2.3 million people and organizations, drawn from FEC campaign finance, SEC filings, IRS nonprofit filings, lobbying disclosures, court records, patents, GDELT news, Wikidata and released Epstein documents. Find hidden paths between any two people or organizations. <strong>An organization works as an end point too:</strong> put yourself as A and an organization such as the Gates Foundation as B to see who could introduce you to someone there, even if you don't know whom to ask. Start by entering any two people or organizations, compare the paths the system finds, then use Build My Path, Check My Contacts, and the FAQ to decide how to use the results.</p>
 
   <div id="crawlie-ticker"><span id="crawlie-text"></span></div>
 
@@ -4623,16 +4623,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <div class="instructions">
     <strong>How to use:</strong><br>
-    1. Click <strong>Person A</strong> and start typing — suggestions appear below<br>
+    1. Click <strong>A</strong> and start typing a person's or organization's name — suggestions appear below<br>
     2. Click a name to select it<br>
-    3. Do the same for <strong>Person B</strong><br>
+    3. Do the same for <strong>B</strong>: another person, or an organization you want a way into<br>
     4. Click <strong>🔍 Find Path</strong> to see the connection
   </div>
 
   <div class="search-pair">
-    <h2>Person A</h2>
+    <h2>A: person or organization</h2>
     <div class="autocomplete-wrap">
-      <input id="src-input" type="text" placeholder="Type any name…" autocomplete="off" spellcheck="false">
+      <input id="src-input" type="text" placeholder="Type a person or organization…" autocomplete="off" spellcheck="false">
       <span class="search-spinner psi-spinner" id="src-search-spinner" style="display:none;"></span>
       <div id="src-dropdown" class="dropdown"></div>
     </div>
@@ -4640,9 +4640,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <div class="search-pair">
-    <h2>Person B</h2>
+    <h2>B: person or organization</h2>
     <div class="autocomplete-wrap">
-      <input id="tgt-input" type="text" placeholder="Type any name…" autocomplete="off" spellcheck="false">
+      <input id="tgt-input" type="text" placeholder="A person, or an organization like Gates Foundation…" autocomplete="off" spellcheck="false">
       <span class="search-spinner psi-spinner" id="tgt-search-spinner" style="display:none;"></span>
       <div id="tgt-dropdown" class="dropdown"></div>
     </div>
