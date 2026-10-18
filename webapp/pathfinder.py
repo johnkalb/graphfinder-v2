@@ -1345,6 +1345,14 @@ _igraph_prob = None  # np.float64[edge_id]
 _igraph_cats_mask = None  # np.uint32[edge_id], bit per category (see _igraph_cats_vocab)
 _igraph_cats_vocab = None  # [category_name], index == bit position
 _igraph_deceased_idx = None  # {vertex_id} whose name is in _load_deceased()
+# Both edge directions as scipy CSR, for _k_shortest_pruned() (2026-10-18).
+# _igraph_csr_eid[j] is the igraph edge id of CSR entry j; _igraph_csr_for is
+# the graph object these were built from (tests swap _igraph_graph directly).
+_igraph_csr = None  # scipy.sparse.csr_matrix, data = _igraph_weight
+_igraph_csr_living = None  # same structure, data = _igraph_living_weight
+_igraph_csr_eid = None
+_igraph_csr_for = None
+_igraph_component = None  # np.int32[vertex_id], connected component of the unmasked graph
 
 
 def _load_igraph():
@@ -1473,6 +1481,113 @@ def _load_igraph():
     _igraph_cats_mask = cats_mask_arr.view().copy()
     _igraph_cats_vocab = cats_vocab
     _igraph_deceased_idx = deceased_idx
+    _build_igraph_csr()
+
+
+def _build_igraph_csr():
+    """CSR copy of the graph for _k_shortest_pruned(). About 350MB for 7M
+    edges; built in the parent before the path pool forks, so the workers
+    share it copy-on-write. Skipped (old full search) without scipy or if
+    the graph has parallel edges, which the CSR would merge."""
+    global _igraph_csr, _igraph_csr_living, _igraph_csr_eid, _igraph_csr_for, _igraph_component
+    _igraph_csr = _igraph_csr_living = _igraph_csr_eid = _igraph_csr_for = _igraph_component = None
+    try:
+        import numpy as np
+        import scipy.sparse as sp
+    except ImportError:
+        logger.warning("scipy missing: path search uses the full k-shortest-paths scan")
+        return
+    g = _igraph_graph
+    if g is None or g.ecount() == 0 or g.has_multiple():
+        return
+    el = np.array(g.get_edgelist(), dtype=np.int32)
+    n_e = len(el)
+    eids = np.arange(1, n_e + 1, dtype=np.int64)  # +1: CSR drops explicit zeros
+    m = sp.coo_matrix((np.concatenate([eids, eids]),
+                       (np.concatenate([el[:, 0], el[:, 1]]), np.concatenate([el[:, 1], el[:, 0]]))),
+                      shape=(g.vcount(), g.vcount())).tocsr()
+    eid = (m.data - 1).astype(np.int32)
+    shape = m.shape
+    _igraph_csr = sp.csr_matrix((_igraph_weight[eid], m.indices, m.indptr), shape=shape, copy=False)
+    _igraph_csr_living = sp.csr_matrix((_igraph_living_weight[eid], m.indices, m.indptr), shape=shape, copy=False)
+    _igraph_csr_eid = eid
+    _igraph_component = np.array(g.connected_components().membership, dtype=np.int32)
+    _igraph_csr_for = g
+
+
+_PRUNED_START_R = 1.5  # ball radius per end; a hop weighs >= ~1 (-log prob + hop penalty)
+_PRUNED_STEP = 0.5
+_PRUNED_MAX_VERTICES = 400_000
+_PRUNED_MAX_ROUNDS = 40
+
+
+def _k_shortest_pruned(s, t, k, weights):
+    """Exact k shortest paths, searched on a small piece of the graph.
+
+    Take a ball of radius rs around s and rt around t (bounded Dijkstras,
+    scipy, C speed). A vertex v on an s-t path of total weight <= rs + rt
+    has d(s,v) + d(v,t) <= rs + rt, so it lies in one of the balls: the
+    induced subgraph of their union holds every such path, and Yen on that
+    subgraph returns the true k shortest whenever its k-th path weighs
+    <= rs + rt. Rounds grow only the ball with fewer vertices (a hub's ball
+    explodes while a leaf's stays tiny), like bidirectional Dijkstra. Once
+    some round finds k paths, the true k-th weighs no more than its k-th,
+    so Yen is skipped until rs + rt reaches that weight.
+
+    Measured 2026-10-18 on the 7.15M-edge graph: same path weights as the
+    full get_k_shortest_paths on 53 pairs (equal-weight ties can come back
+    in another order), typically 0.2-1 s instead of 2-85 s.
+
+    Returns vertex paths, or None when the caller should run the full
+    search instead (no CSR, union too big, or no certified answer)."""
+    if _igraph_csr is None or _igraph_csr_for is not _igraph_graph:
+        return None
+    if _igraph_component[s] != _igraph_component[t]:
+        return []  # no path under any weights: masks only add inf edges
+    import numpy as np
+    import scipy.sparse as sp
+    from scipy.sparse.csgraph import dijkstra
+    if weights is _igraph_weight:
+        csr = _igraph_csr
+    elif weights is _igraph_living_weight:
+        csr = _igraph_csr_living
+    else:
+        csr = sp.csr_matrix((weights[_igraph_csr_eid], _igraph_csr.indices, _igraph_csr.indptr),
+                            shape=_igraph_csr.shape, copy=False)
+    import warnings
+
+    radius = {s: _PRUNED_START_R, t: _PRUNED_START_R}
+
+    def ball(v):
+        return np.isfinite(dijkstra(csr, indices=v, limit=radius[v] * (1 + 1e-9) + 1e-9))
+
+    reach = {s: ball(s), t: ball(t)}
+    size = {v: int(np.count_nonzero(reach[v])) for v in (s, t)}
+    need = None  # k-th weight of some k paths found: the true k-th is no heavier
+    for _ in range(_PRUNED_MAX_ROUNDS):
+        T = radius[s] + radius[t]
+        if need is None or T >= need * (1 - 1e-9):
+            keep = np.flatnonzero(reach[s] | reach[t])
+            if len(keep) > _PRUNED_MAX_VERTICES:
+                return None
+            sub = csr[keep][:, keep].tocoo()
+            m = (sub.row < sub.col) & np.isfinite(sub.data)
+            h = ig.Graph(n=len(keep), edges=np.column_stack([sub.row[m], sub.col[m]]).tolist(), directed=False)
+            hw = sub.data[m]
+            ls, lt = int(np.searchsorted(keep, s)), int(np.searchsorted(keep, t))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)  # "Couldn't reach some vertices"
+                vps = [vp for vp in h.get_k_shortest_paths(ls, lt, k=k, weights=hw, output="vpath") if len(vp) > 1]
+            if len(vps) == k:
+                wk = max(float(hw[h.get_eids(list(zip(vp[:-1], vp[1:])))].sum()) for vp in vps)
+                if wk <= T * (1 + 1e-9) + 1e-9:
+                    return [[int(keep[i]) for i in vp] for vp in vps]
+                need = wk if need is None else min(need, wk)
+        grow = s if size[s] <= size[t] else t
+        radius[grow] += max(_PRUNED_STEP, 0.25 * radius[grow])
+        reach[grow] = ball(grow)
+        size[grow] = int(np.count_nonzero(reach[grow]))
+    return None
 
 
 def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=None, tgt_via=None):
@@ -1563,7 +1678,10 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=N
         if search_src == search_tgt:
             vpaths = [[search_src]]
         else:
-            vpaths = _igraph_graph.get_k_shortest_paths(search_src, search_tgt, k=k, weights=weights, output="vpath")
+            vpaths = _k_shortest_pruned(search_src, search_tgt, k, weights)
+            if vpaths is None:
+                vpaths = _igraph_graph.get_k_shortest_paths(search_src, search_tgt, k=k, weights=weights,
+                                                            output="vpath")
         vpaths = [([src_idx] if search_src != src_idx else []) + list(vp) + ([tgt_idx] if search_tgt != tgt_idx else [])
                   for vp in vpaths]
     except Exception:
