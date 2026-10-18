@@ -3124,7 +3124,8 @@ async def internal_user_links(request: Request, since_id: int = Query(default=0,
 
 
 @app.get("/api/internal/user-links/latency")
-async def internal_latency(request: Request, hours: float = Query(default=24, gt=0, le=24 * 30)):
+async def internal_latency(request: Request, hours: float = Query(default=24, gt=0, le=24 * 30),
+                           slow_ms: float = Query(default=3000, gt=0)):
     """Response-time percentiles per route from request_logs (written by the
     log_requests middleware), for check_latency.py (2026-10-18). Lives under
     the user-links path only because that prefix is already a Cloudflare
@@ -3153,10 +3154,11 @@ async def internal_latency(request: Request, hours: float = Query(default=24, gt
     for route, xs in by_route.items():
         xs.sort()
         routes.append({"route": route, "n": len(xs), "p50": pct(xs, 50), "p90": pct(xs, 90),
-                       "p99": pct(xs, 99), "max": round(xs[-1], 1), "over_2s": sum(1 for x in xs if x > 2000)})
+                       "p99": pct(xs, 99), "max": round(xs[-1], 1), "slow": sum(1 for x in xs if x > slow_ms)})
     routes.sort(key=lambda d: -d["n"])
     slowest.sort(key=lambda r: -r["latency_ms"])
-    return {"hours": hours, "rows": len(rows), "routes": routes[:40],
+    shown = routes[:40] + [d for d in routes[40:] if d["slow"]]   # busiest, plus any slow one
+    return {"hours": hours, "slow_ms": slow_ms, "rows": len(rows), "routes": shown,
             "slowest": [{"route": r["route"], "ms": round(r["latency_ms"]), "status": r["status_code"],
                          "at": str(r["timestamp"])} for r in slowest[:25]]}
 
