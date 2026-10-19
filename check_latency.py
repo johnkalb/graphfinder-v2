@@ -54,6 +54,13 @@ def report(d):
               f"MemAvailable {m.get('MemAvailable_mb')} of {m.get('MemTotal_mb')} MB")
         for p in m.get("processes", []):
             print(f"  {p['role']:5} pid {p['pid']:>6}  pss {p['pss_mb']} MB  rss {p['rss_mb']} MB")
+    t = d.get("detail") or {}
+    if t:
+        ready = ", ".join(f"{k} {v:,}" for k, v in sorted(t.get("ready", {}).items())) or "none"
+        print(f"\nDetail tables{' (loading)' if t.get('loading') else ''}: {ready}; db {t.get('db_mb')} MB; "
+              f"disk free {t.get('disk_free_mb')} of {t.get('disk_total_mb')} MB")
+        for k, v in (t.get("errors") or {}).items():
+            print(f"  FAILED {k}: {v}")
 
 
 def memory_use(m):

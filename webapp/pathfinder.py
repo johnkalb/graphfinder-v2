@@ -482,6 +482,9 @@ async def _warm_up_graph():
     except Exception:
         logger.exception("background graph warm-up failed")
         _graph_load_error = "graph warm-up failed (see server logs)"
+    # detail tables after the graph (and after the path pool has forked, so
+    # the workers never inherit a half-written SQLite connection)
+    await loop.run_in_executor(None, _load_detail_tables)
 
 
 @app.on_event("startup")
@@ -3279,7 +3282,18 @@ async def internal_latency(request: Request, hours: float = Query(default=24, gt
     return {"hours": hours, "slow_ms": slow_ms, "rows": len(rows), "routes": shown,
             "slowest": [{"route": r["route"], "ms": round(r["latency_ms"]), "status": r["status_code"],
                          "at": str(r["timestamp"])} for r in slowest[:25]],
-            "memory": _memory_snapshot()}
+            "memory": _memory_snapshot(), "detail": _detail_status_with_disk()}
+
+
+def _detail_status_with_disk():
+    import shutil
+    st = _detail_store.status()
+    try:
+        du = shutil.disk_usage(os.path.dirname(_detail_store.db_path) or ".")
+        st["disk_free_mb"], st["disk_total_mb"] = round(du.free / 2**20), round(du.total / 2**20)
+    except OSError:
+        pass
+    return st
 
 
 def _memory_snapshot():
@@ -4007,6 +4021,142 @@ async def my_reach(request: Request, target: str = Query(..., max_length=300)):
     loop = asyncio.get_event_loop()
     res = await loop.run_in_executor(None, _reach_via_contacts, owner, contacts, target, 3)
     return _drop_removed_link_paths(res)
+
+
+# --- Detail tables (private-service spec Phase 2, 2026-10-19) -------------------
+# Amounts, cycles, titles and lobbying issues for the question menu, exported
+# nightly by build_detail_tables.py and loaded here into a local SQLite file
+# after the graph warm-up (webapp/detail_tables.py). Behind the same beta gate
+# as My links until the query engine (Phase 3) uses them.
+try:
+    import detail_tables as _dt
+except ImportError:
+    from webapp import detail_tables as _dt
+import tempfile
+
+_detail_store = _dt.DetailStore(
+    DATA_DIR / "detail",
+    os.environ.get("DETAIL_DB") or os.path.join(tempfile.gettempdir(), "sixdegrees_detail.sqlite"))
+
+
+def _load_detail_tables():
+    try:
+        _detail_store.src_dir = str(DATA_DIR / "detail")   # at call time: tests point DATA_DIR elsewhere
+        _detail_store.load(log=logger.info)
+    except Exception:
+        logger.exception("detail tables load failed")
+
+
+def _detail_keys(name):
+    """canon_keys for a typed name: the name itself, the graph node it resolves
+    to, and that node's aliases (e.g. Form 4's 'LEVINSON ARTHUR D')."""
+    names = [name]
+    node = _resolve_name(name)
+    if node:
+        label = _get_label(node)
+        names += [node, label]
+        entry = _get_search_entry(label) or _get_search_entry(node) or {}
+        names += list(entry.get("aliases", []))[:50]
+    keys = []
+    for n in names:
+        k = _dt.canon_key(n)
+        if len(k) >= 2 and k not in keys:
+            keys.append(k)
+    return keys, (_get_label(node) if node else None)
+
+
+def _is_private_person(*names):
+    """A person who isn't a verified or public-by-role figure (decision 7:
+    connection questions only, never a profile of their money or roles)."""
+    verified = _load_demo_verified()
+    names = [n for n in names if n]
+    if not any(_looks_like_person(n) for n in names):
+        return False
+    return not any(n.lower() in verified for n in names)
+
+
+_DETAIL_KINDS = {
+    "donors": "Biggest donors to a committee or candidate (FEC, top 100 per committee)",
+    "donations": "Where a public figure's political donations went (FEC)",
+    "pac": "Money a committee gave to and got from other committees and candidates (FEC)",
+    "vendors": "Who a campaign or PAC paid, or which committees paid a vendor (FEC)",
+    "leadership": "Board, officers and executives of an organization, or a public figure's roles",
+    "lobbying": "Lobbying by or for an organization, or by a registered lobbyist (Senate LDA)",
+}
+
+
+_PROFILE_REFUSAL = ("{} are shown only for verified public figures. "
+                    "For anyone else, use a path search to see how they're connected.")
+
+
+def _detail_query(kind, name):
+    keys, resolved = _detail_keys(name)
+    s = _detail_store
+    private = _is_private_person(name, resolved)
+    out = {"kind": kind, "name": name, "resolved": resolved}
+    if kind == "donors":
+        out["result"] = s.top_donors(keys)
+    elif kind == "donations":
+        rows = s.donations_by(keys)
+        if rows and private:
+            # a name can look like a person's and be an organization ("Goldman
+            # Sachs"): FEC's own entity type decides, only person rows are withheld
+            rows = [r for r in rows if r.get("donor_type") == "O"]
+            if not rows:
+                out["refused"] = _PROFILE_REFUSAL.format("Donations")
+        out["result"] = rows
+    elif kind == "pac":
+        out["result"] = s.pac_flows(keys)
+    elif kind == "vendors":
+        out["result"] = s.vendors(keys)
+    elif kind == "leadership":
+        res = {"people": s.leadership_of(keys)}
+        if private:
+            # an organization's people are listed by name (menu question 6);
+            # a private person's own roles are not
+            res["roles"] = []
+            if res["people"] is not None and not res["people"] and s.roles_of(keys):
+                out["refused"] = _PROFILE_REFUSAL.format("Roles")
+        else:
+            res["roles"] = s.roles_of(keys)
+        out["result"] = res
+    elif kind == "lobbying":
+        res = s.lobbying(keys)
+        if res is not None and private:
+            res["as_lobbyist"] = []
+        out["result"] = res
+    if "refused" not in out and out.get("result") is None:
+        out["loading"] = True   # the table isn't loaded (yet)
+    elif "refused" not in out and _detail_empty(out["result"]):
+        out["suggestions"] = s.suggest(_dt.canon_key(name))
+    return out
+
+
+def _detail_empty(r):
+    if not r:
+        return True
+    if isinstance(r, dict):
+        return all(not v for k, v in r.items() if isinstance(v, list))
+    return False
+
+
+@app.get("/api/my/detail")
+def my_detail(request: Request, kind: str = Query(...), name: str = Query(..., min_length=2, max_length=300)):
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    if kind not in _DETAIL_KINDS:
+        return JSONResponse(status_code=400, content={"success": False, "error": "unknown kind",
+                                                      "kinds": _DETAIL_KINDS})
+    return _detail_query(kind, name.strip())
+
+
+@app.get("/api/my/detail/status")
+def my_detail_status(request: Request):
+    email, err = _ml_guard(request, need_agreement=False)
+    if err:
+        return err
+    return {"kinds": _DETAIL_KINDS, **_detail_store.status()}
 
 
 # Fediverse: the crawlie account lives on GoToSocial at social.sixdegrees.net
@@ -5041,6 +5191,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <button onclick="myReach()">Find my best route</button>
       </div>
       <div id="reach-result" class="psi-note"></div>
+      <div class="psi-note" style="margin:10px 0 4px;">
+        <strong>Explore records</strong> (preview): the details behind links &mdash; donors and amounts, PAC money,
+        campaign vendors, boards and officers, lobbying. Donations and roles of a <em>person</em> are shown only for
+        verified public figures.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0;">
+        <select id="detail-kind">
+          <option value="donors">Biggest donors to&hellip;</option>
+          <option value="donations">Where donations went from&hellip;</option>
+          <option value="leadership">Board &amp; officers of&hellip;</option>
+          <option value="lobbying">Lobbying by / for&hellip;</option>
+          <option value="pac">PAC money of&hellip;</option>
+          <option value="vendors">Campaign vendors of&hellip;</option>
+        </select>
+        <input id="detail-name" type="text" placeholder="A committee, candidate, organization or public figure" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myDetail()">
+        <button onclick="myDetail()">Look up</button>
+      </div>
+      <div id="detail-result" class="psi-note" style="max-height:420px;overflow:auto;"></div>
       <div id="mylinks-summary" class="psi-note" style="margin-top:10px;"></div>
       <div id="mylinks-list" style="max-height:320px;overflow:auto;margin-top:4px;"></div>
       <div class="psi-note" style="margin-top:6px;"><a href="/api/my/links/export">Download my links (CSV)</a></div>
@@ -6642,6 +6810,67 @@ async function myReach() {
   out.innerHTML = d.paths.map((p, i) =>
     `<div style="margin:4px 0;"><strong>${i === 0 ? 'Best route' : 'Alternative'}</strong> (${p.length} step${p.length === 1 ? '' : 's'}, via ${escHtml(p.via_contact)}): `
     + p.path.map(s => s.you ? '<strong>You</strong>' : escHtml(s.label || s.node)).join(' → ') + '</div>').join('');
+}
+
+// --- Explore records (detail tables, Phase 2 preview) ----------------------
+const DETAIL_COLS = {
+  usd: '$', n: 'Count', donor: 'Donor', committee: 'Committee', committees: 'Committee(s)', candidate: 'Candidate',
+  employer: 'Employer', occupation: 'Occupation', state: 'State', cycles: 'Cycles', other: 'Name', kind: 'Kind',
+  purpose: 'Purpose', person: 'Person', org: 'Organization', titles: 'Title(s)', sources: 'Source(s)', year: 'Year',
+  lobbyist: 'Lobbyist', client: 'Client', registrant: 'Firm', issues: 'Issues', covered_position: 'Former post',
+};
+const DETAIL_SECTIONS = {
+  donors: 'Biggest donors', gave: 'Gave to', received: 'Received from', paid: 'Paid', paid_by: 'Paid by',
+  people: 'People with a role here', roles: 'Roles', as_client: 'Lobbying for this client',
+  as_registrant: 'Lobbying by this firm', as_lobbyist: 'Lobbying by this person',
+};
+function detailFmt(k, v) {
+  if (v === null || v === undefined) return '';
+  if (k === 'usd') return '$' + Math.round(v).toLocaleString();
+  if (k === 'titles' || k === 'sources' || k === 'issues' || k === 'committees') return escHtml(String(v).split(',').join(', '));
+  return escHtml(String(v));
+}
+function detailTable(rows) {
+  if (!rows || !rows.length) return '<div style="color:#8b949e;">None found.</div>';
+  const cols = Object.keys(rows[0]).filter(k => k !== 'cmte_id' && k !== 'donor_type' && rows.some(r => r[k] !== '' && r[k] !== null));
+  return '<table style="border-collapse:collapse;font-size:0.8rem;width:100%;"><tr>'
+    + cols.map(c => `<th style="text-align:left;border-bottom:1px solid #30363d;padding:2px 6px;">${DETAIL_COLS[c] || escHtml(c)}</th>`).join('')
+    + '</tr>' + rows.map(r => '<tr>' + cols.map(c =>
+        `<td style="padding:2px 6px;border-bottom:1px solid #21262d;${c === 'usd' ? 'text-align:right;white-space:nowrap;' : ''}">${detailFmt(c, r[c])}</td>`).join('') + '</tr>').join('')
+    + '</table>';
+}
+async function myDetail() {
+  const name = document.getElementById('detail-name').value.trim();
+  const kind = document.getElementById('detail-kind').value;
+  const out = document.getElementById('detail-result');
+  if (name.length < 2) return;
+  out.textContent = 'Looking up…';
+  const r = await fetch(`/api/my/detail?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { out.textContent = d.error || d.detail || 'Lookup failed.'; return; }
+  if (d.refused) { out.textContent = d.refused; return; }
+  if (d.loading) { out.textContent = 'The records are still loading on the server (a few minutes after each update). Try again shortly.'; return; }
+  let html = d.resolved && d.resolved.toLowerCase() !== name.toLowerCase()
+    ? `<div style="margin-bottom:4px;">Matched <strong>${escHtml(d.resolved)}</strong> and its other spellings.</div>` : '';
+  const res = d.result;
+  if (kind === 'donors') {
+    const c = res.committees || [];
+    html += c.length ? `<div>${c.length} committee${c.length === 1 ? '' : 's'}: ${c.slice(0, 8).map(x => escHtml(x.committee) + (x.linked ? ` (${escHtml(x.role.replace('_', ' '))}: ${escHtml(x.linked)})` : '')).join('; ')}${c.length > 8 ? '; …' : ''}</div>`
+      + `<div style="margin:2px 0 6px;">Itemised donors on file: ${(res.total_donors || 0).toLocaleString()}, $${Math.round(res.total_usd || 0).toLocaleString()} in all (donors of $10K+ in a cycle, or verified public figures).</div>`
+      + detailTable(res.donors) : '<div>No FEC committee found under that name.</div>';
+  } else if (Array.isArray(res)) {
+    html += detailTable(res);
+  } else {
+    for (const [k, rows] of Object.entries(res || {})) {
+      if (!Array.isArray(rows) || !rows.length) continue;
+      html += `<div style="margin:8px 0 2px;"><strong>${DETAIL_SECTIONS[k] || escHtml(k)}</strong> (${rows.length}${rows.length >= 25 && k !== 'people' && k !== 'roles' ? '+' : ''})</div>` + detailTable(rows);
+    }
+    if (!Object.values(res || {}).some(v => Array.isArray(v) && v.length)) html += '<div>Nothing found under that name.</div>';
+  }
+  if (d.suggestions && d.suggestions.length)
+    html += '<div style="margin-top:6px;">Did you mean: ' + d.suggestions.map(s =>
+      `<a href="#" onclick="document.getElementById('detail-name').value=${escHtml(JSON.stringify(s))};myDetail();return false;">${escHtml(s)}</a>`).join(' · ') + '</div>';
+  out.innerHTML = html;
 }
 
 document.addEventListener('DOMContentLoaded', myLinksLoad);
