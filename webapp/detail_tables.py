@@ -23,6 +23,7 @@ Who may be the subject of which question (decision 7) is the HTTP layer's job
 """
 import gzip
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -80,7 +81,8 @@ TABLES = {
         "indexes": [["payer_key"], ["payee_key"]],
     },
     "leadership": {
-        "cols": ["org", "person", "title", "source", "year"],
+        # since/until: years held where the source says; current: yes/no/'' (2026-10-20)
+        "cols": ["org", "person", "title", "source", "year", "since", "until", "current"],
         "keys": {"org_key": "org", "person_key": "person"},
         "indexes": [["org_key"], ["person_key"]],
     },
@@ -157,10 +159,12 @@ def _load_table(conn, table, path, sig):
     def rows():
         with gzip.open(path, "rt", encoding="utf-8") as f:
             header = f.readline().rstrip("\n").split("\t")
-            if header != names:
+            # a file from before columns were added at the end loads with them blank
+            if header != names[:len(header)]:
                 raise ValueError(f"{path}: header {header} != {names}")
+            pad = [""] * (len(names) - len(header))
             for line in f:
-                cells = line.rstrip("\n").split("\t")
+                cells = line.rstrip("\n").split("\t") + pad
                 out = []
                 for v, t in zip(cells, types):
                     if t == "INTEGER":
@@ -227,7 +231,9 @@ class DetailStore:
                     if not os.path.exists(path):
                         continue
                     try:
-                        sig = _signature(path)
+                        # the column spec is part of it: new columns reload an unchanged file
+                        sig = _signature(path) + ":" + hashlib.sha1(
+                            json.dumps(TABLES[table], sort_keys=True).encode()).hexdigest()[:12]
                         if have.get(table, (None,))[0] == sig:
                             self.ready[table] = have[table][1]
                             continue
@@ -342,27 +348,84 @@ class DetailStore:
             return None
         return {"paid": paid, "paid_by": paid_by}
 
-    # specific titles first (LittleSis's bare "Position" last), then rows confirmed
-    # by more sources, then the latest year
-    _LEAD_ORDER = ("MAX(title <> 'Position') DESC, COUNT(DISTINCT source) DESC, "
-                   "(MAX(year) IS NULL OR MAX(year) = ''), MAX(year) DESC")
+    _DATED_SOURCE = "SEC_FORM_345"   # first/last filing dates: says current or former
+    _LEAD_RAW_CAP = 50000
+    _STATUS_ORDER = {"current": 0, "listed as current": 1, "": 2}
+
+    @classmethod
+    def _person_merge_key(cls, k):
+        """'mary t barra' and 'mary barra' are one row within one organization."""
+        toks = [t for t in k.split() if len(t) > 1 and t not in cls._NAME_SUFFIXES]
+        return f"{toks[0]} {toks[-1]}" if len(toks) >= 2 else k
+
+    @classmethod
+    def _org_merge_key(cls, k):
+        toks = k.split()
+        if toks and toks[0] == "the":
+            toks = toks[1:]
+        while len(toks) > 1 and toks[-1] in cls._ORG_SUFFIXES:
+            toks.pop()
+        return " ".join(toks) or k
+
+    def _lead(self, where_col, keys, name_col, merge_key, limit):
+        """Leadership rows for keys, one per person (or organization), 2026-10-20:
+        all titles and sources, the years held where known, and a status --
+        SEC filings decide current/former where there are any (a director files
+        at least yearly), otherwise the source's own wording."""
+        raw = self.q("leadership", f"SELECT org, person, org_key, person_key, title, source, year, since, until, "
+                                   f"current FROM leadership WHERE {where_col} IN ({_ph(keys)}) LIMIT ?",
+                     keys + [self._LEAD_RAW_CAP])
+        if raw is None:
+            return None
+        key_col = "person_key" if name_col == "person" else "org_key"
+        groups = {}
+        for r in raw:
+            g = groups.setdefault(merge_key(r[key_col]), {"names": [], "titles": [], "sources": [], "year": "",
+                                                          "since": "", "until": "", "sec": None, "yes": False,
+                                                          "no": False})
+            for lst, v in ((g["names"], r[name_col]), (g["titles"], r["title"]), (g["sources"], r["source"])):
+                if v and v not in lst:
+                    lst.append(v)
+            g["year"] = max(g["year"], r["year"] or "")
+            if r["since"]:
+                g["since"] = min(g["since"] or r["since"], r["since"])
+            g["until"] = max(g["until"], r["until"] or "")
+            if r["source"] == self._DATED_SOURCE:
+                cur, last = g["sec"] or (False, "")
+                g["sec"] = (cur or r["current"] == "yes", max(last, r["until"] or ""))
+            elif r["current"] == "yes":
+                g["yes"] = True
+            elif r["current"] == "no":
+                g["no"] = True
+        out = []
+        for g in groups.values():
+            s, u = g["since"], g["until"]
+            years = (f"{s}–{u}" if s != u else s) if s and u else f"{s}–" if s else f"–{u}" if u else g["year"]
+            if g["sec"]:
+                status = "current" if g["sec"][0] else f"former (last SEC filing {g['sec'][1]})"
+            else:
+                status = "former" if g["no"] else "listed as current" if g["yes"] else ""
+            names = sorted(g["names"], key=lambda n: (self._case_rank(n), -len(n)))
+            row = {name_col: names[0], "titles": ",".join(g["titles"]), "years": years, "status": status,
+                   "sources": ",".join(g["sources"])}
+            if len(names) > 1:
+                row["recorded_as"] = ",".join(names)
+            out.append(row)
+        # current first, then specific titles (LittleSis's bare "Position" last),
+        # rows confirmed by more sources, the latest year
+        out.sort(key=lambda r: (self._STATUS_ORDER.get(r["status"], 3),
+                                all(t == "Position" for t in r["titles"].split(",")),
+                                -len(r["sources"].split(",")),
+                                -max(map(int, re.findall(r"\d{4}", r["years"])), default=0), r[name_col]))
+        return out[:limit]
 
     def leadership_of(self, keys, limit=200):
-        """People with a role at an organization: one row per person, all titles and sources."""
-        rows = self.q("leadership", f"""
-            SELECT person, GROUP_CONCAT(DISTINCT title) AS titles, GROUP_CONCAT(DISTINCT source) AS sources,
-                   MAX(year) AS year
-            FROM leadership WHERE org_key IN ({_ph(keys)}) GROUP BY person_key
-            ORDER BY {self._LEAD_ORDER}, person LIMIT ?""", keys + [limit])
-        return rows
+        """People with a role at an organization: one row per person."""
+        return self._lead("org_key", keys, "person", self._person_merge_key, limit)
 
     def roles_of(self, keys, limit=200):
-        """A person's roles at organizations."""
-        return self.q("leadership", f"""
-            SELECT org, GROUP_CONCAT(DISTINCT title) AS titles, GROUP_CONCAT(DISTINCT source) AS sources,
-                   MAX(year) AS year, GROUP_CONCAT(DISTINCT person) AS recorded_as
-            FROM leadership WHERE person_key IN ({_ph(keys)}) GROUP BY org_key
-            ORDER BY {self._LEAD_ORDER}, org LIMIT ?""", keys + [limit])
+        """A person's roles at organizations: one row per organization."""
+        return self._lead("person_key", keys, "org", self._org_merge_key, limit)
 
     def lobbying(self, keys, limit=200):
         """Lobbying where keys is the client, the registrant firm or the lobbyist."""
@@ -411,12 +474,67 @@ class DetailStore:
                         out.append(r["k"])
         return out[:limit]
 
+    _NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+
+    def candidate_matches(self, keys, limit=6):
+        """FEC candidates filed under a fuller form of a person's name: 'ken
+        paxton' (with its formal form 'kenneth paxton') -> 'Warren Kenneth
+        Paxton Jr', 2026-10-20. Only first-and-last keys are tried; the
+        candidate's last name (before any suffix) must match and the first name
+        must appear before it."""
+        pairs = []
+        for k in keys:
+            toks = k.split()
+            if len(toks) == 2 and (toks[0], toks[1]) not in pairs:
+                pairs.append((toks[0], toks[1]))
+        out = []
+        for first, last in pairs:
+            rows = self.q("committees", "SELECT DISTINCT linked, linked_key FROM committees "
+                                        "WHERE role = 'candidate' AND ' ' || linked_key || ' ' LIKE ? "
+                                        "AND ' ' || linked_key || ' ' LIKE ?", (f"% {first} %", f"% {last} %"))
+            for r in rows or []:
+                toks = r["linked_key"].split()
+                while len(toks) > 2 and toks[-1] in self._NAME_SUFFIXES:
+                    toks.pop()
+                if (toks[-1] == last and first in toks[:-1] and r["linked_key"] not in keys
+                        and r["linked"] not in out):
+                    out.append(r["linked"])
+        return out[:limit]
+
+    _ORG_SUFFIXES = ("co", "company", "corp", "corporation", "inc", "incorporated", "ltd", "llc", "plc")
+
+    def org_variants(self, keys):
+        """The same organization with or without a corporate suffix: 'general
+        motors' / 'general motors co' / 'general motors company' (LittleSis
+        and Form 4 spell GM differently), 2026-10-20."""
+        out = []
+        for k in keys:
+            toks = k.split()
+            if toks and toks[0] == "the":
+                toks = toks[1:]
+            while len(toks) > 1 and toks[-1] in self._ORG_SUFFIXES:
+                toks.pop()
+            base = " ".join(toks)
+            if len(base) < 4:
+                continue
+            for v in [base] + [f"{base} {s}" for s in self._ORG_SUFFIXES]:
+                if v not in keys and v not in out:
+                    out.append(v)
+        return out
+
+    @staticmethod
+    def _case_rank(name):
+        """Prefer 'Ken Paxton' over 'KEN PAXTON' over 'ken paxton' for display."""
+        return 2 if name.islower() else 1 if name.isupper() else 0
+
     def suggest(self, prefix_key, limit=10):
-        """Names in any table whose key starts with prefix_key (for "did you mean")."""
+        """Names in any table whose key starts with prefix_key (for "did you
+        mean"), one per name: tables spell the same name in different letter
+        cases ('KEN PAXTON', 'Ken Paxton'), 2026-10-20."""
         if len(prefix_key) < 3:
             return []
         hi = prefix_key + "\U0010ffff"
-        out = []
+        best = {}   # canon_key -> display name, in first-seen order
         for table, cols in (("cmte_totals", [("committee_key", "committee")]),
                             ("committees", [("linked_key", "linked")]),
                             ("leadership", [("org_key", "org"), ("person_key", "person")]),
@@ -425,14 +543,18 @@ class DetailStore:
                             ("vendors", [("payee_key", "payee")]),
                             ("donors", [("donor_key", "donor")])):
             for key_col, name_col in cols:
-                rows = self.q(table, f"SELECT DISTINCT {name_col} AS name FROM {table} "
-                                     f"WHERE {key_col} >= ? AND {key_col} < ? LIMIT ?", (prefix_key, hi, limit))
+                rows = self.q(table, f"SELECT DISTINCT {name_col} AS name, {key_col} AS k FROM {table} "
+                                     f"WHERE {key_col} >= ? AND {key_col} < ? LIMIT ?", (prefix_key, hi, limit * 3))
                 for r in rows or []:
-                    if r["name"] and r["name"] not in out:
-                        out.append(r["name"])
-                if len(out) >= limit:
-                    return out[:limit]
-        return out
+                    if not r["name"]:
+                        continue
+                    cur = best.get(r["k"])
+                    if cur is None:
+                        if len(best) < limit:
+                            best[r["k"]] = r["name"]
+                    elif self._case_rank(r["name"]) < self._case_rank(cur):
+                        best[r["k"]] = r["name"]
+        return list(best.values())
 
 
 def _ph(items):

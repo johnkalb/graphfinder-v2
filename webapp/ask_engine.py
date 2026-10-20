@@ -138,7 +138,10 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"name": _NAME}, "required": ["name"]}},
     {"name": "leadership",
      "description": "Board members, officers and executives of an organization, or a public figure's "
-                    "roles (IRS 990, SEC, union filings, LittleSis).",
+                    "roles (IRS 990, SEC, union filings, LittleSis). Each row has years (held, or on "
+                    "file) and a status: 'current' (an SEC filing in the last 15 months), 'former (last "
+                    "SEC filing YYYY)', 'former', 'listed as current' (an undated source says so), or "
+                    "blank (unknown). Current people come first.",
      "input_schema": {"type": "object", "properties": {"name": _NAME}, "required": ["name"]}},
     {"name": "lobbying",
      "description": "Lobbying by or for an organization (client, firm, lobbyists, issues, years) or by a "
@@ -179,6 +182,7 @@ you looked up are shown below your answer, so don't copy whole tables. Plain tex
 headings or tables.
 - Long lists are cut to their first rows for you. Don't say how many weren't shown: the user sees the full records below your answer.
 - Money: give amounts as the records state them, and say they're FEC itemised donations.
+- Roles: when asked who is on a board or holds a role now, give the people with status "current"; mention "listed as current" ones separately as not confirmed by a recent filing, and leave out former ones unless asked. Give the years when the records have them.
 - SCI is a 1-100 percentile of how connected someone is (PageRank). A path's "odds" are our estimate \
 that the chain of introductions would work.
 
