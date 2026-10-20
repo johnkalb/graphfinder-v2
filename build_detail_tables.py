@@ -21,7 +21,10 @@ What is kept, and why:
   vendors     all of FEC_SPEND (organizations paid $10K+ by a committee)
   leadership  every person <-> organization row whose relation type the app
               categorises as a board, officer, executive or trustee role
-              (relation_categories.categorize), titles tidied for display
+              (relation_categories.categorize), titles tidied for display;
+              start/end years and current/former where the source says
+              (LittleSis), plus SEC Form 3/4/5 directors and officers with
+              first and last filing years (sec_insiders.py, 2026-10-20)
   lobbying    LDA lobbyist -> client rows with registrant, year, issue and the
               lobbyist's former government posts (public in LDA filings)
 """
@@ -35,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "webapp"))
 sys.path.insert(0, r"C:\Users\johnk\AppData\Local\hermes\scripts")
 import detail_tables as dt  # noqa: E402
+import sec_insiders  # noqa: E402
 from relation_categories import categorize  # noqa: E402
 
 TOP_DONORS = 100
@@ -206,11 +210,34 @@ def pretty_title(rt):
 
 
 def _year(e):
-    for k in ("year", "filing_year", "tax_year", "fiscal_year", "period_year"):
-        v = e.get(k)
+    """The year a row is on file for: a year field, Form 4's filing_date, or
+    the TEOS file it came from ('2022/2022_TEOS_XML_01A.zip')."""
+    for k in ("year", "filing_year", "tax_year", "fiscal_year", "period_year", "filing_date", "filing"):
+        v = _y(e.get(k))
         if v:
-            return str(v)[:4]
+            return v
     return ""
+
+
+def _y(v):
+    """'1998-00-00' / '2010-06-01' -> '1998' / '2010' ('' if none)."""
+    v = str(v or "")[:4]
+    return v if v.isdigit() and v > "1800" else ""
+
+
+def _dates(e):
+    """(start, end, current) from a row's evidence, 2026-10-20. LittleSis
+    gives start_date/end_date where known, and its description says "has a
+    position" (current), "had a position" (former) or "has/had" (unknown)."""
+    start, end = _y(e.get("start_date")), _y(e.get("end_date"))
+    desc = e.get("description") or ""
+    if end or " had a position" in desc:
+        current = "no"
+    elif " has a position" in desc:
+        current = "yes"
+    else:
+        current = ""
+    return start, end, current
 
 
 def leadership(conn, _):
@@ -229,10 +256,20 @@ def leadership(conn, _):
     for org, person, rt, src, e in stream(conn, sql, (types,)):
         if not org or not person:
             continue
-        row = (org, person, pretty_title(rt), src, _year(ev(e)))
+        if src == "SEC_FORM_4":
+            person = sec_insiders.flip_name(person)   # 'Barra Mary T' -> 'Mary T Barra'
+        e = ev(e)
+        row = (org, person, pretty_title(rt), src, _year(e)) + _dates(e)
         if row != last:
             yield row
             last = row
+    # directors and officers with first/last filing dates (SEC Forms 3/4/5 since
+    # 2006); a newly published quarter is fetched first, the cache used if that fails
+    try:
+        sec_insiders.fetch(log=log)
+    except Exception as ex:
+        log(f"WARNING: sec_insiders fetch failed ({type(ex).__name__}: {ex}) -- using the cached quarters")
+    yield from sec_insiders.rows(log=log)
 
 
 def lobbying(conn, _):

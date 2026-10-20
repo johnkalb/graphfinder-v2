@@ -4097,9 +4097,23 @@ def _detail_query(kind, name):
     keys, resolved = _detail_keys(name)
     s = _detail_store
     private = _is_private_person(name, resolved)
-    if _looks_like_person(resolved or name):
+    person = _looks_like_person(resolved or name)
+    if person:
         keys = keys + s.person_variants(keys)   # Ken / Kenneth / Kenneth C Griffin
+    else:
+        keys = keys + s.org_variants(keys)      # General Motors / Co / Company
     out = {"kind": kind, "name": name, "resolved": resolved}
+    if person and kind in ("donors", "pac", "vendors") and not s.committees_for(keys):
+        # FEC files candidates under a fuller name ('Warren Kenneth Paxton Jr'
+        # for Ken Paxton): one match is used and named; several are offered
+        cands = s.candidate_matches(keys)
+        if len(cands) == 1:
+            out["matched_as"] = cands[0]
+            keys = keys + [_dt.canon_key(cands[0])]
+            if kind != "donors":   # PAC money and vendors are filed under the committee names
+                keys = keys + [_dt.canon_key(c["committee"]) for c in s.committees_for(keys)]
+        elif cands:
+            out["candidates"] = cands
     if kind == "donors":
         out["result"] = s.top_donors(keys)
     elif kind == "donations":
@@ -4134,7 +4148,8 @@ def _detail_query(kind, name):
     if "refused" not in out and out.get("result") is None:
         out["loading"] = True   # the table isn't loaded (yet)
     elif "refused" not in out and _detail_empty(out["result"]):
-        out["suggestions"] = s.suggest(_dt.canon_key(name))
+        out["suggestions"] = out.pop("candidates", []) + s.suggest(_dt.canon_key(name))
+    out.pop("candidates", None)
     return out
 
 
@@ -5333,6 +5348,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .psi-section { margin-top: 2rem; padding: 1.5rem; background: #161b22; border: 1px solid #30363d; border-radius: 8px; text-align: center; }
   .psi-section button { background: #1f6feb; color: #fff; border: none; border-radius: 6px; padding: 0.7rem 1.5rem; font-size: 1rem; cursor: pointer; }
   .psi-section button:hover { background: #388bfd; }
+  .ml-card { border: 1px solid #30363d; border-radius: 6px; padding: 10px 12px; margin: 10px 0; text-align: left; }
+  .ml-card-head { font-size: 0.85rem; color: #c9d1d9; margin-bottom: 4px; }
+  .ml-result:empty { display: none; }
+  .ml-result { margin-top: 8px; padding-top: 8px; border-top: 1px solid #21262d; }
+  .ml-clear { float: right; margin-left: 8px; }
   .psi-note { color: #8b949e; font-size: 0.8rem; margin-top: 0.5rem; }
   .psi-result { display: inline-block; margin-left: 1rem; font-weight: 600; color: #3fb950; }
   .psi-result div { font-weight: 400; }
@@ -5479,58 +5499,65 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       Before using this, please read and accept the <a href="/terms" target="_blank">user agreement</a>.
       <div style="margin-top:8px;"><button id="mylinks-accept-btn" onclick="myLinksAccept()">I have read and agree to the user agreement</button></div>
     </div>
-    <div id="mylinks-main" style="display:none;">
+    <div id="mylinks-main" style="display:none;text-align:left;">
       <div class="psi-note" style="margin:4px 0 6px;">
         These are the people you know who matched someone in our database. They're <strong>private</strong>:
         only you see them, and they're used only in your own searches. You aren't in the shared database
         yourself (the one everyone else searches) unless you make a link public.
       </div>
-      <div class="psi-note" style="margin:0 0 4px;">
-        <strong>Ask a question</strong> (new): ask in your own words about connections, your contacts, boards,
-        lobbying or political money. Answers use only our records and your own links, which stay private to you.
+      <!-- each tool is a card with its own result and a Clear button (2026-10-20: results
+           used to pile up below everything, with no way to finish a step) -->
+      <div class="ml-card" id="ml-card-links">
+        <div class="ml-card-head"><strong>Your links</strong> <span id="mylinks-summary" class="psi-note" style="margin:0;"></span>
+          <button class="add-me-btn" id="mylinks-toggle" onclick="myLinksToggle()">Show</button></div>
+        <div id="mylinks-body" style="display:none;">
+          <div id="mylinks-list" style="max-height:320px;overflow:auto;margin-top:4px;"></div>
+          <div class="psi-note" style="margin-top:6px;"><a href="/api/my/links/export">Download my links (CSV)</a></div>
+        </div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0;">
-        <input id="ask-q" type="text" maxlength="500" placeholder="e.g. Which of my contacts are closest to the Ford Foundation?" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myAsk()">
-        <button id="ask-btn" onclick="myAsk()">Ask</button>
+      <div class="ml-card">
+        <div class="ml-card-head"><strong>Ask a question</strong> (new): ask in your own words about connections, your contacts, boards,
+          lobbying or political money. Answers use only our records and your own links, which stay private to you.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0;">
+          <input id="ask-q" type="text" maxlength="500" placeholder="e.g. Which of my contacts are closest to the Ford Foundation?" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myAsk()">
+          <button id="ask-btn" onclick="myAsk()">Ask</button>
+        </div>
+        <div class="psi-note" style="margin:0 0 4px;font-size:0.8rem;">Try:
+          <a href="#" onclick="return askExample(this)">How do I reach Bill Gates?</a> &middot;
+          <a href="#" onclick="return askExample(this)">Who do Warren Buffett and Bill Gates have in common?</a> &middot;
+          <a href="#" onclick="return askExample(this)">Who are the biggest donors to Warnock for Georgia?</a> &middot;
+          <a href="#" onclick="return askExample(this)">Who is on the General Motors board?</a>
+        </div>
+        <div id="ask-result" class="psi-note ml-result" data-input="ask-q" style="max-height:520px;overflow:auto;"></div>
       </div>
-      <div class="psi-note" style="margin:0 0 4px;font-size:0.8rem;">Try:
-        <a href="#" onclick="return askExample(this)">How do I reach Bill Gates?</a> &middot;
-        <a href="#" onclick="return askExample(this)">Who do Warren Buffett and Bill Gates have in common?</a> &middot;
-        <a href="#" onclick="return askExample(this)">Who are the biggest donors to Warnock for Georgia?</a> &middot;
-        <a href="#" onclick="return askExample(this)">Who lobbies for PhRMA?</a>
+      <div class="ml-card">
+        <div class="ml-card-head"><strong>Find my best route</strong>: type anyone in the database. We find which of your contacts is
+          closest to them and show the route &mdash; <em>You &rarr; your contact &rarr; &hellip; &rarr; them</em> &mdash;
+          plus up to two alternatives through other contacts.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+          <input id="reach-target" type="text" placeholder="How do I reach&hellip; (a person or organization)" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myReach()">
+          <button onclick="myReach()">Find my best route</button>
+        </div>
+        <div id="reach-result" class="psi-note ml-result" data-input="reach-target"></div>
       </div>
-      <div id="ask-result" class="psi-note" style="max-height:520px;overflow:auto;margin-bottom:10px;"></div>
-      <div class="psi-note" style="margin:0 0 6px;">
-        <strong>Find my best route</strong>: type anyone in the database. We find which of your contacts is
-        closest to them and show the route &mdash; <em>You &rarr; your contact &rarr; &hellip; &rarr; them</em> &mdash;
-        plus up to two alternatives through other contacts.
+      <div class="ml-card">
+        <div class="ml-card-head"><strong>Explore records</strong> (preview): the details behind links &mdash; donors and amounts, PAC money,
+          campaign vendors, boards and officers, lobbying. Donations and roles of a <em>person</em> are shown only for
+          verified public figures.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0;">
+          <select id="detail-kind">
+            <option value="donors">Biggest donors to&hellip;</option>
+            <option value="donations">Where donations went from&hellip;</option>
+            <option value="leadership">Board &amp; officers of&hellip;</option>
+            <option value="lobbying">Lobbying by / for&hellip;</option>
+            <option value="pac">PAC money of&hellip;</option>
+            <option value="vendors">Campaign vendors of&hellip;</option>
+          </select>
+          <input id="detail-name" type="text" placeholder="A committee, candidate, organization or public figure" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myDetail()">
+          <button onclick="myDetail()">Look up</button>
+        </div>
+        <div id="detail-result" class="psi-note ml-result" data-input="detail-name" style="max-height:420px;overflow:auto;"></div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
-        <input id="reach-target" type="text" placeholder="How do I reach&hellip; (a person or organization)" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myReach()">
-        <button onclick="myReach()">Find my best route</button>
-      </div>
-      <div id="reach-result" class="psi-note"></div>
-      <div class="psi-note" style="margin:10px 0 4px;">
-        <strong>Explore records</strong> (preview): the details behind links &mdash; donors and amounts, PAC money,
-        campaign vendors, boards and officers, lobbying. Donations and roles of a <em>person</em> are shown only for
-        verified public figures.
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0;">
-        <select id="detail-kind">
-          <option value="donors">Biggest donors to&hellip;</option>
-          <option value="donations">Where donations went from&hellip;</option>
-          <option value="leadership">Board &amp; officers of&hellip;</option>
-          <option value="lobbying">Lobbying by / for&hellip;</option>
-          <option value="pac">PAC money of&hellip;</option>
-          <option value="vendors">Campaign vendors of&hellip;</option>
-        </select>
-        <input id="detail-name" type="text" placeholder="A committee, candidate, organization or public figure" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myDetail()">
-        <button onclick="myDetail()">Look up</button>
-      </div>
-      <div id="detail-result" class="psi-note" style="max-height:420px;overflow:auto;"></div>
-      <div id="mylinks-summary" class="psi-note" style="margin-top:10px;"></div>
-      <div id="mylinks-list" style="max-height:320px;overflow:auto;margin-top:4px;"></div>
-      <div class="psi-note" style="margin-top:6px;"><a href="/api/my/links/export">Download my links (CSV)</a></div>
     </div>
   </div>
 
@@ -6685,6 +6712,7 @@ async function doAddMeSubmit(btn) {
     const data = await res.json();
     if (data.success) {
       addMeSubmittedCount++;
+      const row = btn.closest('.psi-row');
       btn.outerHTML = data.private_link
         ? ' <span style="color:#3fb950">✓ Added to your private links</span>'
         : data.duplicate
@@ -6692,6 +6720,7 @@ async function doAddMeSubmit(btn) {
           : ' <span style="color:#3fb950">✓ Submitted for review</span>';
       updateAddMeSummary();
       if (data.private_link) myLinksLoad();
+      psiRowAnswered(row);
     } else if (data.error === 'agreement_required') {
       btn.outerHTML = ' <span style="color:#d29922">Accept the user agreement under "My links" first</span>';
       myLinksLoad();
@@ -6852,6 +6881,7 @@ async function psiNoneOfThese(btn) {
     row.querySelectorAll('button, select').forEach(el => el.remove());
     row.insertAdjacentHTML('beforeend', ' <span style="color:#8b949e">Kept privately as not in the database yet</span>');
     myLinksLoad();
+    psiRowAnswered(row);
   } else {
     btn.disabled = false;
     btn.insertAdjacentHTML('afterend', ` <span style="color:#f85149">${escHtml(d.error === 'agreement_required'
@@ -7054,11 +7084,31 @@ async function myLinksLoad() {
          + `${badge}${toggle}${wrong}`
          + `<button class="add-me-btn" title="Delete" onclick="myLinkDelete(${l.id}, this)">✕</button></div>`;
   }).join('') || '<div class="psi-note">No links yet — use Check My Contacts or Check My LinkedIn Connections above, then "+ Add me".</div>';
+  if (!d.links.length) myLinksToggle(true);
   _myLinksById = Object.fromEntries(d.links.map(l => [l.id, l]));
   d.links.filter(l => l.contact_type !== 'UNMATCHED').forEach(myLinkSummary);
 }
 
 let _myLinksById = {};
+
+// A tool's result with a Clear button that empties it and its input.
+function mlSet(out, html) {
+  out.innerHTML = '<button class="add-me-btn ml-clear" title="Clear this result" onclick="mlClear(this)">✕ Clear</button>' + html;
+}
+function mlClear(btn) {
+  const out = btn.closest('.ml-result');
+  out.innerHTML = '';
+  const inp = out.dataset.input && document.getElementById(out.dataset.input);
+  if (inp) { inp.value = ''; inp.focus(); }
+}
+
+// "Your links" is collapsed to its summary line unless open is given.
+function myLinksToggle(open) {
+  const body = document.getElementById('mylinks-body'), btn = document.getElementById('mylinks-toggle');
+  const show = open === undefined ? body.style.display === 'none' : open;
+  body.style.display = show ? 'block' : 'none';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
 
 // "In database: Mark Greene — 17 connections, e.g. Texas House of
 // Representatives (Public Office), ..." -- enough to spot a namesake.
@@ -7125,10 +7175,10 @@ async function myReach() {
   const r = await fetch('/api/my/reach?target=' + encodeURIComponent(target));
   const d = await r.json().catch(() => ({}));
   if (!r.ok || d.error) { out.textContent = d.error || d.detail || 'Search failed.'; return; }
-  if (!d.paths || !d.paths.length) { out.textContent = d.note || 'No route found from your links.'; return; }
-  out.innerHTML = d.paths.map((p, i) =>
+  if (!d.paths || !d.paths.length) { mlSet(out, escHtml(d.note || 'No route found from your links.')); return; }
+  mlSet(out, d.paths.map((p, i) =>
     `<div style="margin:4px 0;"><strong>${i === 0 ? 'Best route' : 'Alternative'}</strong> (${p.length} step${p.length === 1 ? '' : 's'}, via ${escHtml(p.via_contact)}): `
-    + p.path.map(s => s.you ? '<strong>You</strong>' : escHtml(s.label || s.node)).join(' → ') + '</div>').join('');
+    + p.path.map(s => s.you ? '<strong>You</strong>' : escHtml(s.label || s.node)).join(' → ') + '</div>').join(''));
 }
 
 // --- Explore records (detail tables, Phase 2 preview) ----------------------
@@ -7136,6 +7186,7 @@ const DETAIL_COLS = {
   usd: '$', n: 'Count', donor: 'Donor', committee: 'Committee', committees: 'Committee(s)', candidate: 'Candidate',
   employer: 'Employer', occupation: 'Occupation', state: 'State', cycles: 'Cycles', other: 'Name', kind: 'Kind',
   purpose: 'Purpose', person: 'Person', org: 'Organization', titles: 'Title(s)', sources: 'Source(s)', year: 'Year',
+  years: 'Years', status: 'Status',
   lobbyist: 'Lobbyist', client: 'Client', registrant: 'Firm', issues: 'Issues', covered_position: 'Former post',
 };
 const DETAIL_SECTIONS = {
@@ -7171,6 +7222,7 @@ async function myDetail() {
   if (d.loading) { out.textContent = 'The records are still loading on the server (a few minutes after each update). Try again shortly.'; return; }
   let html = d.resolved && d.resolved.toLowerCase() !== name.toLowerCase()
     ? `<div style="margin-bottom:4px;">Matched <strong>${escHtml(d.resolved)}</strong> and its other spellings.</div>` : '';
+  if (d.matched_as) html += `<div style="margin-bottom:4px;">FEC lists this candidate as <strong>${escHtml(d.matched_as)}</strong>.</div>`;
   const res = d.result;
   if (kind === 'donors') {
     const c = res.committees || [];
@@ -7189,7 +7241,7 @@ async function myDetail() {
   if (d.suggestions && d.suggestions.length)
     html += '<div style="margin-top:6px;">Did you mean: ' + d.suggestions.map(s =>
       `<a href="#" onclick="document.getElementById('detail-name').value=${escHtml(JSON.stringify(s))};myDetail();return false;">${escHtml(s)}</a>`).join(' · ') + '</div>';
-  out.innerHTML = html;
+  mlSet(out, html);
 }
 
 // --- Ask a question (Phase 3: plain-English questions over the tools) --------
@@ -7272,7 +7324,7 @@ async function myAsk() {
       <button class="secondary-btn" onclick="askFeedback(${d.id}, true)">Yes</button>
       <button class="secondary-btn" onclick="askFeedback(${d.id}, false)">No</button></div>`;
   if (d.meta) html += `<div style="margin-top:4px;font-size:0.75rem;color:#8b949e;">admin: $${(d.meta.cost_usd ?? 0).toFixed(4)} · ${d.meta.steps} steps · ${(d.meta.ms / 1000).toFixed(1)} s · ${escHtml(d.meta.model || '')}${d.meta.flags && Object.keys(d.meta.flags).length ? ' · flags ' + escHtml(JSON.stringify(d.meta.flags)) : ''}</div>`;
-  out.innerHTML = html;
+  mlSet(out, html);
 }
 async function askFeedback(id, helpful, note) {
   const fb = document.getElementById('ask-fb');
@@ -7347,15 +7399,37 @@ async function pickContactsNative() {
 
 // "Done" on the match list: close it and show the result in My links. Nothing
 // is lost -- every contact already added is saved; unanswered rows just go.
-function psiDone() {
+function psiDone(summary) {
   const result = document.getElementById('psi-result');
-  result.innerHTML = '';
-  result.style.display = 'none';
   psiCandidates = {};
+  if (summary) {
+    result.innerHTML = escHtml(summary)
+      + ' <button class="add-me-btn" onclick="psiDone()">✕ Clear</button>';
+  } else {
+    result.innerHTML = '';
+    result.style.display = 'none';
+  }
   if (myLinksEnabled) {
     myLinksLoad();
+    myLinksToggle(true);
     const sec = document.getElementById('mylinks-section');
     if (sec && sec.style.display !== 'none') sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+// A match-list row is answered once its contact is added or marked "None of
+// these": its other buttons go, and when no row is left the list closes
+// itself (2026-10-20: it used to stay on the page until "Done").
+function psiRowAnswered(row) {
+  if (row) row.querySelectorAll('button:not(.whois-btn), select').forEach(el => el.remove());
+  const result = document.getElementById('psi-result');
+  const open = [...result.querySelectorAll('.psi-row')].filter(r => r.querySelector('button:not(.whois-btn)')).length;
+  const summary = document.getElementById('add-me-summary');
+  if (open && summary)
+    summary.textContent = `${addMeSubmittedCount} added so far. ${open} more to answer ("+ Add me" or "None of these"), or press Done.`;
+  if (!open) {
+    const n = addMeSubmittedCount;
+    psiDone(`Contact check finished: ${n} contact${n === 1 ? '' : 's'} added. They're under Your links in My links.`);
   }
 }
 
