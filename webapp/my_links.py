@@ -205,6 +205,7 @@ def delete_account_links(db_path, owner):
     conn = db.connect(db_path)
     conn.execute("UPDATE my_links SET deleted_at = ? WHERE owner_email = ? AND deleted_at IS NULL", (_now(), owner))
     conn.execute("DELETE FROM user_agreements WHERE email = ?", (owner,))
+    conn.execute("UPDATE ask_log SET email = NULL WHERE email = ?", (owner,))   # questions stay, anonymised
     conn.commit()
     conn.close()
 

@@ -237,6 +237,35 @@ def init_test_department_db(db_path: str) -> None:
         )
         """
     )
+    # Plain-English questions (ask_engine.py, 2026-10-20): what was asked,
+    # which lookups ran, what it cost, and whether it was answered.
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS ask_log (
+            id {_PK},
+            email TEXT,
+            asked_at TEXT NOT NULL,
+            question TEXT NOT NULL,
+            status TEXT NOT NULL,
+            answer TEXT,
+            reason TEXT,
+            closest TEXT,
+            tools TEXT,
+            model TEXT,
+            steps INTEGER,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cache_read_tokens INTEGER,
+            cache_write_tokens INTEGER,
+            cost_usd {"DOUBLE PRECISION" if db.IS_POSTGRES else "REAL"},
+            ms INTEGER,
+            flags TEXT,
+            feedback INTEGER,
+            feedback_note TEXT
+        )
+        """
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS ask_log_email_at ON ask_log (email, asked_at)")
     conn.commit()
     conn.close()
 
