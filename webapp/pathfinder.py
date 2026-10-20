@@ -3724,8 +3724,10 @@ async def demo_path(request: Request, src_name: str = Query(default="", max_leng
 
 # --- My links: each user's private/public links (private-service spec, 2026-10-06) ---
 # Logic in my_links.py; decisions in ~/.claude/plans/resilient-doodling-graham.md.
-# Beta flag PRIVATE_LINKS_BETA: unset/"admins" -> admins only, "all" -> every
-# logged-in user. Everything here needs a logged-in user and, except reading
+# Beta flag PRIVATE_LINKS_BETA: unset/"all" -> every logged-in (Cloudflare
+# Access approved) user, "admins" -> admins only. Default "all" since
+# 2026-10-20 (the user opened My links, Ask and Explore records to all
+# approved users). Everything here needs a logged-in user and, except reading
 # the agreement, the accepted agreement.
 try:
     import my_links as _ml
@@ -3742,7 +3744,7 @@ _ml_migrated = False
 def _private_links_enabled(email):
     if not email:
         return False
-    mode = (os.environ.get("PRIVATE_LINKS_BETA") or "admins").strip().lower()
+    mode = (os.environ.get("PRIVATE_LINKS_BETA") or "all").strip().lower()
     return mode == "all" or email in _ADMIN_EMAILS
 
 

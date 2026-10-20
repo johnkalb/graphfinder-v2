@@ -23,6 +23,9 @@ def test_requires_login_and_beta_flag(client, monkeypatch):
     assert client.get("/api/my/links").status_code == 401
     monkeypatch.setenv("PRIVATE_LINKS_BETA", "admins")
     assert client.get("/api/my/links", headers=USER).status_code == 404
+    # unset: every logged-in (approved) user, since 2026-10-20
+    monkeypatch.delenv("PRIVATE_LINKS_BETA")
+    assert client.get("/api/my/links", headers=USER).status_code == 200
 
 
 def test_agreement_gate_then_full_lifecycle(client):
