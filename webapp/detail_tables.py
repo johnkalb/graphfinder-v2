@@ -86,6 +86,16 @@ TABLES = {
         "keys": {"org_key": "org", "person_key": "person"},
         "indexes": [["org_key"], ["person_key"]],
     },
+    # SEC Form 3/4/5 stock trades by directors and officers, per insider, company,
+    # year and transaction code (sec_insiders.py, 2026-10-20). joint=1: a filing
+    # naming several insiders (theirs together, not each); unpriced: trades left
+    # out of usd because the filed price is missing or implausible
+    "insider_trades": {
+        "cols": ["insider", "company", "year", "code", "kind", "joint:INTEGER", "n:INTEGER", "shares:REAL",
+                 "usd:REAL", "first", "last", "max_usd:REAL", "max_date", "unpriced:INTEGER"],
+        "keys": {"insider_key": "insider", "company_key": "company"},
+        "indexes": [["insider_key", "year"], ["company_key", "year"]],
+    },
     "lobbying": {
         "cols": ["lobbyist", "client", "registrant", "year", "issue", "covered_position"],
         "keys": {"lobbyist_key": "lobbyist", "client_key": "client", "registrant_key": "registrant"},
@@ -426,6 +436,30 @@ class DetailStore:
     def roles_of(self, keys, limit=200):
         """A person's roles at organizations: one row per organization."""
         return self._lead("person_key", keys, "org", self._org_merge_key, limit)
+
+    _TRADE_COLS = ("year, kind, SUM(n) AS trades, SUM(shares) AS shares, SUM(usd) AS usd, MAX(max_usd) AS largest, "
+                   "MAX(last) AS last, MAX(joint) AS joint, SUM(unpriced) AS unpriced")
+
+    def insider_trades(self, keys, limit=100):
+        """SEC-reported stock trades (2026-10-20): a company's insiders
+        ('at_company', open-market buys and sales first) and a person's own
+        trades ('by_person'), per year and kind of trade."""
+        ph = _ph(keys)
+        at = self.q("insider_trades", f"""
+            SELECT insider, company, {self._TRADE_COLS} FROM insider_trades WHERE company_key IN ({ph})
+            GROUP BY insider_key, year, code ORDER BY code NOT IN ('P', 'S'), year DESC, usd DESC LIMIT ?""",
+                    keys + [limit])
+        if at is None:
+            return None
+        by = self.q("insider_trades", f"""
+            SELECT company, {self._TRADE_COLS} FROM insider_trades WHERE insider_key IN ({ph})
+            GROUP BY company_key, year, code ORDER BY code NOT IN ('P', 'S'), year DESC, usd DESC LIMIT ?""",
+                    keys + [limit])
+        for r in at + by:
+            r["shares"] = round(r["shares"] or 0)
+            r["joint"] = "yes" if r["joint"] else ""
+            r["unpriced"] = r["unpriced"] or ""
+        return {"at_company": at, "by_person": by}
 
     def lobbying(self, keys, limit=200):
         """Lobbying where keys is the client, the registrant firm or the lobbyist."""

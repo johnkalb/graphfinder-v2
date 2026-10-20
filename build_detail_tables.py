@@ -27,6 +27,8 @@ What is kept, and why:
               first and last filing years (sec_insiders.py, 2026-10-20)
   lobbying    LDA lobbyist -> client rows with registrant, year, issue and the
               lobbyist's former government posts (public in LDA filings)
+  insider_trades  SEC Form 3/4/5 stock trades by directors and officers, per
+              insider, company, year and trade code (sec_insiders.py, 2026-10-20)
 """
 import gzip
 import json
@@ -283,8 +285,19 @@ def lobbying(conn, _):
                e.get("issue") or "", e.get("covered_position") or "")
 
 
+def insider_trades(conn, _):
+    """SEC Form 3/4/5 stock trades by directors and officers (no database read:
+    the SEC data sets, summarised by sec_insiders.py; new quarters fetched first)."""
+    try:
+        sec_insiders.fetch_trades(log=log)
+    except Exception as ex:
+        log(f"WARNING: sec_insiders trades fetch failed ({type(ex).__name__}: {ex}) -- using the cached quarters")
+    return sec_insiders.trade_rows(log=log)
+
+
 BUILDERS = {"committees": committees, "cmte_totals": cmte_totals, "donors": donors,
-            "pac_flows": pac_flows, "vendors": vendors, "leadership": leadership, "lobbying": lobbying}
+            "pac_flows": pac_flows, "vendors": vendors, "leadership": leadership, "lobbying": lobbying,
+            "insider_trades": insider_trades}
 
 
 def load_verified(path):

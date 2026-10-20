@@ -59,6 +59,7 @@ CAPABILITIES = [
         "Who someone is: their strongest connections and influence score",
         "The board, officers and executives of an organization, and a public figure's roles",
         "Lobbying by or for an organization, and its lobbyists",
+        "Stock bought and sold by a public company's directors and officers (SEC Forms 3/4/5, 2006 to early 2026)",
     ]),
     ("Political money (FEC)", [
         "The biggest donors to a candidate or committee",
@@ -142,6 +143,15 @@ TOOLS = [
                     "file) and a status: 'current' (an SEC filing in the last 15 months), 'former (last "
                     "SEC filing YYYY)', 'former', 'listed as current' (an undated source says so), or "
                     "blank (unknown). Current people come first.",
+     "input_schema": {"type": "object", "properties": {"name": _NAME}, "required": ["name"]}},
+    {"name": "insider_trades",
+     "description": "Stock trades reported to the SEC (Forms 3/4/5, 2006 to early 2026) by a public company's "
+                    "directors and officers (at_company), or by a public figure (by_person): per year and kind "
+                    "('open-market purchase', 'open-market sale', 'award', 'option exercise', 'tax "
+                    "withholding', 'gift'...), with trades, shares, usd and the largest single trade. Only "
+                    "open-market purchases and sales are buying or selling by choice. joint='yes': a filing "
+                    "naming several insiders, the trade is theirs together. unpriced: trades with no usable "
+                    "price, not included in usd.",
      "input_schema": {"type": "object", "properties": {"name": _NAME}, "required": ["name"]}},
     {"name": "lobbying",
      "description": "Lobbying by or for an organization (client, firm, lobbyists, issues, years) or by a "
