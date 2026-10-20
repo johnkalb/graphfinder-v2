@@ -150,7 +150,7 @@ def commit(rows, batch=10000):
         for i in range(0, len(rows), batch):
             execute_values(cur, "INSERT INTO relationships (source_id, source_name, source_type, target_id, target_name, "
                                 "target_type, relation_type, source_data, evidence) VALUES %s ON CONFLICT DO NOTHING",
-                           rows[i:i + batch])
+                           rows[i:i + batch], page_size=batch)   # one page, so rowcount covers the batch
             n += cur.rowcount
             conn.commit()
             log(f"inserted {n:,} of {min(i + batch, len(rows)):,}")
