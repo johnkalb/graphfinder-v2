@@ -8,7 +8,7 @@ import logging
 import collections, gzip, threading, time
 from pathlib import Path
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import networkx as nx
 import igraph as ig
 from fastapi import FastAPI, Query, Request
@@ -2328,6 +2328,10 @@ async def entity_info(name: str = Query(default=""), limit: int = Query(default=
     (e.g. which "Louis Cohen"). Graph-only and instant -- no network
     calls. Live news headlines are a separate opt-in round-trip
     (/api/entity/news), never fetched inline here."""
+    return _entity_info(name, limit)
+
+
+def _entity_info(name, limit=12):
     q = name.strip()
     if not q:
         return {"found": False}
@@ -4093,6 +4097,8 @@ def _detail_query(kind, name):
     keys, resolved = _detail_keys(name)
     s = _detail_store
     private = _is_private_person(name, resolved)
+    if _looks_like_person(resolved or name):
+        keys = keys + s.person_variants(keys)   # Ken / Kenneth / Kenneth C Griffin
     out = {"kind": kind, "name": name, "resolved": resolved}
     if kind == "donors":
         out["result"] = s.top_donors(keys)
@@ -4157,6 +4163,304 @@ def my_detail_status(request: Request):
     if err:
         return err
     return {"kinds": _DETAIL_KINDS, **_detail_store.status()}
+
+
+# --- Ask a question in plain English (Phase 3, 2026-10-20) -----------------------
+# Haiku reads the question and calls the lookups below as tools; our code runs
+# them, so the privacy rules stay in _detail_query and the private links never
+# leave the owner's own answers. No quote or approval for now (user decision
+# 2026-10-20): every question is answered and logged with its cost in ask_log.
+try:
+    import ask_engine as _ask
+except ImportError:
+    from webapp import ask_engine as _ask
+
+ASK_MODEL = os.environ.get("ASK_MODEL") or _ask.DEFAULT_MODEL
+ASK_DAILY_LIMIT = int(os.environ.get("ASK_DAILY_LIMIT") or 200)           # per user; high while we learn what usage looks like
+ASK_MONTHLY_USD_CAP = float(os.environ.get("ASK_MONTHLY_USD_CAP") or 25)  # all users together
+ASK_CONTACT_CAP = 1000   # contacts scanned by the my_contacts_* tools
+
+
+def _rel_label(cat):
+    if not cat:
+        return None
+    return (_CATEGORY_DESC.get(cat) or (None,))[0] or cat.replace("_", " ").title()
+
+
+def _ask_idx(name):
+    """(vertex id, label) of the node a name resolves to, or (None, None)."""
+    _load_igraph()
+    if _igraph_graph is None or not name:
+        return None, None
+    node = _resolve_name(name)
+    if not node:
+        return None, None
+    idx = _igraph_name_to_idx.get(node)
+    if idx is None:
+        idx = _igraph_name_to_idx.get(_get_label(node))
+    return idx, (_get_label(node) if idx is not None else None)
+
+
+def _ask_neighbors(idx):
+    """{neighbour vertex id: (prob, best category, [categories])}, the
+    strongest edge per neighbour."""
+    best = {}
+    g = _igraph_graph
+    for eid in g.incident(idx):
+        s, t = g.es[eid].tuple
+        other = t if s == idx else s
+        if other == idx:
+            continue
+        p = float(_igraph_prob[eid])
+        if other not in best or p > best[other][0]:
+            mask = int(_igraph_cats_mask[eid])
+            cats = [_igraph_cats_vocab[b] for b in range(len(_igraph_cats_vocab)) if mask & (1 << b)]
+            rel = max(cats, key=lambda c: _CATEGORY_PROB.get(c, 0.0)) if cats else None
+            best[other] = (p, rel, cats)
+    return best
+
+
+def _ask_kind(label):
+    return "person" if _looks_like_person(label) else "organization"
+
+
+def _ask_route(p):
+    return {"steps": p.get("length"), "odds": p.get("prob_label"), "strength": p.get("band"),
+            "route": [{"name": "You" if s.get("you") else (s.get("label") or s.get("node")),
+                       "tie_to_next": ("your own link" if s.get("relation") == "MY_LINK" else _rel_label(s.get("relation")))}
+                      for s in p.get("path", [])]}
+
+
+def _ask_tools(owner, contacts):
+    """Tool name -> callable for one user's question (ask_engine.TOOLS)."""
+    def not_found(name):
+        return {"error": f"'{name}' not found in the database; try search_names"}
+
+    def contact_idx():
+        out = {}
+        for c in contacts:
+            if c.get("contact_type") == _ml.UNMATCHED:
+                continue
+            idx, label = _ask_idx(c["contact"])
+            if idx is not None:
+                out[idx] = label
+            if len(out) >= ASK_CONTACT_CAP:
+                break
+        return out
+
+    def search_names(query):
+        return {"matches": [{"name": e["canonical"], "kind": _ask_kind(e["canonical"]), "sci": e.get("sci"),
+                             "connections": e.get("degree")} for e in (_find_entry(query) or [])[:8]]}
+
+    def entity(name):
+        r = _entity_info(name, 15)
+        if not r.get("found"):
+            return not_found(name)
+        return {"name": r["name"], "kind": _ask_kind(r["name"]), "sci": r.get("sci"),
+                "connections_total": r.get("total_connections"), "other_names": (r.get("aliases") or [])[:5],
+                "strongest_ties": [{"name": c["label"], "kind": "organization" if c["is_org"] else "person",
+                                    "tie": c["relation_label"]} for c in r.get("connections", [])]}
+
+    def path(from_name, to_name):
+        if _path_process_pool is not None:
+            res = _path_process_pool.submit(_find_path_dispatch, from_name, to_name, 6, 3, False,
+                                            None, None).result(timeout=90)
+        else:
+            res = _find_path_dispatch(from_name, to_name)
+        res = _drop_removed_link_paths(res)
+        if res.get("error"):
+            return {"error": res["error"]}
+        out = {"routes": [_ask_route(p) for p in res.get("paths", [])]}
+        if not out["routes"]:
+            out["note"] = ("no chain of documented connections found" if res.get("src_found") and res.get("tgt_found")
+                           else f"not found: {from_name if not res.get('src_found') else to_name}")
+        return out
+
+    def my_reach(target):
+        res = _drop_removed_link_paths(_reach_via_contacts(owner, contacts, target, 3))
+        if res.get("error"):
+            return {"error": res["error"]}
+        return {"routes": [dict(_ask_route(p), via_contact=p.get("via_contact")) for p in res.get("paths", [])],
+                "contacts_considered": res.get("contacts_considered"), "note": res.get("note")}
+
+    def my_contacts():
+        rows = []
+        for c in contacts:
+            matched = c.get("contact_type") != _ml.UNMATCHED
+            rows.append({"name": c["contact"], "in_database": matched,
+                         "sci": _get_node_sci(_get_label(_resolve_name(c["contact"]) or c["contact"])) if matched else None,
+                         "visibility": c.get("visibility")})
+        rows.sort(key=lambda r: -(r["sci"] or 0))
+        return {"count": len(rows), "contacts": rows}
+
+    def my_contacts_near(name):
+        x, label = _ask_idx(name)
+        if x is None:
+            return not_found(name)
+        nb = _ask_neighbors(x)
+        direct, two = [], []
+        mine = contact_idx()
+        for ci, clabel in mine.items():
+            if ci == x:
+                continue
+            if ci in nb:
+                direct.append({"contact": clabel, "tie": _rel_label(nb[ci][1])})
+                continue
+            best = None
+            for mid, (p, rel, _c) in _ask_neighbors(ci).items():
+                if mid in nb:
+                    score = p * nb[mid][0]
+                    if best is None or score > best[0]:
+                        best = (score, mid, rel, nb[mid][1])
+            if best:
+                two.append((best[0], {"contact": clabel, "via": _get_label(_igraph_nodes[best[1]]),
+                                      "contact_tie_to_via": _rel_label(best[2]), "via_tie_to_target": _rel_label(best[3])}))
+        two.sort(key=lambda t: -t[0])
+        return {"name": label, "direct": direct, "two_steps": [t[1] for t in two[:50]],
+                "contacts_checked": len(mine)}
+
+    def my_contacts_ties(categories=None, keyword=None, category=None):
+        cats = {c.strip().upper() for c in (categories or []) + ([category] if category else []) if c and c.strip()}
+        kw = (keyword or "").strip().lower() or None
+        if not cats and not kw:
+            return {"error": "give categories or a keyword"}
+        unknown = sorted(c for c in cats if c not in _CATEGORY_DESC)
+        if unknown:
+            return {"error": f"unknown categories {unknown}"}
+        rows = []
+        for ci, clabel in contact_idx().items():
+            for other, (p, rel, ecats) in _ask_neighbors(ci).items():
+                hit = [c for c in ecats if c in cats] if cats else ecats
+                if cats and not hit:
+                    continue
+                olabel = _get_label(_igraph_nodes[other])
+                if kw and kw not in olabel.lower():
+                    continue
+                best = max(hit, key=lambda c: _CATEGORY_PROB.get(c, 0.0)) if hit else rel
+                rows.append((p, {"contact": clabel, "tie_to": olabel, "kind": _ask_kind(olabel),
+                                 "tie": _rel_label(best)}))
+        rows.sort(key=lambda t: -t[0])
+        return {"ties": [r[1] for r in rows[:100]], "total": len(rows)}
+
+    def common_connections(name_a, name_b):
+        a, la = _ask_idx(name_a)
+        b, lb = _ask_idx(name_b)
+        if a is None:
+            return not_found(name_a)
+        if b is None:
+            return not_found(name_b)
+        na, nb = _ask_neighbors(a), _ask_neighbors(b)
+        shared = sorted(set(na) & set(nb), key=lambda i: -(na[i][0] * nb[i][0]))
+        return {"a": la, "b": lb, "directly_tied": b in na, "total": len(shared),
+                "shared": [{"name": _get_label(_igraph_nodes[i]), "kind": _ask_kind(_get_label(_igraph_nodes[i])),
+                            "tie_to_a": _rel_label(na[i][1]), "tie_to_b": _rel_label(nb[i][1])} for i in shared[:40]]}
+
+    def detail(kind):
+        def run(name):
+            r = _detail_query(kind, name.strip())
+            if r.get("loading"):
+                return {"error": "these records are still loading on the server after an update; try again in a few minutes"}
+            return r
+        return run
+
+    return {"search_names": search_names, "entity": entity, "path": path, "my_reach": my_reach,
+            "my_contacts": my_contacts, "my_contacts_near": my_contacts_near, "my_contacts_ties": my_contacts_ties,
+            "common_connections": common_connections, "donors_to": detail("donors"),
+            "donations_by": detail("donations"), "pac_money": detail("pac"), "campaign_vendors": detail("vendors"),
+            "leadership": detail("leadership"), "lobbying": detail("lobbying")}
+
+
+def _ask_answer(email, question):
+    """Run one question end to end and log it (sync; called in a thread)."""
+    t0 = time.time()
+    p = _ml_db()
+    contacts = _ml.list_links(p, email)
+    owner = _display_name_for_email(email) or email
+    system = _ask.system_prompt(owner, len(contacts), [(k, v[0]) for k, v in _CATEGORY_DESC.items()],
+                                datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    flags = {}
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=mentioned_with_fallback._get_anthropic_key(), timeout=60, max_retries=2)
+        res = _ask.run(question, _ask_tools(owner, contacts), client=client, model=ASK_MODEL, system=system)
+    except Exception as e:
+        logger.exception("ask: question failed")
+        flags["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+        res = {"status": "error", "answer": "Sorry, something went wrong answering that. It's been logged and we'll look into it.",
+               "calls": [], "unanswerable": None, "usage": {}, "cost_usd": None, "model": ASK_MODEL, "steps": 0}
+    if res["status"] == "answered":
+        bad = _ask.unverified_numbers(res["answer"], res["calls"])
+        if bad:
+            flags["unverified_numbers"] = bad
+    ms = int((time.time() - t0) * 1000)
+    try:
+        ask_id = _ask.log_ask(p, email, question, res, ms, flags)
+    except Exception:
+        logger.exception("ask: logging failed")
+        ask_id = None
+    out = {"id": ask_id, "status": res["status"], "answer": res["answer"], "calls": res["calls"],
+           "unanswerable": res.get("unanswerable")}
+    if res["status"] != "answered":
+        out["capabilities"] = _ask.CAPABILITIES
+        out["not_available"] = _ask.NOT_AVAILABLE
+    if email in _ADMIN_EMAILS:
+        out["meta"] = {"cost_usd": res.get("cost_usd"), "usage": res.get("usage"), "model": res.get("model"),
+                       "steps": res.get("steps"), "ms": ms, "flags": flags}
+    return out
+
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=3, max_length=500)
+
+
+class AskFeedbackRequest(BaseModel):
+    helpful: bool
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+@app.post("/api/my/ask")
+async def my_ask(req: AskRequest, request: Request):
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    if not _graph_backend_ready():
+        return {"status": "error", "answer": "The database is still loading after an update. Try again in a few minutes."}
+    p = _ml_db()
+    if _ask.asked_today(p, email) >= ASK_DAILY_LIMIT:
+        return JSONResponse(status_code=429, content={
+            "status": "limit", "answer": f"You've asked {ASK_DAILY_LIMIT} questions today, the beta's daily limit. "
+                                         "It resets at midnight UTC."})
+    if _ask.month_cost(p) >= ASK_MONTHLY_USD_CAP or not mentioned_with_fallback._get_anthropic_key():
+        logger.warning("ask: paused (monthly cap %.2f reached or no API key)", ASK_MONTHLY_USD_CAP)
+        return {"status": "paused", "answer": "Questions are paused for the moment. Please try again later."}
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _ask_answer, email, req.question.strip())
+
+
+@app.post("/api/my/ask/{ask_id}/feedback")
+async def my_ask_feedback(ask_id: int, req: AskFeedbackRequest, request: Request):
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    if not _ask.set_feedback(_ml_db(), email, ask_id, req.helpful, req.note):
+        return JSONResponse(status_code=404, content={"success": False, "error": "not found"})
+    return {"success": True}
+
+
+@app.get("/api/internal/user-links/ask-log")
+async def internal_ask_log(request: Request, days: float = Query(default=7, gt=0, le=366)):
+    """The question log, for ask_report.py. Same Bypass path and token as the
+    latency check, and 404 without the token. Access is logged (decision 4)."""
+    import hmac
+    token = os.environ.get("USER_LINKS_SYNC_TOKEN") or ""
+    supplied = request.headers.get("X-Sync-Token") or ""
+    if not token or not hmac.compare_digest(supplied.encode(), token.encode()):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = _ask.recent(_ml_db(), since, limit=2000)
+    logger.info("ask-log read: %d rows since %s", len(rows), since)
+    return {"days": days, "rows": rows, "model": ASK_MODEL, "daily_limit": ASK_DAILY_LIMIT,
+            "monthly_cap_usd": ASK_MONTHLY_USD_CAP, "month_cost_usd": round(_ask.month_cost(_ml_db()), 4)}
 
 
 # Fediverse: the crawlie account lives on GoToSocial at social.sixdegrees.net
@@ -5181,6 +5485,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         only you see them, and they're used only in your own searches. You aren't in the shared database
         yourself (the one everyone else searches) unless you make a link public.
       </div>
+      <div class="psi-note" style="margin:0 0 4px;">
+        <strong>Ask a question</strong> (new): ask in your own words about connections, your contacts, boards,
+        lobbying or political money. Answers use only our records and your own links, which stay private to you.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0;">
+        <input id="ask-q" type="text" maxlength="500" placeholder="e.g. Which of my contacts are closest to the Ford Foundation?" style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')myAsk()">
+        <button id="ask-btn" onclick="myAsk()">Ask</button>
+      </div>
+      <div class="psi-note" style="margin:0 0 4px;font-size:0.8rem;">Try:
+        <a href="#" onclick="return askExample(this)">How do I reach Bill Gates?</a> &middot;
+        <a href="#" onclick="return askExample(this)">Who do Warren Buffett and Bill Gates have in common?</a> &middot;
+        <a href="#" onclick="return askExample(this)">Who are the biggest donors to Warnock for Georgia?</a> &middot;
+        <a href="#" onclick="return askExample(this)">Who lobbies for PhRMA?</a>
+      </div>
+      <div id="ask-result" class="psi-note" style="max-height:520px;overflow:auto;margin-bottom:10px;"></div>
       <div class="psi-note" style="margin:0 0 6px;">
         <strong>Find my best route</strong>: type anyone in the database. We find which of your contacts is
         closest to them and show the route &mdash; <em>You &rarr; your contact &rarr; &hellip; &rarr; them</em> &mdash;
@@ -6827,7 +7146,7 @@ const DETAIL_SECTIONS = {
 function detailFmt(k, v) {
   if (v === null || v === undefined) return '';
   if (k === 'usd') return '$' + Math.round(v).toLocaleString();
-  if (k === 'titles' || k === 'sources' || k === 'issues' || k === 'committees') return escHtml(String(v).split(',').join(', '));
+  if (k === 'titles' || k === 'sources' || k === 'issues' || k === 'committees' || k === 'recorded_as') return escHtml(String(v).split(',').join(', '));
   return escHtml(String(v));
 }
 function detailTable(rows) {
@@ -6871,6 +7190,101 @@ async function myDetail() {
     html += '<div style="margin-top:6px;">Did you mean: ' + d.suggestions.map(s =>
       `<a href="#" onclick="document.getElementById('detail-name').value=${escHtml(JSON.stringify(s))};myDetail();return false;">${escHtml(s)}</a>`).join(' · ') + '</div>';
   out.innerHTML = html;
+}
+
+// --- Ask a question (Phase 3: plain-English questions over the tools) --------
+Object.assign(DETAIL_COLS, {
+  name: 'Name', sci: 'SCI', connections: 'Connections', tie: 'Tie', contact: 'Your contact', tie_to: 'Tied to',
+  via: 'Through', contact_tie_to_via: 'Their tie', via_tie_to_target: 'Tie onward', tie_to_a: 'Tie to first',
+  tie_to_b: 'Tie to second', in_database: 'In database', visibility: 'Visibility', recorded_as: 'Recorded as',
+});
+const ASK_TOOLS = {
+  search_names: 'Name search', entity: 'Who is', path: 'Connections', my_reach: 'Your routes to',
+  my_contacts: 'Your contacts', my_contacts_near: 'Your contacts near', my_contacts_ties: "Your contacts' ties",
+  common_connections: 'In common', donors_to: 'Donors to', donations_by: 'Donations by', pac_money: 'PAC money of',
+  campaign_vendors: 'Campaign vendors of', leadership: 'Board & officers of', lobbying: 'Lobbying by / for',
+};
+const ASK_DETAIL_TOOLS = ['donors_to', 'donations_by', 'pac_money', 'campaign_vendors', 'leadership', 'lobbying'];
+function askExample(a) { document.getElementById('ask-q').value = a.textContent; myAsk(); return false; }
+function askRoutes(routes) {
+  if (!routes || !routes.length) return '<div style="color:#8b949e;">No route found.</div>';
+  return routes.map(p => '<div style="margin:3px 0;">' + p.route.map((s, i) =>
+    (s.name === 'You' ? '<strong>You</strong>' : escHtml(s.name))
+    + (i < p.route.length - 1 ? ` <span style="color:#8b949e;">&mdash; ${escHtml(s.tie_to_next || 'link')} &rarr;</span> ` : '')).join('')
+    + (p.odds ? ` <span style="color:#8b949e;">(${escHtml(p.odds)})</span>` : '') + '</div>').join('');
+}
+function askSections(obj) {
+  let html = '';
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (!Array.isArray(v) || !v.length) continue;
+    const rows = v.filter(x => x && typeof x === 'object');
+    html += `<div style="margin:6px 0 2px;"><strong>${DETAIL_SECTIONS[k] || escHtml(k.replace(/_/g, ' '))}</strong> (${v.length})</div>`
+      + (rows.length ? detailTable(rows.map(r => Object.fromEntries(Object.entries(r).map(([c, x]) =>
+          [c, typeof x === 'boolean' ? (x ? 'yes' : 'no') : (Array.isArray(x) ? x.join(', ') : x)])))) : escHtml(v.join(', ')));
+  }
+  return html || '<div style="color:#8b949e;">Nothing found.</div>';
+}
+function askCall(c) {
+  const what = Object.values(c.input || {}).filter(Boolean).join(' / ');
+  let body;
+  const r = c.result || {};
+  if (c.error) body = `<div style="color:#8b949e;">${escHtml(c.error)}</div>`;
+  else if (ASK_DETAIL_TOOLS.includes(c.tool)) {
+    if (r.refused) body = `<div>${escHtml(r.refused)}</div>`;
+    else if (Array.isArray(r.result)) body = detailTable(r.result);
+    else body = askSections(r.result);
+  } else if (r.routes) body = askRoutes(r.routes);
+  else body = askSections(r);
+  return `<details style="margin:2px 0;"><summary>${escHtml(ASK_TOOLS[c.tool] || c.tool)}${what ? ': ' + escHtml(what) : ''}</summary>`
+    + `<div style="margin:2px 0 6px 14px;">${body}</div></details>`;
+}
+function askCapabilities(d) {
+  return '<div style="margin-top:6px;"><strong>What I can answer:</strong>' + (d.capabilities || []).map(([g, items]) =>
+    `<div style="margin-top:4px;">${escHtml(g)}</div><ul style="margin:2px 0 0 18px;padding:0;">`
+    + items.map(i => `<li>${escHtml(i)}</li>`).join('') + '</ul>').join('')
+    + (d.not_available ? `<div style="margin-top:4px;color:#8b949e;">${escHtml(d.not_available)}</div>` : '') + '</div>';
+}
+async function myAsk() {
+  const q = document.getElementById('ask-q').value.trim();
+  const out = document.getElementById('ask-result');
+  const btn = document.getElementById('ask-btn');
+  if (q.length < 3) return;
+  btn.disabled = true;
+  out.textContent = 'Thinking… (usually 5–20 seconds)';
+  let d = {};
+  try {
+    const r = await fetch('/api/my/ask', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                          body: JSON.stringify({question: q})});
+    d = await r.json().catch(() => ({}));
+    if (!r.ok && !d.answer) d = {status: 'error', answer: d.error || d.detail || 'Something went wrong.'};
+  } catch (e) { d = {status: 'error', answer: 'Network error. Please try again.'}; }
+  btn.disabled = false;
+  let html = `<div style="white-space:pre-wrap;margin-bottom:6px;">${escHtml(d.answer || '')}</div>`;
+  const u = d.unanswerable;
+  if (u && u.closest && u.closest.length)
+    html += '<div>You could ask: ' + u.closest.map(s =>
+      `<a href="#" onclick="return askExample(this)">${escHtml(s)}</a>`).join(' · ') + '</div>';
+  if (d.capabilities && d.status !== 'limit' && d.status !== 'paused') html += askCapabilities(d);
+  if (d.calls && d.calls.length)
+    html += `<div style="margin-top:8px;color:#8b949e;">Records used (${d.calls.length} lookup${d.calls.length === 1 ? '' : 's'}):</div>`
+      + d.calls.map(askCall).join('');
+  if (d.id) html += `<div id="ask-fb" style="margin-top:8px;">Was this helpful?
+      <button class="secondary-btn" onclick="askFeedback(${d.id}, true)">Yes</button>
+      <button class="secondary-btn" onclick="askFeedback(${d.id}, false)">No</button></div>`;
+  if (d.meta) html += `<div style="margin-top:4px;font-size:0.75rem;color:#8b949e;">admin: $${(d.meta.cost_usd ?? 0).toFixed(4)} · ${d.meta.steps} steps · ${(d.meta.ms / 1000).toFixed(1)} s · ${escHtml(d.meta.model || '')}${d.meta.flags && Object.keys(d.meta.flags).length ? ' · flags ' + escHtml(JSON.stringify(d.meta.flags)) : ''}</div>`;
+  out.innerHTML = html;
+}
+async function askFeedback(id, helpful, note) {
+  const fb = document.getElementById('ask-fb');
+  if (!helpful && note === undefined) {
+    fb.innerHTML = 'Sorry about that. What were you hoping to find? (optional) '
+      + '<input id="ask-fb-note" type="text" maxlength="1000" style="min-width:220px;"> '
+      + `<button class="secondary-btn" onclick="askFeedback(${id}, false, document.getElementById('ask-fb-note').value)">Send</button>`;
+    return;
+  }
+  await fetch(`/api/my/ask/${id}/feedback`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                             body: JSON.stringify({helpful, note: note || null})}).catch(() => {});
+  fb.textContent = 'Thanks, noted.';
 }
 
 document.addEventListener('DOMContentLoaded', myLinksLoad);

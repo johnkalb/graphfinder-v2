@@ -19,6 +19,10 @@ ROWS = {
         ("C001", "OBAMA FOR AMERICA", "Warren Buffett", "P", 20000.0, 2, "2008", "BERKSHIRE", "INVESTOR", "NE"),
         ("C002", "SOME PAC", "Warren Buffett", "P", 5000.0, 1, "2012", "BERKSHIRE", "INVESTOR", "NE"),
         ("C001", "OBAMA FOR AMERICA", "Small Giver", "P", 5000.0, 1, "2012", "", "", "CA"),
+        ("C003", "SLF PAC", "Kenneth C Griffin", "P", 100000000.0, 3, "2022", "CITADEL", "CEO", "FL"),
+        ("C004", "CLF", "Kenneth Griffin", "P", 60000000.0, 2, "2022", "CITADEL", "CEO", "FL"),
+        ("C005", "NRCC", "Ken Griffin", "P", 10000.0, 1, "2018", "CITADEL", "CEO", "IL"),
+        ("C005", "NRCC", "Kenneth Griffiths", "P", 10000.0, 1, "2018", "", "", "OH"),
     ],
     "pac_flows": [("SOME PAC", "OBAMA FOR AMERICA", "contribution", 5000.0, 1, "2008")],
     "vendors": [("OBAMA FOR AMERICA", "GMMB INC", 1250000.5, 30, "2008,2012", "MEDIA BUY")],
@@ -151,3 +155,13 @@ def test_private_people_get_no_profile(api):
     # an organization's board lists its people by name (menu question 6)
     d = api.get("/api/my/detail?kind=leadership&name=Goldman Sachs Group Inc", headers=USER).json()
     assert {p["person"] for p in d["result"]["people"]} == {"David Solomon", "Private Officer"}
+
+
+def test_person_variants_find_nickname_and_middle_initial_spellings(store):
+    keys = [dt.canon_key("Ken Griffin")]
+    v = store.person_variants(keys)
+    assert set(v) == {"kenneth griffin", "kenneth c griffin"}            # not "kenneth griffiths"
+    rows = store.donations_by(keys + v)
+    assert [r["committee"] for r in rows] == ["SLF PAC", "CLF", "NRCC"]
+    assert rows[0]["recorded_as"] == "Kenneth C Griffin"
+    assert store.person_variants([dt.canon_key("Goldman Sachs Group Inc")]) == []

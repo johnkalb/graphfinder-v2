@@ -30,6 +30,11 @@ import threading
 import time
 import unicodedata
 
+try:
+    from nicknames import formal_forms
+except ImportError:  # imported as webapp.detail_tables
+    from webapp.nicknames import formal_forms
+
 # --- the shared name key (same as build_scored_edges.canon_key) ----------------
 _COMBINING = dict.fromkeys(range(0x300, 0x370))
 _CK_KEEP = re.compile(r"[^\w ]|_")
@@ -298,7 +303,8 @@ class DetailStore:
         rows = self.q("donors", f"""
             SELECT d.cmte_id, d.committee, SUM(d.usd) AS usd, SUM(d.n) AS n,
                    GROUP_CONCAT(d.cycles) AS cycles, MAX(d.employer) AS employer,
-                   MAX(d.occupation) AS occupation, MAX(d.state) AS state, MIN(d.donor_type) AS donor_type
+                   MAX(d.occupation) AS occupation, MAX(d.state) AS state, MIN(d.donor_type) AS donor_type,
+                   GROUP_CONCAT(DISTINCT d.donor) AS recorded_as
             FROM donors d WHERE d.donor_key IN ({ph}) GROUP BY d.cmte_id
             ORDER BY usd DESC LIMIT ?""", keys + [limit])
         if rows is None:
@@ -354,7 +360,7 @@ class DetailStore:
         """A person's roles at organizations."""
         return self.q("leadership", f"""
             SELECT org, GROUP_CONCAT(DISTINCT title) AS titles, GROUP_CONCAT(DISTINCT source) AS sources,
-                   MAX(year) AS year
+                   MAX(year) AS year, GROUP_CONCAT(DISTINCT person) AS recorded_as
             FROM leadership WHERE person_key IN ({_ph(keys)}) GROUP BY org_key
             ORDER BY {self._LEAD_ORDER}, org LIMIT ?""", keys + [limit])
 
@@ -373,6 +379,37 @@ class DetailStore:
                 return None
             res[role] = rows
         return res
+
+    def person_variants(self, keys, limit=40):
+        """Other spellings of a person's name that the person-keyed tables hold:
+        the formal form of a nickname (Ken -> Kenneth) and a single middle
+        initial ("kenneth c griffin"), 2026-10-20. FEC alone spells Ken Griffin
+        three ways, and the graph keeps them as separate nodes without aliases.
+        A namesake can be merged in this way, so the lookups say which
+        spellings each row came from (recorded_as)."""
+        bases = []
+        for k in keys:
+            toks = k.split()
+            if len(toks) == 3 and len(toks[1]) == 1:
+                toks = [toks[0], toks[2]]
+            if len(toks) == 2:
+                b = " ".join(toks)
+                for f in [b] + formal_forms(b):
+                    if f not in bases:
+                        bases.append(f)
+        out = []
+        for b in bases:
+            if b not in keys and b not in out:
+                out.append(b)
+            first, last = b.split()
+            for table, col in (("donors", "donor_key"), ("leadership", "person_key"), ("lobbying", "lobbyist_key")):
+                rows = self.q(table, f"SELECT DISTINCT {col} AS k FROM {table} WHERE {col} >= ? AND {col} < ? "
+                                     f"AND {col} LIKE ? LIMIT ?", (first + " ", first + " \U0010ffff",
+                                                                   f"{first} _ {last}", limit))
+                for r in rows or []:
+                    if r["k"] not in keys and r["k"] not in out:
+                        out.append(r["k"])
+        return out[:limit]
 
     def suggest(self, prefix_key, limit=10):
         """Names in any table whose key starts with prefix_key (for "did you mean")."""
