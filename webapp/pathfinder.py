@@ -4086,6 +4086,7 @@ _DETAIL_KINDS = {
     "vendors": "Who a campaign or PAC paid, or which committees paid a vendor (FEC)",
     "leadership": "Board, officers and executives of an organization, or a public figure's roles",
     "lobbying": "Lobbying by or for an organization, or by a registered lobbyist (Senate LDA)",
+    "trades": "Stock trades by a company's directors and officers, or a public figure's own (SEC Forms 3/4/5)",
 }
 
 
@@ -4144,6 +4145,15 @@ def _detail_query(kind, name):
         res = s.lobbying(keys)
         if res is not None and private:
             res["as_lobbyist"] = []
+        out["result"] = res
+    elif kind == "trades":
+        res = s.insider_trades(keys)
+        if res is not None and private:
+            # a company's insiders are listed by name, like its board; a
+            # private person's own trades are not (decision 7)
+            if not res["at_company"] and res["by_person"]:
+                out["refused"] = _PROFILE_REFUSAL.format("Stock trades")
+            res["by_person"] = []
         out["result"] = res
     if "refused" not in out and out.get("result") is None:
         out["loading"] = True   # the table isn't loaded (yet)
@@ -4382,7 +4392,8 @@ def _ask_tools(owner, contacts):
             "my_contacts": my_contacts, "my_contacts_near": my_contacts_near, "my_contacts_ties": my_contacts_ties,
             "common_connections": common_connections, "donors_to": detail("donors"),
             "donations_by": detail("donations"), "pac_money": detail("pac"), "campaign_vendors": detail("vendors"),
-            "leadership": detail("leadership"), "lobbying": detail("lobbying")}
+            "leadership": detail("leadership"), "lobbying": detail("lobbying"),
+            "insider_trades": detail("trades")}
 
 
 def _ask_answer(email, question):
@@ -5550,6 +5561,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <option value="donations">Where donations went from&hellip;</option>
             <option value="leadership">Board &amp; officers of&hellip;</option>
             <option value="lobbying">Lobbying by / for&hellip;</option>
+            <option value="trades">Insider stock trades at / by&hellip;</option>
             <option value="pac">PAC money of&hellip;</option>
             <option value="vendors">Campaign vendors of&hellip;</option>
           </select>
@@ -7186,12 +7198,14 @@ const DETAIL_COLS = {
   usd: '$', n: 'Count', donor: 'Donor', committee: 'Committee', committees: 'Committee(s)', candidate: 'Candidate',
   employer: 'Employer', occupation: 'Occupation', state: 'State', cycles: 'Cycles', other: 'Name', kind: 'Kind',
   purpose: 'Purpose', person: 'Person', org: 'Organization', titles: 'Title(s)', sources: 'Source(s)', year: 'Year',
-  years: 'Years', status: 'Status',
+  years: 'Years', status: 'Status', insider: 'Insider', company: 'Company', trades: 'Trades',
+  shares: 'Shares', largest: 'Largest trade', last: 'Last', joint: 'Joint filing', unpriced: 'Unpriced',
   lobbyist: 'Lobbyist', client: 'Client', registrant: 'Firm', issues: 'Issues', covered_position: 'Former post',
 };
 const DETAIL_SECTIONS = {
   donors: 'Biggest donors', gave: 'Gave to', received: 'Received from', paid: 'Paid', paid_by: 'Paid by',
   people: 'People with a role here', roles: 'Roles', as_client: 'Lobbying for this client',
+  at_company: "Insiders' stock trades (SEC)", by_person: 'Own stock trades (SEC)',
   as_registrant: 'Lobbying by this firm', as_lobbyist: 'Lobbying by this person',
 };
 function detailFmt(k, v) {
@@ -7255,8 +7269,10 @@ const ASK_TOOLS = {
   my_contacts: 'Your contacts', my_contacts_near: 'Your contacts near', my_contacts_ties: "Your contacts' ties",
   common_connections: 'In common', donors_to: 'Donors to', donations_by: 'Donations by', pac_money: 'PAC money of',
   campaign_vendors: 'Campaign vendors of', leadership: 'Board & officers of', lobbying: 'Lobbying by / for',
+  insider_trades: 'Insider trades of',
 };
-const ASK_DETAIL_TOOLS = ['donors_to', 'donations_by', 'pac_money', 'campaign_vendors', 'leadership', 'lobbying'];
+const ASK_DETAIL_TOOLS = ['donors_to', 'donations_by', 'pac_money', 'campaign_vendors', 'leadership', 'lobbying',
+                          'insider_trades'];
 function askExample(a) { document.getElementById('ask-q').value = a.textContent; myAsk(); return false; }
 function askRoutes(routes) {
   if (!routes || !routes.length) return '<div style="color:#8b949e;">No route found.</div>';

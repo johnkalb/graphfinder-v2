@@ -45,6 +45,14 @@ ROWS = {
         ("GENERAL MOTORS CORP", "John Smale", "Director", "SEC_FORM_345", "2008", "2006", "2008", "no"),
         ("General Motors Company", "Old Exec", "Position", "LITTLESIS", "", "", "", ""),
     ],
+    "insider_trades": [
+        ("Mark L Reuss", "General Motors Co", "2026", "S", "open-market sale", 0, 4, 480724.0, 38709455.0,
+         "2026-02-05", "2026-02-17", 20000000.0, "2026-02-17", 0),
+        ("Mark L Reuss", "General Motors Co", "2026", "A", "award (acquired)", 0, 2, 90000.0, 0.0,
+         "2026-02-05", "2026-02-05", 0.0, "2026-02-05", 2),
+        ("Private Officer", "Goldman Sachs Group Inc", "2025", "P", "open-market purchase", 0, 1, 100.0, 50000.0,
+         "2025-05-01", "2025-05-01", 50000.0, "2025-05-01", 0),
+    ],
     "lobbying": [("Kristian Chin", "ACME CORP", "SMITH GARSON", "2026", "Budget/Appropriations",
                   "Staff Assistant, Rep. Ruiz")],
 }
@@ -228,3 +236,20 @@ def test_api_donors_to_a_candidate_by_common_name(api):
     assert [x["donor"] for x in d["result"]["donors"]] == ["Big Texan"]
     d = api.get("/api/my/detail?kind=donors&name=John Smith", headers=USER).json()
     assert "matched_as" not in d and d["suggestions"][:2] == ["John Arthur Smith", "John Lee Smith"]
+
+
+def test_insider_trades_by_company_and_person(store):
+    keys = [dt.canon_key("General Motors")]
+    r = store.insider_trades(keys + store.org_variants(keys))
+    assert [(x["insider"], x["kind"], x["usd"]) for x in r["at_company"]] == [
+        ("Mark L Reuss", "open-market sale", 38709455.0), ("Mark L Reuss", "award (acquired)", 0.0)]
+    assert r["at_company"][1]["unpriced"] == 2 and r["by_person"] == []
+    r = store.insider_trades([dt.canon_key("Mark L Reuss")])
+    assert r["by_person"][0]["company"] == "General Motors Co" and r["by_person"][0]["shares"] == 480724
+
+
+def test_api_private_insider_trades_withheld(api):
+    d = api.get("/api/my/detail?kind=trades&name=Private Officer", headers=USER).json()
+    assert "refused" in d and d["result"]["by_person"] == []
+    d = api.get("/api/my/detail?kind=trades&name=Goldman Sachs Group Inc", headers=USER).json()
+    assert [x["insider"] for x in d["result"]["at_company"]] == ["Private Officer"]
