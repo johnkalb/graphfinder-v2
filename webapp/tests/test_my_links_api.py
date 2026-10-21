@@ -87,6 +87,22 @@ def test_sync_export_lists_public_and_removed_links(client, monkeypatch):
     assert not any(l["contact"] == "Barack Obama" and l["owner"] == "Beta User" for l in body["public_links"])
 
 
+def test_visits_are_recorded_for_the_daily_logins_report(client, monkeypatch):
+    other = {"Cf-Access-Authenticated-User-Email": "visitor.one@example.com"}
+    client.get("/api/my/links", headers=other)
+    client.get("/api/my/links", headers=other)   # within the flush interval: counted, written on read
+    monkeypatch.setenv("USER_LINKS_SYNC_TOKEN", "tok")
+    assert client.get("/api/internal/user-links/visits").status_code == 404
+    rows = client.get("/api/internal/user-links/visits", headers={"X-Sync-Token": "tok"}).json()["rows"]
+    mine = [r for r in rows if r["email"] == "visitor.one@example.com"]
+    assert len(mine) == 1 and mine[0]["requests"] >= 2 and mine[0]["admin"] is False
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    import logins_report
+    msg = logins_report.text({"hours": 24, "rows": mine})
+    assert "visitor.one@example.com" in msg and "1 user(s)" in msg
+
+
 def test_deleted_public_links_are_dropped_from_live_paths(client):
     client.post("/api/agreement/accept", headers=USER)
     pub = client.post("/api/my/links", json={"contact": "Barack Obama", "visibility": "public"}, headers=USER).json()["link"]

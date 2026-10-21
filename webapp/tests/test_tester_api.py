@@ -75,6 +75,14 @@ def client(tester_data_dir):
     mp.undo()
 
 
+@pytest.fixture(autouse=True)
+def _review_queue_add_me(monkeypatch):
+    """These tests cover the Add Me review queue, which non-beta users get.
+    Since 2026-10-20 the beta (Add Me as a private link, behind the
+    agreement) is on for everyone by default; test_my_links_api covers it."""
+    monkeypatch.setenv("PRIVATE_LINKS_BETA", "admins")
+
+
 def _mock_gemini_response(claim: dict, status_code: int = 200):
     resp = MagicMock(status_code=status_code)
     resp.json.return_value = {
