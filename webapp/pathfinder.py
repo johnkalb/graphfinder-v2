@@ -66,7 +66,8 @@ async def log_requests(request: Request, call_next):
         
     process_time = (time.time() - start_time) * 1000
     _log_performance_metrics(request.url.path, process_time, response.status_code)
-    
+    _note_visit(request)
+
     # Log anonymous user behavior event (excluding health/debug/metrics paths,
     # and everything under the admin dashboard / debug tooling -- 2026-09-03:
     # a one-time purge found 70% of all logged events to that point were
@@ -719,6 +720,84 @@ def _log_tester_usage(request: Optional[Request], event_type: str, metadata: Opt
         event_type=event_type,
         metadata=metadata,
     )
+
+# Who used the site (2026-10-21), for the daily Telegram report
+# (logins_report.py): one user_visits row per user and UTC day. Counts build
+# up in memory and are written when a user's first request of the day comes
+# in, then at most every _VISIT_FLUSH_SECONDS, so a busy session isn't a
+# database write per request.
+_VISIT_FLUSH_SECONDS = 300
+_VISIT_KINDS = {"/api/search": "searches", "/api/path": "paths", "/api/my/reach": "paths", "/api/my/ask": "questions"}
+_visit_pending = {}     # (email, day) -> counts not yet written
+_visit_sessions = set()  # (email, JWT issued-at) already counted as a sign-in
+_visit_lock = threading.Lock()
+
+
+def _jwt_issued_at(request: Request):
+    try:
+        payload = request.headers.get("Cf-Access-Jwt-Assertion", "").split(".")[1]
+        return int(json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))).get("iat") or 0)
+    except Exception:
+        return 0
+
+
+def _note_visit(request: Request):
+    try:
+        email = _request_user_email(request)
+        if not email:
+            return
+        now = datetime.now(timezone.utc)
+        stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        iat = _jwt_issued_at(request)
+        with _visit_lock:
+            v = _visit_pending.get((email, stamp[:10]))
+            if v is None:
+                v = _visit_pending[(email, stamp[:10])] = {"first_at": stamp, "requests": 0, "searches": 0, "paths": 0,
+                                                           "questions": 0, "sign_ins": 0, "written": 0.0}
+            v["last_at"] = stamp
+            v["requests"] += 1
+            kind = _VISIT_KINDS.get(request.url.path)
+            if kind:
+                v[kind] += 1
+            if iat and (email, iat) not in _visit_sessions:
+                _visit_sessions.add((email, iat))
+                v["sign_ins"] += 1
+            due = now.timestamp() - v["written"] >= _VISIT_FLUSH_SECONDS
+        if due:
+            _flush_visits()
+    except Exception:
+        logger.exception("user_visits: recording failed")
+
+
+def _flush_visits():
+    """Write the pending counts (all users); the next request starts new ones."""
+    now = datetime.now(timezone.utc)
+    with _visit_lock:
+        rows = [(k, dict(v)) for k, v in _visit_pending.items() if v["requests"]]
+        for k, v in list(_visit_pending.items()):
+            if k[1] < now.strftime("%Y-%m-%d"):
+                del _visit_pending[k]   # an earlier day: written below, never touched again
+            else:
+                v.update(requests=0, searches=0, paths=0, questions=0, sign_ins=0, written=now.timestamp())
+        if len(_visit_sessions) > 10000:
+            _visit_sessions.clear()
+    if not rows:
+        return
+    conn = db.connect(_ml_db())
+    try:
+        for (email, day), v in rows:
+            conn.execute("INSERT INTO user_visits (email, day, first_at, last_at, requests, searches, paths, questions, "
+                         "sign_ins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, day) DO UPDATE SET "
+                         "last_at = excluded.last_at, requests = user_visits.requests + excluded.requests, "
+                         "searches = user_visits.searches + excluded.searches, paths = user_visits.paths + excluded.paths, "
+                         "questions = user_visits.questions + excluded.questions, "
+                         "sign_ins = user_visits.sign_ins + excluded.sign_ins",
+                         (email, day, v["first_at"], v["last_at"], v["requests"], v["searches"], v["paths"],
+                          v["questions"], v["sign_ins"]))
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def _log_performance_metrics(route: str, latency_ms: float, status_code: int):
     db_path = DATA_DIR / "ops_metrics.db"
@@ -4489,6 +4568,32 @@ async def internal_ask_log(request: Request, days: float = Query(default=7, gt=0
     logger.info("ask-log read: %d rows since %s", len(rows), since)
     return {"days": days, "rows": rows, "model": ASK_MODEL, "daily_limit": ASK_DAILY_LIMIT,
             "monthly_cap_usd": ASK_MONTHLY_USD_CAP, "month_cost_usd": round(_ask.month_cost(_ml_db()), 4)}
+
+
+@app.get("/api/internal/user-links/visits")
+async def internal_visits(request: Request, hours: float = Query(default=24, gt=0, le=24 * 90)):
+    """Who used the site, for logins_report.py (2026-10-21): user_visits rows
+    last active within `hours`, with the tester's name when known. Same Bypass
+    path and token as the latency check, and 404 without the token."""
+    import hmac
+    token = os.environ.get("USER_LINKS_SYNC_TOKEN") or ""
+    supplied = request.headers.get("X-Sync-Token") or ""
+    if not token or not hmac.compare_digest(supplied.encode(), token.encode()):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    _flush_visits()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = db.connect(_ml_db())
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT v.email, v.day, v.first_at, v.last_at, v.requests, v.searches, v.paths, v.questions, v.sign_ins, "
+            "t.name FROM user_visits v LEFT JOIN testers t ON t.email = v.email WHERE v.last_at >= ? "
+            "ORDER BY v.last_at DESC", (cutoff,)).fetchall()]
+    finally:
+        conn.close()
+    for r in rows:
+        r["admin"] = r["email"] in _ADMIN_EMAILS
+    logger.info("visits read: %d rows since %s", len(rows), cutoff)
+    return {"hours": hours, "rows": rows}
 
 
 # Fediverse: the crawlie account lives on GoToSocial at social.sixdegrees.net

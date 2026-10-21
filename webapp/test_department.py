@@ -266,6 +266,25 @@ def init_test_department_db(db_path: str) -> None:
         """
     )
     cur.execute("CREATE INDEX IF NOT EXISTS ask_log_email_at ON ask_log (email, asked_at)")
+    # Who used the site, one row per user and UTC day (2026-10-21), for the
+    # daily Telegram report (logins_report.py). sign_ins counts new
+    # Cloudflare Access sessions (a fresh JWT issued-at time).
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_visits (
+            email TEXT NOT NULL,
+            day TEXT NOT NULL,
+            first_at TEXT NOT NULL,
+            last_at TEXT NOT NULL,
+            requests INTEGER NOT NULL DEFAULT 0,
+            searches INTEGER NOT NULL DEFAULT 0,
+            paths INTEGER NOT NULL DEFAULT 0,
+            questions INTEGER NOT NULL DEFAULT 0,
+            sign_ins INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (email, day)
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
