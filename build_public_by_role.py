@@ -6,7 +6,8 @@ makes them public whether or not they're notable:
   candidate     federal candidates (FEC candidate -> committee links)
   legislator    members of Congress and state legislatures
   judge         judges (CourtListener people + financial disclosures)
-  sec_insider   officers, directors and 10% owners filing SEC Form 4
+  sec_insider   officers, directors and 10% owners filing SEC Forms 3/4/5
+                (SEC_FORM_345 since 2026-10-21, plus the older Form 4 rows)
   lobbyist      registered federal lobbyists (LDA)
 
 Safeguards:
@@ -47,7 +48,8 @@ ROLE_QUERIES = {
                   "('STATE_LEGISLATURE_WIKI', 'CONGRESS_GITHUB', 'WIKIDATA_POLITICIAN') AND source_type = 'PERSON'",
     "judge": "SELECT DISTINCT source_name FROM relationships WHERE source_data IN ('CL_JUDGES', 'CL_FIN_DISCLOSURE') "
              "AND source_type = 'PERSON'",
-    "sec_insider": "SELECT DISTINCT source_name FROM relationships WHERE source_data IN ('SEC_FORM_4', 'RECONCILED_FORM4') "
+    "sec_insider": "SELECT DISTINCT source_name FROM relationships WHERE source_data IN "
+                   "('SEC_FORM_345', 'SEC_FORM_4', 'RECONCILED_FORM4') "
                    "AND source_type = 'PERSON'",
     "lobbyist": "SELECT DISTINCT source_name FROM relationships WHERE source_data = 'LDA_LOBBYISTS' "
                 "AND relation_type = 'LOBBYIST'",
