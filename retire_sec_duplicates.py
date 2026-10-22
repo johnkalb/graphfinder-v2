@@ -19,6 +19,8 @@ spelling -- SEC_FORM_345's own spelling when the insider is there under
 another company -- so the two halves of a person become one node; entities
 (funds, companies) are left alone. Every affected row is first copied to
 relationships_secdup_bak_20261021; deletes and renames run in one transaction.
+Also corrects the SEC_FORM_345 rows two flip_name bugs (fixed 10-21) spoiled:
+entities loaded as people, and initials/degrees ('William H.l. Burnside').
 
   python retire_sec_duplicates.py            # dry run: counts and samples
   python retire_sec_duplicates.py --commit   # back up, delete and rename
@@ -43,6 +45,7 @@ from load_sec_insiders import connect  # noqa: E402
 
 BACKUP = "relationships_secdup_bak_20261021"
 SOURCES = ["SEC_FORM_4", "RECONCILED_FORM4"]
+TOUCHED = SOURCES + ["SEC_FORM_345"]   # SEC_FORM_345: only the flip_name-bug rows
 URL_CIK = re.compile(r"/edgar/data/(\d+)/")
 
 
@@ -125,6 +128,22 @@ def plan(cur):
         delete.append(rid)
         why[(src, reason)] += 1
 
+    # SEC_FORM_345 rows from 10-20's load hit by two flip_name bugs fixed
+    # 10-21: entities with spaced abbreviations ('CANTOR FITZGERALD, L. P.'
+    # loaded as the person 'L. P. Cantor Fitzgerald'; the loader skips
+    # entities) and initials/degrees ('William H.l. Burnside', 'Laurie H
+    # M.d. Glimcher'). Only names with a lower-case letter after a period are
+    # renamed -- other spellings may be the graph's own, chosen on purpose.
+    cur.execute("SELECT id, source_name, evidence::json->>'sec_name', target_name, relation_type "
+                "FROM relationships WHERE source_data = 'SEC_FORM_345'")
+    for rid, name, sec_name, org, rt in cur.fetchall():
+        if si.is_entity(sec_name or ""):
+            delete.append(rid)
+            why[("SEC_FORM_345", "an entity loaded as a person")] += 1
+        elif re.search(r"\.[a-z]", name or "") and si.flip_name(sec_name or "") != name:
+            renames.append({"id": rid, "src": "SEC_FORM_345", "old": name, "new": si.flip_name(sec_name), "org": org,
+                            "rt": rt, "known": False})
+
     # a rename that would hit an existing row (unique index) or another rename
     # is a duplicate after all: delete it instead
     new_keys = collections.Counter((r["new"], r["org"], r["rt"]) for r in renames)
@@ -149,7 +168,7 @@ def main():
     cur = conn.cursor()
     old, delete, renames, kept, why = plan(cur)
     by_src = collections.Counter(r[1] for r in old)
-    for s in SOURCES:
+    for s in TOUCHED:
         n_del = sum(v for (src, _), v in why.items() if src == s)
         rs = [r for r in renames if r["src"] == s]
         log(f"{s}: {by_src[s]:,} rows; delete {n_del:,}; rename {len(rs):,} "
@@ -169,20 +188,20 @@ def main():
         sys.exit(f"{BACKUP} already exists -- not overwriting it")
     affected = delete + [r["id"] for r in renames]
     cur.execute(f"CREATE TABLE {BACKUP} AS SELECT * FROM relationships WHERE id = ANY(%s) AND source_data = ANY(%s)",
-                (affected, SOURCES))
+                (affected, TOUCHED))
     cur.execute(f"SELECT count(*) FROM {BACKUP}")
     backed = cur.fetchone()[0]
     if backed != len(affected):
         conn.rollback()
         sys.exit(f"backup has {backed:,} rows, expected {len(affected):,} -- rolled back")
-    cur.execute("DELETE FROM relationships WHERE id = ANY(%s) AND source_data = ANY(%s)", (delete, SOURCES))
+    cur.execute("DELETE FROM relationships WHERE id = ANY(%s) AND source_data = ANY(%s)", (delete, TOUCHED))
     deleted = cur.rowcount
     if deleted != len(delete):
         conn.rollback()
         sys.exit(f"would delete {deleted:,} rows, expected {len(delete):,} -- rolled back")
     from psycopg2.extras import execute_values
     execute_values(cur, "UPDATE relationships r SET source_name = v.name FROM (VALUES %s) AS v(id, name) "
-                        "WHERE r.id = v.id AND r.source_data IN ('SEC_FORM_4', 'RECONCILED_FORM4')",
+                        "WHERE r.id = v.id AND r.source_data IN ('SEC_FORM_4', 'RECONCILED_FORM4', 'SEC_FORM_345')",
                    [(r["id"], r["new"]) for r in renames], page_size=max(1, len(renames)))
     renamed = cur.rowcount
     if renamed != len(renames):

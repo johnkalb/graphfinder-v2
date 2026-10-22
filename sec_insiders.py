@@ -394,18 +394,26 @@ def _sanity(key, v):
 # --- names -------------------------------------------------------------------
 _PARTICLES = {"van", "von", "de", "del", "della", "der", "den", "di", "da", "du", "la", "le",
               "st", "st.", "dos", "das", "ter", "ten", "al", "el", "bin", "mac"}
-_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "md", "phd", "esq", "cpa"}
+_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "md", "phd", "dsc", "mba", "esq", "cpa"}
+
+
+def _is_suffix(tok):
+    """'Jr.', 'M.D.', 'PH.D', 'DSc' -- compared without periods and commas."""
+    return tok.lower().replace(".", "").strip(",") in _SUFFIXES
 
 
 _ENTITY = re.compile(r"(?<![A-Za-z])(inc|llc|l\.l\.c|lp|l\.p|llp|ltd|limited|corp|corporation|co|company|plc|nv|n\.v|ag|bv|"
                      r"gmbh|trust|fund|funds|partners|partnership|holdings?|group|groep|capital|management|"
                      r"advisors|associates|ventures|investments?|bank|bancorp|foundation|retirement|pension|"
                      r"benefits|equity|securities|financial|technologies|international|enterprises)(?![A-Za-z])", re.I)
+# spaced abbreviations only after a comma at the end ('CANTOR FITZGERALD, L. P.',
+# 2026-10-21): 'Tyagarajan N. V.' and 'Smith L. P.' are people with initials
+_ENTITY_TAIL = re.compile(r",\s*(l\.\s*l\.\s*c|l\.\s*p|n\.\s*v|s\.\s*a)\.?\s*$", re.I)
 
 
 def is_entity(name):
     """An insider that is an organization (a fund, a parent company, a trust)."""
-    return bool(_ENTITY.search(name or ""))
+    return bool(_ENTITY.search(name or "") or _ENTITY_TAIL.search(name or ""))
 
 
 def flip_name(name):
@@ -418,14 +426,22 @@ def flip_name(name):
         return s
     if is_entity(s):   # 'ING GROEP NV' stays as it is (title-cased if all caps)
         return " ".join(_title_word(w) for w in s.split()) if s.isupper() else s
+    # degrees after commas are suffixes, not a 'Last, First' split:
+    # 'LUNDEMOSE ANKER MD, PH.D, DSC'
+    tail = []
+    while "," in s and all(_is_suffix(t) for t in s.rpartition(",")[2].split()) and s.rpartition(",")[2].strip():
+        s, _, t = s.rpartition(",")
+        tail[:0] = t.split()
+        s = s.strip()
     if "," in s:
         last, _, rest = s.partition(",")
-        toks = rest.split() + last.split()
+        toks = rest.split() + last.split() + tail
     else:
         toks = s.split()
         suffix = []
-        while len(toks) > 2 and toks[-1].lower().strip(".,") in _SUFFIXES:
+        while len(toks) > 2 and _is_suffix(toks[-1]):
             suffix.insert(0, toks.pop())
+        suffix += tail
         if len(toks) >= 2:
             i = 1
             while i < len(toks) - 1 and toks[i - 1].lower() in _PARTICLES:
@@ -440,10 +456,11 @@ def flip_name(name):
 
 
 def _title_word(w):
-    """'O'BRIEN' -> "O'Brien", 'MCNEILL' -> 'McNeill', 'III' -> 'III'."""
+    """'O'BRIEN' -> "O'Brien", 'MCNEILL' -> 'McNeill', 'III' -> 'III', 'H.L.' -> 'H.L.'."""
     if w.lower().strip(".,") in {"ii", "iii", "iv"}:
         return w
     w = "-".join(string.capwords(p.lower(), "'") for p in w.split("-"))
+    w = ".".join(p[:1].upper() + p[1:] for p in w.split("."))   # initials: 'H.l.' -> 'H.L.'
     if len(w) > 3 and w.startswith("Mc"):
         w = "Mc" + w[2:].capitalize()
     return w
