@@ -626,6 +626,8 @@ _CF_ACCESS_CERTS_URL = f"https://{_CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs"
 # Application Audience (AUD) tag of the sixdegrees.net Access app -- a JWT
 # the team domain issued for any OTHER Access app must not be accepted here.
 _CF_ACCESS_AUD = os.environ.get("CF_ACCESS_AUD", "26727a4eee1dea152c19a69b2f77c71f6aec573cb632c35be84f965022b5ec91")
+# plus the hooconnex.com Access app's AUD (2026-10-28), comma-separated if more
+_CF_ACCESS_AUDS = {a.strip() for a in [_CF_ACCESS_AUD] + os.environ.get("CF_ACCESS_AUD_EXTRA", "").split(",") if a.strip()}
 _CF_ACCESS_JWKS_TTL_SECONDS = 3600
 _cf_access_jwks_cache = {"keys": {}, "fetched_at": 0.0}
 
@@ -663,7 +665,7 @@ def _verify_cf_access_jwt_email(assertion: str) -> Optional[str]:
         if payload.get("exp", 0) < datetime.now(timezone.utc).timestamp():
             return None
         aud = payload.get("aud")
-        if _CF_ACCESS_AUD not in (aud if isinstance(aud, list) else [aud]):
+        if not _CF_ACCESS_AUDS.intersection(aud if isinstance(aud, list) else [aud]):
             logger.warning("CF Access JWT audience mismatch")
             return None
         email = payload.get("email")
@@ -700,6 +702,24 @@ def _request_user_email(request: Optional[Request]) -> Optional[str]:
 # approve/reject arbitrary claims -- including ones made about themselves --
 # would defeat the point of having a review step at all.
 _ADMIN_EMAILS = {"john.kalb@gmail.com", "kureious09@gmail.com"}
+
+# --- hooconnex (2026-10-28) ----------------------------------------------------
+# A second address on this same app: the free site -- search, paths and My links,
+# sign-in and approval only. Ask a question and Explore records are the
+# subscription side: hidden on its page and refused here (admins excepted).
+_HOOCONNEX_HOSTS = {h.strip().lower() for h in
+                    os.environ.get("HOOCONNEX_HOSTS", "hooconnex.com,www.hooconnex.com").split(",") if h.strip()}
+
+
+def _is_hooconnex(request: Optional[Request]) -> bool:
+    if request is None:
+        return False
+    return (request.headers.get("host") or "").split(":")[0].strip().lower() in _HOOCONNEX_HOSTS
+
+
+def _paid_feature_blocked(request: Request, email: Optional[str]) -> bool:
+    return _is_hooconnex(request) and email not in _ADMIN_EMAILS
+
 
 def _require_admin(request: Request) -> Optional[JSONResponse]:
     """Returns an error JSONResponse if the request isn't from an allowlisted
@@ -4257,6 +4277,8 @@ def my_detail(request: Request, kind: str = Query(...), name: str = Query(..., m
     email, err = _ml_guard(request)
     if err:
         return err
+    if _paid_feature_blocked(request, email):
+        return JSONResponse(status_code=402, content={"success": False, "error": "Explore records is part of the subscription."})
     if kind not in _DETAIL_KINDS:
         return JSONResponse(status_code=400, content={"success": False, "error": "unknown kind",
                                                       "kinds": _DETAIL_KINDS})
@@ -4530,6 +4552,9 @@ async def my_ask(req: AskRequest, request: Request):
     email, err = _ml_guard(request)
     if err:
         return err
+    if _paid_feature_blocked(request, email):
+        return JSONResponse(status_code=402, content={"status": "subscription_required",
+                                                      "answer": "Questions are part of the subscription."})
     if not _graph_backend_ready():
         return {"status": "error", "answer": "The database is still loading after an update. Try again in a few minutes."}
     p = _ml_db()
@@ -4614,9 +4639,11 @@ async def fediverse_well_known(request: Request):
 
 
 @app.get("/request-access", response_class=HTMLResponse)
-async def request_access_page():
+async def request_access_page(request: Request):
     site_key = os.environ.get("TURNSTILE_SITE_KEY")
     page = _REQUEST_ACCESS_HTML
+    if _is_hooconnex(request):
+        page = page.replace("sixdegrees.net", "hooconnex.com")
     if site_key:
         page = page.replace("__TURNSTILE_SCRIPT__",
                             '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>')
@@ -4630,7 +4657,8 @@ async def request_access_page():
 async def request_access_submit(req: AccessRequest, request: Request):
     # Same answer whether the email is new, pending or already approved --
     # this endpoint is public, so it mustn't reveal who has access.
-    accepted = {"success": True, "message": "Thanks! Your request is in. You'll be able to log in at sixdegrees.net once it's approved."}
+    site = "hooconnex.com" if _is_hooconnex(request) else "sixdegrees.net"
+    accepted = {"success": True, "message": f"Thanks! Your request is in. You'll be able to log in at {site} once it's approved."}
     if req.website:
         return accepted  # honeypot tripped: pretend success, store nothing
     ip = request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else "unknown")
@@ -4660,13 +4688,13 @@ async def request_access_submit(req: AccessRequest, request: Request):
             INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
             VALUES ('access_request', 'new', 'normal', ?, ?, ?, ?)
         """, (f"Access request: {email}" + (f" ({handle})" if handle else ""), note or "", email,
-              json.dumps({"handle": handle, "source": "request-access page"})))
+              json.dumps({"handle": handle, "source": "request-access page", "site": site})))
         conn.commit()
         conn.close()
     except Exception:
         logger.exception("access request insert failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "Something went wrong. Please try again later."})
-    summary = f"New sixdegrees access request: {email}" + (f" ({handle})" if handle else "")
+    summary = f"New {site} access request: {email}" + (f" ({handle})" if handle else "")
     if note:
         summary += f"\n\n{note[:500]}"
     summary += "\n\nReview: https://sixdegrees.net/admin"
@@ -5314,8 +5342,29 @@ loadQueue();
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    return HTMLResponse(HTML_TEMPLATE, headers={"Cache-Control": "no-cache"})
+async def index(request: Request):
+    page = _hooconnex_page() if _is_hooconnex(request) else HTML_TEMPLATE
+    return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
+
+
+_hooconnex_html = None
+
+
+def _hooconnex_page():
+    """The main page under the hooconnex name, with the subscription features
+    (marked data-paid) hidden."""
+    global _hooconnex_html
+    if _hooconnex_html is None:
+        page = HTML_TEMPLATE
+        for old, new in (("<title>Network Pathfinder</title>", "<title>hooconnex</title>"),
+                         ("<h1>🔗 Network Pathfinder</h1>", "<h1>🔗 hooconnex</h1>"),
+                         ("sixdegrees.net &bull; built for research and discovery",
+                          "hooconnex.com &bull; built for research and discovery"),
+                         ("</head>", "<style>[data-paid] { display: none !important; }</style>\n</head>")):
+            assert old in page, old
+            page = page.replace(old, new, 1)
+        _hooconnex_html = page
+    return _hooconnex_html
 
 @app.get("/faq", response_class=HTMLResponse)
 async def faq_page():
@@ -5536,7 +5585,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <div id="crawlie-ticker"><span id="crawlie-text"></span></div>
 
-  <div id="qa-ask-box">
+  <div id="qa-ask-box" data-paid>
     <span id="qa-ask-label">Got a comparison or PageRank question of your own?</span>
     <input id="qa-ask-input" type="text" maxlength="500" placeholder="e.g. how does Elon Musk's PageRank compare to Bill Gates?">
     <input id="qa-ask-email" type="email" maxlength="200" placeholder="email (optional, to get the answer)">
@@ -5633,7 +5682,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <div class="psi-note" style="margin-top:6px;"><a href="/api/my/links/export">Download my links (CSV)</a></div>
         </div>
       </div>
-      <div class="ml-card">
+      <div class="ml-card" data-paid>
         <div class="ml-card-head"><strong>Ask a question</strong> (new): ask in your own words about connections, your contacts, boards,
           lobbying or political money. Answers use only our records and your own links, which stay private to you.</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0;">
@@ -5658,7 +5707,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div id="reach-result" class="psi-note ml-result" data-input="reach-target"></div>
       </div>
-      <div class="ml-card">
+      <div class="ml-card" data-paid>
         <div class="ml-card-head"><strong>Explore records</strong> (preview): the details behind links &mdash; donors and amounts, PAC money,
           campaign vendors, boards and officers, lobbying. Donations and roles of a <em>person</em> are shown only for
           verified public figures.</div>
