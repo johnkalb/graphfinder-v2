@@ -3530,22 +3530,26 @@ async def add_me(req: AddMeRequest, request: Request):
 # the email to the Access allow-list policy via the Cloudflare API.
 # --------------------------------------------------------------------------
 _CF_ACCESS_POLICY_ID = os.environ.get("CF_ACCESS_POLICY_ID", "f3fa602f-88e7-467b-99ca-1e324fc895e0")
+# hooconnex.com requests are approved onto their own policy, attached only to
+# the hooconnex Access app, so they can't sign in to sixdegrees.net (2026-10-30).
+_CF_ACCESS_POLICY_ID_HOOCONNEX = os.environ.get("CF_ACCESS_POLICY_ID_HOOCONNEX", "").strip()
 _EMAIL_RE = re.compile(r"^[^@\s<>\"']{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
 _FEDI_HANDLE_RE = re.compile(r"^@?[A-Za-z0-9_.-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
 _ACCESS_REQUEST_LIMIT_PER_HOUR = 5
 _access_request_hits: dict = {}
 
 
-def _cf_access_allow_email(email: str) -> tuple:
-    """Add email to the reusable Access policy's include list. Returns
-    (ok, message). Reads the policy first and writes back name/decision and
-    all three rule lists, so nothing else on the policy is dropped."""
+def _cf_access_allow_email(email: str, policy_id: Optional[str] = None) -> tuple:
+    """Add email to a reusable Access policy's include list (default: the
+    sixdegrees.net one). Returns (ok, message). Reads the policy first and
+    writes back name/decision and all three rule lists, so nothing else on
+    the policy is dropped."""
     import requests
     token = os.environ.get("CLOUDFLARE_API_TOKEN")
     account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     if not token or not account:
         return False, "CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not configured"
-    url = f"https://api.cloudflare.com/client/v4/accounts/{account}/access/policies/{_CF_ACCESS_POLICY_ID}"
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account}/access/policies/{policy_id or _CF_ACCESS_POLICY_ID}"
     headers = {"Authorization": f"Bearer {token}"}
     try:
         got = requests.get(url, headers=headers, timeout=15).json()
@@ -3565,6 +3569,33 @@ def _cf_access_allow_email(email: str) -> tuple:
     except Exception as e:
         logger.exception("Cloudflare Access allow-list update failed")
         return False, str(e)
+
+
+def _access_request_site(item) -> str:
+    """The site an access request came from (metadata.site, set at submit
+    time). Requests from before hooconnex existed have none: sixdegrees.net."""
+    try:
+        site = (json.loads(item["metadata"] or "{}") or {}).get("site")
+    except (TypeError, ValueError):
+        site = None
+    return "hooconnex.com" if site == "hooconnex.com" else "sixdegrees.net"
+
+
+def _send_access_approved_email(email: str, site: str) -> dict:
+    """Tell the requester they're in, with the link to the site they asked for."""
+    url = f"https://{site}/"
+    subject = f"You're approved for {site}"
+    html_body = (f"<p>Your request for access to <strong>{site}</strong> has been approved.</p>"
+                 f"<p>Sign in at <a href=\"{url}\">{url}</a> with this email address ({html.escape(email)}). "
+                 "You'll get a one-time code by email to finish signing in.</p>")
+    text_body = (f"Your request for access to {site} has been approved.\n\n"
+                 f"Sign in at {url} with this email address ({email}). "
+                 "You'll get a one-time code by email to finish signing in.")
+    try:
+        return send_email(email, subject, html_body, text_body) or {"success": False, "error": "no result"}
+    except Exception as e:
+        logger.exception("access approval email to %s failed", email)
+        return {"success": False, "error": str(e)}
 
 
 def _notify_telegram(text: str):
@@ -4760,9 +4791,18 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
 
         # Approving an access request = adding the email to the Cloudflare
         # Access allow-list. Only mark it approved if Cloudflare accepted it.
+        access_site = None
         if req.status == "approved" and item["item_type"] == "access_request":
-            ok, msg = await asyncio.get_running_loop().run_in_executor(
-                None, _cf_access_allow_email, (item["submitter_email"] or "").strip().lower())
+            access_site = _access_request_site(item)
+            allow_args = [(item["submitter_email"] or "").strip().lower()]
+            if access_site == "hooconnex.com":
+                if not _CF_ACCESS_POLICY_ID_HOOCONNEX:
+                    conn.close()
+                    return JSONResponse(status_code=424, content={"success": False,
+                                        "error": "CF_ACCESS_POLICY_ID_HOOCONNEX not configured, so a hooconnex.com "
+                                                 "request can't be approved (it would also open sixdegrees.net)"})
+                allow_args.append(_CF_ACCESS_POLICY_ID_HOOCONNEX)
+            ok, msg = await asyncio.get_running_loop().run_in_executor(None, _cf_access_allow_email, *allow_args)
             if not ok:
                 conn.close()
                 logger.warning("access request %s: Cloudflare allow-list update failed: %s", item_id, msg)
@@ -4780,7 +4820,13 @@ async def review_service_item(item_id: int, req: ReviewRequest, request: Request
         
         conn.commit()
         conn.close()
-        
+
+        if access_site:
+            sent = await asyncio.get_running_loop().run_in_executor(
+                None, _send_access_approved_email, (item["submitter_email"] or "").strip().lower(), access_site)
+            note = "approval email sent" if sent.get("success") else f"approval email NOT sent: {sent.get('error')}"
+            return {"success": True, "message": f"Item {item_id} reviewed successfully. Status: {req.status}; {note}"}
+
         # If approved and it is a suggestion: perform Phase 3 Auto-Edge creation!
         item_type = item["item_type"]
         submitter_email = item["submitter_email"]
@@ -5295,7 +5341,7 @@ async function doReview(id, status) {{
   const d = await postJson(`/api/service/items/${{id}}/review`, {{status, note}});
   if (!d.success) return;  // keep the error visible -- a reload would overwrite it
   await loadQueue();
-  setQueueStatus(`Item ${{id}} marked ${{status}}.`);
+  setQueueStatus(d.message || `Item ${{id}} marked ${{status}}.`);  // says whether the approval email went
 }}
 async function doResolve(id) {{
   const note = document.getElementById('note-' + id)?.value || null;

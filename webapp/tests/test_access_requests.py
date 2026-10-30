@@ -108,12 +108,58 @@ def test_service_queue_requires_admin(client):
 
 def test_approving_adds_email_to_cloudflare(client, tester_data_dir):
     item_id = _submit_and_get_id(client, tester_data_dir, "approve-me@example.org")
-    with patch("pathfinder._cf_access_allow_email", return_value=(True, "added to the allow-list")) as cf:
+    with patch("pathfinder._cf_access_allow_email", return_value=(True, "added to the allow-list")) as cf, \
+            patch("pathfinder.send_email", return_value={"success": True}) as mail:
         r = client.post(f"/api/service/items/{item_id}/review", json={"status": "approved"}, headers=ADMIN_HEADERS)
     assert r.status_code == 200
     cf.assert_called_once_with("approve-me@example.org")
     row = _access_rows(tester_data_dir, "approve-me@example.org")[0]
     assert row["status"] == "approved" and "allow-list" in row["resolution_note"]
+    # the requester is told, with the link to the site they asked for
+    to, subject, html_body, text_body = mail.call_args.args
+    assert to == "approve-me@example.org" and "sixdegrees.net" in subject
+    assert "https://sixdegrees.net/" in html_body and "hooconnex" not in html_body + text_body
+    assert "approval email sent" in r.json()["message"]
+
+
+def _submit_hooconnex(client, tester_data_dir, email):
+    with patch("pathfinder._notify_operator_of_new_submission"):
+        client.post("/request-access/submit", json={"email": email}, headers={"host": "hooconnex.com"})
+    return _access_rows(tester_data_dir, email)[0]["id"]
+
+
+def test_hooconnex_approval_uses_its_own_policy(client, tester_data_dir, monkeypatch):
+    monkeypatch.setattr(pf, "_CF_ACCESS_POLICY_ID_HOOCONNEX", "hoo-policy")
+    item_id = _submit_hooconnex(client, tester_data_dir, "hoo-user@example.org")
+    with patch("pathfinder._cf_access_allow_email", return_value=(True, "added to the allow-list")) as cf, \
+            patch("pathfinder.send_email", return_value={"success": True}) as mail:
+        r = client.post(f"/api/service/items/{item_id}/review", json={"status": "approved"}, headers=ADMIN_HEADERS)
+    assert r.status_code == 200
+    cf.assert_called_once_with("hoo-user@example.org", "hoo-policy")
+    _, subject, html_body, text_body = mail.call_args.args
+    assert "hooconnex.com" in subject and "https://hooconnex.com/" in html_body
+    assert "sixdegrees" not in html_body + text_body
+
+
+def test_hooconnex_approval_refused_without_its_policy(client, tester_data_dir, monkeypatch):
+    # never fall back to the shared policy: that would open sixdegrees.net too
+    monkeypatch.setattr(pf, "_CF_ACCESS_POLICY_ID_HOOCONNEX", "")
+    item_id = _submit_hooconnex(client, tester_data_dir, "hoo-nopolicy@example.org")
+    with patch("pathfinder._cf_access_allow_email") as cf, patch("pathfinder.send_email") as mail:
+        r = client.post(f"/api/service/items/{item_id}/review", json={"status": "approved"}, headers=ADMIN_HEADERS)
+    assert r.status_code == 424 and "CF_ACCESS_POLICY_ID_HOOCONNEX" in r.json()["error"]
+    cf.assert_not_called()
+    mail.assert_not_called()
+    assert _access_rows(tester_data_dir, "hoo-nopolicy@example.org")[0]["status"] == "new"
+
+
+def test_approval_stands_when_email_fails(client, tester_data_dir):
+    item_id = _submit_and_get_id(client, tester_data_dir, "no-mail@example.org")
+    with patch("pathfinder._cf_access_allow_email", return_value=(True, "added to the allow-list")), \
+            patch("pathfinder.send_email", return_value={"success": False, "error": "smtp down"}):
+        r = client.post(f"/api/service/items/{item_id}/review", json={"status": "approved"}, headers=ADMIN_HEADERS)
+    assert r.status_code == 200 and "NOT sent: smtp down" in r.json()["message"]
+    assert _access_rows(tester_data_dir, "no-mail@example.org")[0]["status"] == "approved"
 
 
 def test_stays_pending_when_cloudflare_fails(client, tester_data_dir):
