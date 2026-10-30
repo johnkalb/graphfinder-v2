@@ -808,11 +808,12 @@ def community_facts(est, verified, sep_median=None, excluded=None):
     Every person named must be verified; ticker and posts get the same text."""
     if not est:
         return []
-    # Only facts computed on the affiliation graph (donation-only links left
-    # out). On the full graph the anchors' community absorbed the DNC and RNC
-    # donor networks (2026-10-03) and stopped meaning "establishment".
-    if est.get("graph") != "affiliation":
-        print("establishment stats not from the affiliation graph -- no community facts", flush=True)
+    # Only facts computed on the people-only graph (person_graph.py, donation-
+    # only links left out; 2026-10-30). On the full graph the anchors'
+    # community absorbed the DNC and RNC donor networks (2026-10-03) and
+    # stopped meaning "establishment"; before 10-30 organizations were members.
+    if est.get("graph") != "people":
+        print("establishment stats not from the people-only graph -- no community facts", flush=True)
         return []
     out = []
     n = est["people"]
@@ -843,8 +844,8 @@ def community_facts(est, verified, sep_median=None, excluded=None):
     if len(orgs) >= 3:
         (o1, k1), (o2, k2), (o3, k3) = orgs[:3]
         out.append(fact("community_establishment",
-                        f'{o1} is the biggest hub of the "establishment" community, with {k1:,} links inside it — '
-                        f"ahead of {o2} ({k2:,}) and {o3} ({k3:,}). {COMMUNITY_DEF}", ["hub_org"]))
+                        f'{o1} is the biggest hub of the "establishment" community: {k1:,} of its members are '
+                        f"linked to it, ahead of {o2} ({k2:,}) and {o3} ({k3:,}). {COMMUNITY_DEF}", ["hub_org"]))
     # Subcommunities are described by their organizations; their people get a
     # crawlie of their own only when the core is well known (see _core_people).
     for sub in est.get("subcommunities", []):
