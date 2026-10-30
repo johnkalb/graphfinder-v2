@@ -19,8 +19,9 @@ the webapp.
   law_firms   AMLAW_ROSTER attorneys per firm (only the firms we harvest)
   advisers    owners/control persons of SEC-registered investment advisers
               (SEC_ADV_OWNERS): count, most connected, highest PageRank
-  establishment  the "establishment" community (Leiden): size, partisan
-              links, median hops, top bridges/hubs, subcommunities
+  establishment  the "establishment" community (Leiden over people only,
+              see person_graph.py): size, median person-steps, top
+              bridges/hubs, the organizations it centres on, subcommunities
 
 The DB-backed parts are optional: DATABASE_URL from the environment, or the
 gitignored secrets file via pg_secret; they're skipped if neither works.
@@ -39,6 +40,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from build_crawlie_facts import is_clean_label, looks_like_person  # noqa: E402
+import person_graph  # noqa: E402
 
 SCORED = "webapp/data/graph_scored.json.gz"
 OUT = "webapp/data/graph_stats.json"
@@ -245,69 +247,85 @@ def inventor_stats(conn):
 FDIC_API = "https://banks.data.fdic.gov/api"
 
 
-# --- communities (2026-10-01) ------------------------------------------------
-# Leiden (modularity, weighted by edge probability) over the whole graph, then
-# a closer look at the "establishment" community -- found by anchors, not by
-# id, since ids change as the graph grows. Seeded so results are stable from
-# night to night. Names are reported raw; build_crawlie_facts.py publishes
-# only verified public figures.
-ESTABLISHMENT_ANCHORS = ("Lawrence Summers", "David Rubenstein", "Council on Foreign Relations")
-PARTY_ANCHORS = {"democratic": "Democratic National Committee", "republican": "Republican National Committee"}
+# --- communities (2026-10-01; people only since 2026-10-30) -----------------
+# Leiden (modularity, seeded) over person_graph's ties between PEOPLE -- a
+# direct link, or a shared organization weighted by its size -- so every
+# community member is a person (operator's rule, 2026-10-30; until then
+# organizations were members too). Same tie graph and seed as
+# build_community_hierarchy.py. Then a closer look at the "establishment"
+# community -- found by anchors, not by id, since ids change as the graph
+# grows. Names are reported raw; build_crawlie_facts.py publishes only
+# verified public figures.
+ESTABLISHMENT_ANCHORS = ("Lawrence Summers", "David Rubenstein", "Henry Kissinger")
 # subcommunities held together mainly by alumni ties mix unrelated people
 # (Einstein with Farrah Fawcett) -- not reported
 MAX_EDUCATION_SHARE = 0.40
+BRIDGE_SOURCES = 300     # sampled betweenness inside the establishment
 
 
 def community_stats(G, nodes, edges, people_mask):
-    # Communities of AFFILIATION: edges whose only link is a political donation
-    # are left out (2026-10-03). With donations in, the corrected graph (after
-    # the LittleSis relabel) forms one 135K political-donor blob around the
+    # Edges whose only link is a political donation are left out (2026-10-03).
+    # With donations in, the graph forms one political-donor blob around the
     # DNC and RNC; without them, the elite core of officeholders, universities
-    # and corporate leadership (112K) separates from unions, lobbying, R&D etc.
+    # and corporate leadership separates from unions, lobbying, R&D etc.
     edges = [e for e in edges if not (len(e) > 3 and set(e[3]) <= {"DONATION"})]
-    G = ig.Graph(n=len(nodes), edges=[(e[0], e[1]) for e in edges], directed=False)
+    A = np.array([e[0] for e in edges], np.int64)
+    B = np.array([e[1] for e in edges], np.int64)
+    W = np.array([max(float(e[2]), 1e-6) for e in edges])
+    M, cat_names = person_graph.category_masks([tuple(e[3]) if len(e) > 3 else () for e in edges])
+    del edges
+    t = time.time()
+    P = person_graph.build(len(nodes), people_mask, A, B, W, M)
+    del A, B, W, M
+    pid, ta, tb = P["pid"], P["ta"], P["tb"]
+    PG = ig.Graph(n=len(pid), edges=np.column_stack([ta, tb]), directed=False)
+    PG.es["w"] = P["tw"].tolist()
+    PG.es["m"] = P["tm"].tolist()
+    log(f"  people-only graph {len(pid):,} people, {len(ta):,} ties ({time.time() - t:.0f}s)")
     random.seed(42)          # igraph draws from Python's RNG
     t = time.time()
-    w = [max(float(e[2]), 1e-6) for e in edges]
-    memb = G.community_leiden(objective_function="modularity", weights=w, n_iterations=4).membership
+    memb = np.array(PG.community_leiden(objective_function="modularity", weights="w", n_iterations=4).membership)
     log(f"  leiden {time.time() - t:.0f}s")
-    idx = {n: i for i, n in enumerate(nodes)}
+    idx = {nodes[v]: i for i, v in enumerate(pid)}
     homes = [memb[idx[a]] for a in ESTABLISHMENT_ANCHORS if a in idx]
     if len(homes) < 2 or len(set(homes)) != 1:
         log(f"  establishment anchors split or missing ({homes}) -- skipped")
         return None
     est = homes[0]
-    party = {k: memb[idx[v]] for k, v in PARTY_ANCHORS.items() if v in idx}
 
-    mem = [i for i, c in enumerate(memb) if c == est]
-    S = G.induced_subgraph(mem)
-    # attach weights/categories to the subgraph edges via a lookup on endpoints
-    pos = {v: k for k, v in enumerate(mem)}
-    sub_w, sub_cats = {}, {}
-    inside_cats, links_to = {}, {}
-    for e in edges:
-        ca, cb = memb[e[0]], memb[e[1]]
-        if ca == est and cb == est:
-            key = (min(pos[e[0]], pos[e[1]]), max(pos[e[0]], pos[e[1]]))
-            sub_w[key] = max(float(e[2]), 1e-6)
-            sub_cats[key] = e[3] if len(e) > 3 else []
-            for c in sub_cats[key]:
-                inside_cats[c] = inside_cats.get(c, 0) + 1
-        elif ca == est or cb == est:
-            other = cb if ca == est else ca
-            links_to[other] = links_to.get(other, 0) + 1
-    S.es["w"] = [sub_w[tuple(sorted(e.tuple))] for e in S.es]
-    is_p = [people_mask[v] for v in mem]
-    P = [k for k in range(S.vcount()) if is_p[k]]
+    mem = np.flatnonzero(memb == est)
+    S = PG.induced_subgraph(mem.tolist())
+    name = lambda k: nodes[pid[mem[k]]]
+    inside = (memb[ta] == est) & (memb[tb] == est)
+    edges_out = int(((memb[ta] == est) != (memb[tb] == est)).sum())
+    tm_in = P["tm"][inside]
+    inside_cats = {c: int(((tm_in >> bit) & 1).sum()) for bit, c in enumerate(cat_names)}
+    inside_cats = {c: v for c, v in inside_cats.items() if v}
     tot_cats = sum(inside_cats.values()) or 1
+    # members' links to organizations: (member's position in S, org node id)
+    pos = -np.ones(len(nodes), np.int64)
+    pos[pid[mem]] = np.arange(len(mem))
+    lk = pos[P["link_person"]]
+    sel = lk >= 0
+    link_k, link_org = lk[sel], P["link_org"][sel]
+    org_people = np.bincount(P["link_org"], minlength=len(nodes))
+    del P
+
+    def top_orgs(members, k, by_share=False):
+        """The k organizations most of these members (positions in S) link to;
+        by_share: ranked by members linked x share of the org's people who are
+        among them (by count alone the big unions top every subcommunity)."""
+        m = np.isin(link_k, members)
+        orgs, cnt = np.unique(link_org[m], return_counts=True)
+        score = cnt * cnt / org_people[orgs] if by_share else cnt
+        return [[nodes[orgs[i]], int(cnt[i])] for i in np.argsort(-score, kind="stable")[:k]]
 
     rng = random.Random(42)
+    P_all = list(range(S.vcount()))
     hist = {}
-    pset = np.array(P)
-    SH = person_step_graph(S, is_p)       # person-steps, same as separation_stats
-    for s in rng.sample(P, min(200, len(P))):
-        d = np.asarray(SH.distances(source=[s])[0], dtype=np.float64)[pset]
-        d = d[(d > 0) & np.isfinite(d)].astype(np.int64) // 2
+    for s in rng.sample(P_all, min(200, len(P_all))):
+        d = np.asarray(S.distances(source=[s])[0], dtype=np.float64)   # one tie = one person-step
+        d = d[(d > 0) & np.isfinite(d)].astype(np.int64)
         for dist, n in enumerate(np.bincount(d).tolist()):
             if n:
                 hist[dist] = hist.get(dist, 0) + n
@@ -319,51 +337,45 @@ def community_stats(G, nodes, edges, people_mask):
             median_hops = dist
 
     deg = S.degree()
-    ppl_ties = [0] * S.vcount()
-    for a, b in (e.tuple for e in S.es):
-        if is_p[a] and is_p[b]:
-            ppl_ties[a] += 1
-            ppl_ties[b] += 1
-    src = rng.sample(P, min(1500, len(P)))
+    src = rng.sample(P_all, min(BRIDGE_SOURCES, len(P_all)))
     t = time.time()
     btw = S.betweenness(sources=src)
     log(f"  establishment betweenness {time.time() - t:.0f}s")
-    name = lambda k: nodes[mem[k]]
-    top_bridges = [name(k) for k in sorted(P, key=lambda k: -btw[k])[:40]]
-    top_connected = [[name(k), deg[k]] for k in sorted(P, key=lambda k: -deg[k])[:40]]
-    hub_orgs = [[name(k), deg[k]] for k in sorted((k for k in range(S.vcount()) if not is_p[k]),
-                                                  key=lambda k: -deg[k])[:10]]
+    top_bridges = [name(k) for k in sorted(P_all, key=lambda k: -btw[k])[:40]]
+    top_connected = [[name(k), deg[k]] for k in sorted(P_all, key=lambda k: -deg[k])[:40]]
+    hub_orgs = top_orgs(np.arange(len(mem)), 10)
 
-    sub = S.community_leiden(objective_function="modularity", weights="w", n_iterations=4).membership
-    sub_people, sub_edu, sub_all = {}, {}, {}
-    for k in P:
-        sub_people[sub[k]] = sub_people.get(sub[k], 0) + 1
-    for key, cats in sub_cats.items():
-        a, b = key
-        if sub[a] == sub[b]:
-            for c in cats:
-                sub_all[sub[a]] = sub_all.get(sub[a], 0) + 1
-                if c == "EDUCATION":
-                    sub_edu[sub[a]] = sub_edu.get(sub[a], 0) + 1
+    sub = np.array(S.community_leiden(objective_function="modularity", weights="w", n_iterations=4).membership)
+    edu_bit = cat_names.index("EDUCATION") if "EDUCATION" in cat_names else None
+    el = np.array(S.get_edgelist(), np.int64).reshape(-1, 2)
+    sa, sb = el[:, 0], el[:, 1]
+    sm = np.array(S.es["m"], np.int64)
+    same = sub[sa] == sub[sb]
+    sub_all = np.bincount(sub[sa][same], weights=sum((sm[same] >> bit) & 1 for bit in range(len(cat_names))),
+                          minlength=sub.max() + 1)
+    sub_edu = (np.bincount(sub[sa][same], weights=(sm[same] >> edu_bit) & 1, minlength=sub.max() + 1)
+               if edu_bit is not None else np.zeros(sub.max() + 1))
+    sub_people = np.bincount(sub)
     subs = []
-    for c, n in sorted(sub_people.items(), key=lambda kv: -kv[1])[:15]:
-        edu = sub_edu.get(c, 0) / max(1, sub_all.get(c, 0))
-        if edu > MAX_EDUCATION_SHARE:
+    for c in np.argsort(-sub_people, kind="stable")[:15].tolist():
+        if sub_edu[c] / max(1, sub_all[c]) > MAX_EDUCATION_SHARE:
             continue
-        ks = [k for k in range(S.vcount()) if sub[k] == c]
-        orgs_k = sorted((k for k in ks if not is_p[k]), key=lambda k: -deg[k])[:8]
-        org_set = set(orgs_k)
+        ks = np.flatnonzero(sub == c)
+        orgs_k = top_orgs(ks, 8, by_share=True)
+        org_set = {o for o, _n in orgs_k}
         # each hub person with the hub orgs they link to DIRECTLY -- a fact may
         # only pair a person with an organization they're actually tied to
         # (clustering alone put Jair Bolsonaro "in" a BlackRock subcommunity)
-        hubs = sorted((k for k in ks if is_p[k]), key=lambda k: -ppl_ties[k])[:150]
-        subs.append({"people": n, "hub_orgs": [name(k) for k in orgs_k],
-                     "hub_people": [[name(k), [name(o) for o in S.neighbors(k) if o in org_set]] for k in hubs]})
+        hubs = sorted(ks.tolist(), key=lambda k: -deg[k])[:150]
+        hub_links = {}
+        hm = np.isin(link_k, hubs)
+        for k, o in zip(link_k[hm].tolist(), link_org[hm].tolist()):
+            if nodes[o] in org_set:
+                hub_links.setdefault(k, []).append(nodes[o])
+        subs.append({"people": int(sub_people[c]), "hub_orgs": [o for o, _n in orgs_k],
+                     "hub_people": [[name(k), hub_links.get(k, [])] for k in hubs]})
 
-    return {"graph": "affiliation", "people": len(P), "orgs": S.vcount() - len(P), "edges_inside": S.ecount(),
-            "edges_out": sum(links_to.values()),
-            "links_democratic": links_to.get(party.get("democratic"), 0) if party.get("democratic") != est else None,
-            "links_republican": links_to.get(party.get("republican"), 0) if party.get("republican") != est else None,
+    return {"graph": "people", "people": len(mem), "ties_inside": S.ecount(), "ties_out": edges_out,
             "glue": [[c, round(v / tot_cats, 3)] for c, v in sorted(inside_cats.items(), key=lambda kv: -kv[1])[:5]],
             "median_hops": median_hops, "top_bridges": top_bridges, "top_connected": top_connected,
             "hub_orgs": hub_orgs, "subcommunities": subs}

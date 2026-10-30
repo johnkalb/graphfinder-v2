@@ -5,11 +5,16 @@ levels: worlds (the establishment, party money, unions, biotech boards...),
 then circles (judges, NYC politics, the Koch movement...), then local or
 institutional circles. This builds that hierarchy nightly-ready:
 
-  * same affiliation graph as build_graph_stats.community_stats: donation-only
-    edges dropped, weight = edge probability, seeded modularity Leiden;
-  * level 1 is the whole graph; a community of MIN_SPLIT+ nodes is split
+  * PEOPLE ONLY (2026-10-30, operator's rule): Leiden runs on person_graph's
+    ties between people -- a direct link, or a shared organization weighted by
+    its size -- never on organization nodes, so every member is a person.
+    Organizations are context: top_orgs are the ones most members link to.
+    Same tie graph and seed as build_graph_stats.community_stats; donation-
+    only edges dropped. (Until 2026-10-30 organizations were members too, so
+    that night's ids are almost all new: the memberships no longer match.)
+  * level 1 is the whole graph; a community of MIN_SPLIT+ people is split
     inside its own subgraph if that partition's modularity is >= MIN_Q;
-  * communities of MIN_SIZE+ nodes get a stable id ("C123"), carried over
+  * communities of MIN_SIZE+ people get a stable id ("C123"), carried over
     from the previous run when the members mostly match (Jaccard >= MATCH),
     so summaries written for a community survive small nightly changes;
   * flags: "cohort" when school ties are over MAX_EDUCATION_SHARE of the
@@ -24,7 +29,7 @@ institutional circles. This builds that hierarchy nightly-ready:
 
 Writes webapp/data/communities.json.gz (id -> level, parent, size, people,
 top orgs, nameable people, glue, flags) and webapp/data/community_members.tsv.gz
-(node name -> chain of ids, top level first). No database access.
+(person name -> chain of ids, top level first). No database access.
 
   python build_community_hierarchy.py               # in graphfinder-clean, like build_graph_stats
   python build_community_hierarchy.py --data DIR    # read and write another webapp/data
@@ -45,6 +50,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from build_public_by_role import canon_key, common_first_last, first_last  # noqa: E402
+import person_graph  # noqa: E402
 
 MIN_SPLIT = 500
 MIN_Q = 0.25
@@ -69,8 +75,12 @@ def load(data):
     person = np.zeros(len(nodes), bool)
     with gzip.open(os.path.join(data, "person_nodes.json.gz"), "rt", encoding="utf-8") as f:
         person[json.load(f)] = True
-    with gzip.open(os.path.join(data, "verified_people.json.gz"), "rt", encoding="utf-8") as f:
-        verified = set(json.load(f))
+    try:    # written by build_crawlie_facts; last night's copy is fine
+        with gzip.open(os.path.join(data, "verified_people.json.gz"), "rt", encoding="utf-8") as f:
+            verified = set(json.load(f))
+    except FileNotFoundError:
+        log("WARNING: verified_people.json.gz missing -- no nameable people")
+        verified = set()
     edges = [e for e in g["edges"] if not (len(e) > 3 and set(e[3]) <= {"DONATION"})]
     del g
     A = np.array([e[0] for e in edges], np.int64)
@@ -82,7 +92,7 @@ def load(data):
 
 def hierarchy(n, A, B, W):
     """labels[L][node] = community at level L+1; parent[L][c] = its community at level L."""
-    G = ig.Graph(n=n, edges=np.column_stack([A, B]).tolist(), directed=False)
+    G = ig.Graph(n=n, edges=np.column_stack([A, B]), directed=False)
     G.es["w"] = W.tolist()
     random.seed(42)          # igraph draws from Python's RNG
     labels = [np.array(G.community_leiden(objective_function="modularity", weights="w", n_iterations=4).membership)]
@@ -117,9 +127,13 @@ def hierarchy(n, A, B, W):
     return labels, parent
 
 
-def describe(nodes, person, nameable, A, B, cats, labels, parent):
-    """Per level: {local id: description} for communities of MIN_SIZE+ nodes."""
-    n = len(nodes)
+def describe(nodes, names, nameable, A, B, M, cat_names, link_loc, link_org, labels, parent):
+    """Per level: {local id: description} for communities of MIN_SIZE+ people.
+    A, B, M: ties between people (local ids) and their category masks;
+    link_loc, link_org: every person-organization link (person local id, org
+    node id), for the organizations a community centres on."""
+    n = len(names)
+    org_people = np.bincount(link_org, minlength=len(nodes))
     out = []
     parent_size = None
     for li, lab in enumerate(labels):
@@ -133,10 +147,20 @@ def describe(nodes, person, nameable, A, B, cats, labels, parent):
         e_in = np.bincount(la[inside], minlength=len(size))
         e_bd = np.bincount(la[~inside], minlength=len(size)) + np.bincount(lb[~inside], minlength=len(size))
         ideg = np.bincount(A[inside], minlength=n) + np.bincount(B[inside], minlength=n)
-        glue = collections.defaultdict(collections.Counter)
-        for i in np.flatnonzero(inside & big[la]):
-            for x in cats[i]:
-                glue[int(la[i])][x] += 1
+        sel = inside & big[la]
+        glue = {c: np.bincount(la[sel], weights=(M[sel] >> bit) & 1, minlength=len(size))
+                for bit, c in enumerate(cat_names)}
+        # organizations by members linked x share of the org's people who are
+        # members: by count alone the big unions topped nearly every community
+        lc = lab[link_loc]
+        keep = big[lc]
+        uk, cnt = np.unique(lc[keep] * len(nodes) + link_org[keep], return_counts=True)
+        oc, oi = uk // len(nodes), uk % len(nodes)
+        score = cnt * cnt / org_people[oi]
+        top_orgs = collections.defaultdict(list)
+        for k in np.lexsort((-score, oc)):
+            if len(top_orgs[int(oc[k])]) < TOP:
+                top_orgs[int(oc[k])].append([nodes[oi[k]], int(cnt[k])])
         order = np.argsort(lab, kind="stable")
         level = {}
         for grp in np.split(order, np.flatnonzero(np.diff(lab[order])) + 1):
@@ -144,23 +168,24 @@ def describe(nodes, person, nameable, A, B, cats, labels, parent):
             if not big[c]:
                 continue
             top = grp[np.argsort(-ideg[grp], kind="stable")]
-            tot = sum(glue[c].values()) or 1
-            edu = glue[c]["EDUCATION"] / tot   # as build_graph_stats; with SCHOOL_AFFILIATION the establishment itself counts
+            counts = collections.Counter({k: int(v[c]) for k, v in glue.items() if v[c]})
+            tot = sum(counts.values()) or 1
+            edu = counts["EDUCATION"] / tot   # as build_graph_stats
             hub = (ideg[top[:2]].sum() / max(1, 2 * e_in[c]))
             flags = (["cohort"] if edu > MAX_EDUCATION_SHARE else []) + (["hub_glued"] if hub > HUB_SHARE else [])
             level[c] = {
                 "level": li + 1, "parent_local": parent[li].get(c) if li else None,
-                "size": int(size[c]), "people": int(person[grp].sum()),
+                "size": int(size[c]), "people": int(size[c]),
                 "edges_in": int(e_in[c]), "edges_out": int(e_bd[c]),
                 "conductance": round(float(e_bd[c] / max(1, 2 * e_in[c] + e_bd[c])), 3),
-                "glue": [[k, round(v / tot, 3)] for k, v in glue[c].most_common(6)],
+                "glue": [[k, round(v / tot, 3)] for k, v in counts.most_common(6)],
                 "flags": flags,
-                "top_orgs": [[nodes[i], int(ideg[i])] for i in top if not person[i]][:TOP],
-                "nameable_people": [[nodes[i], int(ideg[i])] for i in top if person[i] and nameable[i]][:TOP],
+                "top_orgs": top_orgs.get(c, []),
+                "nameable_people": [[names[i], int(ideg[i])] for i in top if nameable[i]][:TOP],
                 "_members": grp,
             }
         out.append(level)
-        log(f"level {li + 1}: {len(level):,} communities of {MIN_SIZE}+ nodes "
+        log(f"level {li + 1}: {len(level):,} communities of {MIN_SIZE}+ people "
             f"({sum('cohort' in d['flags'] for d in level.values()):,} cohorts, "
             f"{sum('hub_glued' in d['flags'] for d in level.values()):,} hub-glued)")
     return out
@@ -220,22 +245,32 @@ def main():
     args = ap.parse_args()
     nodes, person, verified, A, B, W, cats = load(args.data)
     log(f"affiliation graph: {len(nodes):,} nodes, {len(A):,} edges, {person.sum():,} people")
+    M, cat_names = person_graph.category_masks(cats)
+    del cats
+    P = person_graph.build(len(nodes), person, A, B, W, M)
+    del A, B, W, M
+    pid = P["pid"]
+    names = [nodes[v] for v in pid]
+    loc = -np.ones(len(nodes), np.int64)
+    loc[pid] = np.arange(len(pid))
+    log(f"people-only graph: {len(pid):,} people, {len(P['ta']):,} ties")
     common = common_first_last()
     # the local FEC extracts are small (Matt Smith isn't at 5 ZIPs), so also
     # count the graph's own person nodes per first+last: 4+ (variants, per-
     # employer splits, namesakes) means the name can't be pinned to one person.
     # Drops some real figures split into variants (Nelson Peltz, 7) -- for
     # summaries, leaving someone out beats naming the wrong one.
-    fl = [first_last(canon_key(re.sub(r"\s*\(.*\)\s*$", "", nm))) if p else "" for nm, p in zip(nodes, person)]
+    fl = [first_last(canon_key(re.sub(r"\s*\(.*\)\s*$", "", nm))) for nm in names]
     per_name = collections.Counter(k for k in fl if k)
-    nameable = np.array([bool(p) and nm.lower() in verified and k not in common and per_name[k] < MAX_NAMESAKES
-                         for nm, p, k in zip(nodes, person, fl)])
+    nameable = np.array([nm.lower() in verified and k not in common and per_name[k] < MAX_NAMESAKES
+                         for nm, k in zip(names, fl)])
     log(f"{len(common):,} common donor names; {nameable.sum():,} nameable people "
-        f"(of {sum(1 for nm, p in zip(nodes, person) if p and nm.lower() in verified):,} verified)")
-    labels, parent = hierarchy(len(nodes), A, B, W)
-    levels = describe(nodes, person, nameable, A, B, cats, labels, parent)
+        f"(of {sum(1 for nm in names if nm.lower() in verified):,} verified)")
+    labels, parent = hierarchy(len(pid), P["ta"], P["tb"], P["tw"])
+    levels = describe(nodes, names, nameable, P["ta"], P["tb"], P["tm"], cat_names,
+                      loc[P["link_person"]], P["link_org"], labels, parent)
     prev_chains, next_id = previous(args.data)
-    next_id, reused = assign_ids(nodes, levels, prev_chains, next_id)
+    next_id, reused = assign_ids(names, levels, prev_chains, next_id)
     total = sum(len(lv) for lv in levels)
     log(f"{total:,} communities; {reused:,} kept last run's id, {total - reused:,} new")
 
@@ -254,9 +289,9 @@ def main():
     tmp = os.path.join(args.data, "community_members.tsv.gz.tmp")
     with gzip.open(tmp, "wt", encoding="utf-8") as f:
         for i in sorted(chains):
-            f.write(f"{nodes[i]}\t{','.join(chains[i])}\n")
+            f.write(f"{names[i]}\t{','.join(chains[i])}\n")
     os.replace(tmp, os.path.join(args.data, "community_members.tsv.gz"))
-    log(f"wrote communities.json.gz ({len(comms):,}) and community_members.tsv.gz ({len(chains):,} nodes)")
+    log(f"wrote communities.json.gz ({len(comms):,}) and community_members.tsv.gz ({len(chains):,} people)")
 
 
 if __name__ == "__main__":
