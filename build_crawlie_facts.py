@@ -379,7 +379,10 @@ def ladder_facts(ladder, verified):
 
 
 def pct(x):
-    return f"{x:.0%}" if x < 0.995 else f"{x:.1%}"
+    # Small shares keep a decimal: 0.31% used to print as "0%".
+    if 0 < x < 0.001:
+        return "less than 0.1%"
+    return f"{x:.1%}" if x < 0.01 or x >= 0.995 else f"{x:.0%}"
 
 
 _COMPANY_ALIASES = {"international business machines": "IBM"}
@@ -399,6 +402,10 @@ def short_company(name):
     return n.title() if n.isupper() and len(n) > 4 else n     # keep short acronyms (CHS, IBM)
 
 
+STEP_DEF = ("A step is one person-to-person tie: two people who share a board, employer, school "
+            "or film are one step apart.")
+
+
 def stats_facts(stats):
     """Dataset/network statistics from build_graph_stats.py (graph_stats.json).
     No people named, so all of these are publishable."""
@@ -409,15 +416,15 @@ def stats_facts(stats):
     if sep:
         m = sep["median_steps"]
         out.append(fact("stats_separation",
-                        "In the sixdegrees network, the median distance between two people is exactly six steps."
-                        if m == 6 else
-                        f"In the sixdegrees network, the median distance between two people is {m} steps — not six.",
-                        ["median"]))
+                        ("In the sixdegrees network, the median distance between two people is exactly six steps. "
+                         if m == 6 else
+                         f"In the sixdegrees network, the median distance between two people is {m} steps — not six. ")
+                        + STEP_DEF, ["median"]))
         w3, w6 = sep["within"].get("3"), sep["within"].get("6")
         if w3 is not None and w6 is not None:
             out.append(fact("stats_separation",
-                            f"Only {pct(w3)} of pairs of people in the sixdegrees network are within 3 steps "
-                            f"of each other — but {pct(w6)} are within 6.", ["within3"]))
+                            f"{pct(w3)} of pairs of people in the sixdegrees network are within 3 steps "
+                            f"of each other, and {pct(w6)} are within 6. {STEP_DEF}", ["within3"]))
         out.append(fact("stats_separation",
                         f"Half of all people in the sixdegrees network can reach 90% of everyone else within "
                         f"{sep['reach90_median_steps']} steps.", ["reach90"]))
