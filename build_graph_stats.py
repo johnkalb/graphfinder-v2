@@ -8,8 +8,11 @@ the webapp.
   separation  BFS from a uniform random sample of ALL people in the connected
               network (not gated on any trait -- the selection-bias trap that
               sank the per-school reach stats, see memory "education backfill").
-              "Steps" = links as the site shows them in a path, so a path
-              through a company or film counts it as a step.
+              "Steps" = person-to-person steps (2026-10-30): two people who
+              share a board, employer, school or film are 1 step apart, and an
+              organization-to-organization link counts as a step of its own.
+              Counting every link in the path (company = a step) made almost
+              no pairs "within 3 steps" and misled readers.
   scale       nodes / edges / people in the scored graph
   charities   the IRS Business Master File candidates ($10M+ assets) and how
               many of them the harvester has processed so far
@@ -41,7 +44,7 @@ SCORED = "webapp/data/graph_scored.json.gz"
 OUT = "webapp/data/graph_stats.json"
 PERSON_NODES = "webapp/data/person_nodes.json.gz"   # build_person_nodes.py
 CANDIDATES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "irs990_asset_candidates.json")
-SAMPLE_SOURCES = 300
+SAMPLE_SOURCES = 120   # ~3.75 s per person-step BFS; the rebuild gives this script 20 min
 REACH_SHARE = 0.90
 
 
@@ -70,6 +73,21 @@ def db_connect():
         return None
 
 
+def person_step_graph(G, people_mask):
+    """G with every person-person and org-org link split by a midpoint node,
+    so each hop is half a person-step: person-org-person = 2 hops = 1 step.
+    Same distances as weighting person-org links 0.5 and the rest 1, but a
+    plain BFS (Dijkstra took ~7 s per source on the full graph). Vertices
+    0..n-1 are G's; halve a hop count between two people to get steps."""
+    el = np.array(G.get_edgelist(), dtype=np.int64).reshape(-1, 2)
+    pm = np.asarray(people_mask, dtype=bool)
+    mixed = pm[el[:, 0]] != pm[el[:, 1]]
+    same = el[~mixed]
+    mids = np.arange(G.vcount(), G.vcount() + len(same))
+    edges = np.concatenate([el[mixed], np.c_[same[:, 0], mids], np.c_[mids, same[:, 1]]])
+    return ig.Graph(n=G.vcount() + len(same), edges=edges.tolist(), directed=False)
+
+
 def separation_stats(G, people_mask):
     comps = G.connected_components()
     giant = max(comps, key=len)
@@ -79,13 +97,14 @@ def separation_stats(G, people_mask):
     rng = random.Random(datetime.now(timezone.utc).strftime("%Y%m%d"))
     sources = rng.sample(giant_people, min(SAMPLE_SOURCES, len(giant_people)))
     targets = np.array(giant_people)
+    H = person_step_graph(G, people_mask)
     hist = np.zeros(1, dtype=np.int64)
     reach90 = []
     longest = 0
     t = time.time()
     for s in sources:
-        d = np.asarray(G.distances(source=[s])[0], dtype=np.float64)[targets]
-        d = d[d > 0].astype(np.int64)            # drop the source itself
+        d = np.asarray(H.distances(source=[s])[0], dtype=np.float64)[targets]
+        d = d[d > 0].astype(np.int64) // 2       # drop the source itself; hops -> person-steps
         counts = np.bincount(d)
         if len(counts) > len(hist):
             hist = np.pad(hist, (0, len(counts) - len(hist)))
@@ -285,9 +304,10 @@ def community_stats(G, nodes, edges, people_mask):
     rng = random.Random(42)
     hist = {}
     pset = np.array(P)
+    SH = person_step_graph(S, is_p)       # person-steps, same as separation_stats
     for s in rng.sample(P, min(200, len(P))):
-        d = np.asarray(S.distances(source=[s])[0], dtype=np.float64)[pset]
-        d = d[(d > 0) & np.isfinite(d)].astype(np.int64)
+        d = np.asarray(SH.distances(source=[s])[0], dtype=np.float64)[pset]
+        d = d[(d > 0) & np.isfinite(d)].astype(np.int64) // 2
         for dist, n in enumerate(np.bincount(d).tolist()):
             if n:
                 hist[dist] = hist.get(dist, 0) + n
