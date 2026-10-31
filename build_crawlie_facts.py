@@ -749,6 +749,7 @@ def unavailable_people(est):
     if not est:
         return set()
     cands = {n for n, _k in est.get("top_connected", [])[:CORE_WITHIN]}
+    cands |= set(est.get("top_bridges", []))     # the bridge crawlie, same rule (2026-10-31)
     for sub in est.get("subcommunities", []):
         cands |= {n for n, _o in sub.get("hub_people", [])[:CORE_WITHIN]}
     qids = {}
@@ -818,7 +819,11 @@ def community_facts(est, verified, sep_median=None, excluded=None):
     out = []
     n = est["people"]
     glue = [_GLUE_WORDS[c] for c, _ in est.get("glue", []) if c in _GLUE_WORDS][:3]
-    bridge = next((b for b in est.get("top_bridges", []) if b.lower() in verified and is_clean_label(b)), None)
+    # living, free figures only, as the core crawlies (Ghislaine Maxwell topped
+    # the people-only bridges, 2026-10-30); none if that can't be checked
+    bridge = None if excluded is None else next(
+        (b for b in est.get("top_bridges", [])
+         if b.lower() in verified and b.lower() not in excluded and is_clean_label(b)), None)
     if bridge:
         out.append(fact("community_establishment",
                         f'More shortest paths between members of the "establishment" community ({n:,} people '
