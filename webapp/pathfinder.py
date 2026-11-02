@@ -7,7 +7,7 @@ import functools
 import logging
 import collections, gzip, threading, time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 import networkx as nx
 import igraph as ig
@@ -1692,7 +1692,11 @@ def _k_shortest_pruned(s, t, k, weights):
     return None
 
 
-def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=None, tgt_via=None):
+MAX_EXCLUDE = 10
+
+
+def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=None, tgt_via=None,
+                      exclude=None):
     """igraph-backed replacement for _find_path(). Opt-in via
     PATHFINDER_BACKEND=igraph (see _find_path_dispatch()) -- validated
     against _find_path() in webapp/tests/test_pathfinder_igraph.py. Reuses
@@ -1721,7 +1725,13 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=N
     them apart reliably (their links don't connect to each other). The user
     names one connection -- "the Mark Peters at NYC Dept of Investigation" --
     and every other link on that endpoint gets infinite weight, using the
-    same copy-and-mask approach as a deceased endpoint."""
+    same copy-and-mask approach as a deceased endpoint.
+
+    exclude (2026-11-01): node names the user ruled out as go-betweens ("Not
+    this person?" on a path step -- e.g. a path through "Michael Grunwald" the
+    Overbrook trustee that continues as a union officer of the same name).
+    Every link on those nodes gets infinite weight; endpoints are never
+    excluded. Same copy-and-mask approach again."""
     _load_igraph()
     if _igraph_graph is None or _igraph_graph.vcount() == 0:
         return {"error": "Graph not loaded"}
@@ -1769,6 +1779,16 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=N
                 e = _igraph_graph.es[eid]
                 if (e.target if e.source == end else e.source) != vi:
                     weights[eid] = math.inf
+    excluded = []
+    for name in (exclude or [])[:MAX_EXCLUDE]:
+        xi = _igraph_name_to_idx.get(name)
+        if xi is None or xi in (src_idx, tgt_idx) or xi in via_idx.values() or name in excluded:
+            continue
+        if weights is _igraph_weight or weights is _igraph_living_weight:
+            weights = weights.copy()
+        for eid in _igraph_graph.incident(xi):
+            weights[eid] = math.inf
+        excluded.append(name)
     # Search between the picked connections and add the endpoint hops
     # afterwards: same paths as searching the masked endpoints directly,
     # but measured 2x faster (26s vs 48s, Gates -> Mark Peters via Iowa
@@ -1844,7 +1864,7 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=N
 
     return {"paths": paths, "src_found": True, "tgt_found": True,
             "deceased_excluded": excluded_deceased, "include_deceased": include_deceased,
-            "src_via": src_via, "tgt_via": tgt_via}
+            "src_via": src_via, "tgt_via": tgt_via, "excluded": excluded}
 
 
 # igraph is the default: validated equivalent to NetworkX (7/7 tests in
@@ -1860,13 +1880,14 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=N
 _PATHFINDER_BACKEND = os.environ.get("PATHFINDER_BACKEND", "igraph")
 
 
-def _find_path_dispatch(src_name, tgt_name, max_depth=6, k=3, include_deceased=False, src_via=None, tgt_via=None):
+def _find_path_dispatch(src_name, tgt_name, max_depth=6, k=3, include_deceased=False, src_via=None, tgt_via=None,
+                        exclude=None):
     if _PATHFINDER_BACKEND == "pgrouting" and db.IS_POSTGRES:
         return _find_path_pg(src_name, tgt_name, k=k, include_deceased=include_deceased)
     if _PATHFINDER_BACKEND == "igraph":
         return _find_path_igraph(src_name, tgt_name, k=k, include_deceased=include_deceased,
-                                 src_via=src_via, tgt_via=tgt_via)
-    # src_via/tgt_via are igraph-only; the escape-hatch backends ignore them
+                                 src_via=src_via, tgt_via=tgt_via, exclude=exclude)
+    # src_via/tgt_via/exclude are igraph-only; the escape-hatch backends ignore them
     return _find_path(src_name, tgt_name, max_depth=max_depth, k=k, include_deceased=include_deceased)
 
 
@@ -2255,9 +2276,11 @@ def search(request: Request, q: str = Query(default="")):
 @app.get("/api/path")
 async def path(request: Request, src_name: str = Query(default=""), tgt_name: str = Query(default=""),
                include_deceased: bool = Query(default=False),
-               src_via: str = Query(default=""), tgt_via: str = Query(default="")):
+               src_via: str = Query(default=""), tgt_via: str = Query(default=""),
+               exclude: List[str] = Query(default=[])):
     if not src_name or not tgt_name:
         return {"error": "Both src_name and tgt_name required"}
+    exclude = [x.strip() for x in exclude if x and x.strip()][:MAX_EXCLUDE] or None
     if not _graph_backend_ready():
         # Cold-boot warm-up window (see _warm_up_graph()) -- never load the
         # graph inline here: a synchronous load takes well past DO's hard
@@ -2276,19 +2299,20 @@ async def path(request: Request, src_name: str = Query(default=""), tgt_name: st
         try:
             res = await loop.run_in_executor(
                 _path_process_pool, _find_path_dispatch, src_name.strip(), tgt_name.strip(), 6, 3, include_deceased,
-                src_via, tgt_via
+                src_via, tgt_via, exclude
             )
         except concurrent.futures.process.BrokenProcessPool:
             logger.exception("path process pool broken -- falling back to inline call for this request")
             res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased,
-                                      src_via=src_via, tgt_via=tgt_via)
+                                      src_via=src_via, tgt_via=tgt_via, exclude=exclude)
     else:
         res = _find_path_dispatch(src_name.strip(), tgt_name.strip(), include_deceased=include_deceased,
-                                  src_via=src_via, tgt_via=tgt_via)
+                                  src_via=src_via, tgt_via=tgt_via, exclude=exclude)
     _log_tester_usage(
         request,
         "path_found" if "paths" in res and len(res.get("paths", [])) > 0 else "path_not_found",
-        {"src_name": src_name.strip(), "tgt_name": tgt_name.strip(), "include_deceased": include_deceased},
+        {"src_name": src_name.strip(), "tgt_name": tgt_name.strip(), "include_deceased": include_deceased,
+         "exclude": exclude or []},
     )
 
     # deleted public self-reported links: honoured at once (my_links, decision 10)
@@ -5962,7 +5986,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 // via: the one connection that says WHICH person a shared name means
 // ("Mark Peters" at NYC Dept of Investigation, not the union officer) --
 // see _find_path_igraph()'s src_via/tgt_via.
-const state = { src: { selected: null, via: null, viaLabel: null }, tgt: { selected: null, via: null, viaLabel: null } };
+const state = { src: { selected: null, via: null, viaLabel: null }, tgt: { selected: null, via: null, viaLabel: null },
+                exclude: [] };  // go-betweens the user ruled out ("not this one?"), cleared when an endpoint changes
+window.excludeNode = function(name) {
+  if (state.exclude.indexOf(name) < 0 && state.exclude.length < 10) state.exclude.push(name);
+  findPath();
+};
+window.unexcludeNode = function(i) { state.exclude.splice(i, 1); findPath(); };
+function excludedNote() {
+  if (!state.exclude.length) return '';
+  return '<div class="path-note" style="margin:0 0 10px 0;">Avoiding: ' + state.exclude.map((n, i) =>
+    '<strong>' + escHtml(n) + '</strong> <a href="#" onclick="unexcludeNode(' + i + '); return false;" style="color:#58a6ff;" title="Allow again">(allow)</a>'
+  ).join(', ') + '</div>';
+}
 let _pathGen = 0;  // guards against a slow narrative fetch from a stale search landing after a newer one
 let searchTimeout = null;
 
@@ -6090,6 +6126,7 @@ window.selectItem = function(prefix, idx) {
   const name = items[idx].getAttribute('data-name') || items[idx].querySelector('.name').childNodes[0].textContent.trim();
   state[prefix].selected = name;
   state[prefix].via = state[prefix].viaLabel = null;
+  state.exclude = [];
   document.getElementById(prefix + '-input').value = name;
   dd.classList.remove('show');
   updateSelected(prefix);
@@ -6115,6 +6152,7 @@ function updateSelected(prefix) {
 window.clearSelection = function(prefix) {
   state[prefix].selected = null;
   state[prefix].via = state[prefix].viaLabel = null;
+  state.exclude = [];
   document.getElementById(prefix + '-input').value = '';
   document.getElementById(prefix + '-selected').innerHTML = '';
   updateButton();
@@ -6137,6 +6175,7 @@ async function findPath() {
     if (incDec) params.set('include_deceased', 'true');
     if (state.src.via) params.set('src_via', state.src.via);
     if (state.tgt.via) params.set('tgt_via', state.tgt.via);
+    state.exclude.forEach(n => params.append('exclude', n));
     const res = await fetch('/api/path?' + params.toString(), {
       headers: { 'Accept': 'application/json' }
     });
@@ -6169,6 +6208,7 @@ async function findPath() {
       if (!incDec && data.deceased_excluded > 0) {
         html += '<div style="margin-top:8px;font-size:0.85rem;">' + data.deceased_excluded + ' deceased ' + (data.deceased_excluded===1?'person was':'people were') + ' excluded as possible go-betweens. <a href="#" onclick="document.getElementById(\'include-deceased\').checked=true; findPath(); return false;" style="color:#58a6ff;">Include deceased intermediaries</a> to see historical connections.</div>';
       }
+      if (state.exclude.length) html += '<div style="margin-top:8px;font-size:0.85rem;">' + excludedNote() + '</div>';
       html += '</div>';
       document.getElementById('results').innerHTML = html;
       // No connection anywhere in the scored graph -- last-resort check
@@ -6196,6 +6236,7 @@ async function findPath() {
         html += '</div>';
       }
       html += namesakeHint(data.paths[0], data);
+      html += excludedNote();
       data.paths.forEach((p, idx) => {
         const bandColors = {Strong:'#3fb950', Plausible:'#d29922', Weak:'#db6d28', Tenuous:'#8b949e'};
         const bc = bandColors[p.band] || '#8b949e';
@@ -6238,6 +6279,19 @@ async function findPath() {
           }
           if (step.deceased) {
             nodeHtml += ' <span title="Deceased ' + escHtml(step.deceased) + ' \u2014 cannot make an introduction" style="color:#8b949e;font-size:0.8em;margin-left:3px;">\u271d</span>';
+          }
+          if (i > 0 && i < p.path.length - 1) {
+            // a go-between can be the wrong person of the same name (or just
+            // someone the user won't go through): let them route around it
+            const xi = 'x' + Math.random().toString(36).slice(2);
+            nodeHtml += ' <a href="#" id="' + xi + '" title="Not the right ' + escHtml(step.label)
+                      + '? Find paths that avoid them" style="font-size:0.72rem; color:#8b949e; margin-left:3px; text-decoration:none;">not this one?</a>';
+            (function(n, id){
+              setTimeout(function(){
+                const el = document.getElementById(id);
+                if (el) el.onclick = function(e){ e.preventDefault(); excludeNode(n); };
+              }, 0);
+            })(step.node, xi);
           }
           html += '<span class="step-node">' + nodeHtml + '</span>';
         });
