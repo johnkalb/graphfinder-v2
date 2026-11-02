@@ -22,7 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
 from relation_categories import categorize
 from link_scoring import score_pair
 from nicknames import formal_forms
-from disambiguation import FEC_PLACEHOLDER, Splitter, fec_recipient, is_junk_name
+from disambiguation import (FEC_PLACEHOLDER, Splitter, UnionSplitter, UNION_ELITE_SOURCES, UNION_SKIP_RELATIONS,
+                            fec_recipient, first_last, is_junk_name)
 
 
 # --- name canonicalization (2026-09-10) -----------------------------------
@@ -125,14 +126,43 @@ import psycopg2
 # existing idx_relationships_source_type/idx_relationships_target_type
 # indexes (confirmed via EXPLAIN; no SQLite-style INDEXED BY hint needed or
 # supported).
+#
+# 2026-11-01: the conflation check below was dropping real board seats. A name
+# only had to be typed PERSON once by any source -- one CourtListener
+# disclosure row made "Ford Foundation" a person, one SEC Form 4 row did the
+# same to "Lilly Endowment Inc", GDELT's NER did it to "Oxfam America" -- or
+# look like a name ("Humanity United", "Equality Now", "Human Rights Watch"),
+# and every position edge to it vanished. Measured on the DB that day: 475,689
+# position rows dropped, 106,819 of them real seats (e.g. Pamela Omidyar on
+# Humanity United's board, 43 Equality Now directors). Now:
+#   * GDELT doesn't count toward `persons` (24M of its 27M names came only
+#     from news NER; looks_like_person() still covers real names);
+#   * a name that files an IRS 990 is an organization, whatever else says so;
+#   * a position row from a 990 is never conflation -- only organizations file
+#     990s, so its target is the filer.
 conn = psycopg2.connect(DATABASE_URL)
 c = conn.cursor()
 persons = set()
-c.execute("SELECT DISTINCT source_name FROM relationships WHERE source_type='PERSON'")
+c.execute("SELECT DISTINCT source_name FROM relationships WHERE source_type='PERSON' AND source_data NOT LIKE 'GDELT%'")
 persons |= {r[0].lower() for r in c.fetchall() if r[0]}
-c.execute("SELECT DISTINCT target_name FROM relationships WHERE target_type='PERSON'")
+c.execute("SELECT DISTINCT target_name FROM relationships WHERE target_type='PERSON' AND source_data NOT LIKE 'GDELT%'")
 persons |= {r[0].lower() for r in c.fetchall() if r[0]}
 print(f"Person names: {len(persons)}")
+_ORG_SUFFIX = re.compile(r"[,.]?\s+(inc|incorporated|corp|co|ltd|llc)\.?$")
+
+
+def org_key(name):
+    """'HUMAN RIGHTS WATCH INC' and 'Human Rights Watch' -> one key."""
+    return _ORG_SUFFIX.sub("", name.strip().lower())
+
+
+c.execute("SELECT DISTINCT target_name FROM relationships WHERE source_data LIKE 'IRS_990%'")
+filers = {org_key(r[0]) for r in c.fetchall() if r[0]}
+print(f"990 filer names (always organizations): {len(filers)}")
+
+
+def conflated_person(name_lower, name):
+    return (name_lower in persons or looks_like_person(name)) and org_key(name_lower) not in filers
 
 # --- common-name splitting (2026-10-02, see webapp/disambiguation.py) ---
 # Pre-pass over FEC donations and patent INVENTOR_AT rows to find names whose
@@ -176,9 +206,14 @@ pre = conn.cursor(name="split_prepass_fec")
 pre.itersize = 100_000
 pre.execute("SELECT source_name, evidence FROM relationships "
             "WHERE source_data IN ('FEC', 'FEC_INDIV') AND relation_type = 'DONATION'")
+fec_regions_db = defaultdict(set)   # first+last -> donor ZIP3s, all cycles (union-officer rule below)
+_ZIP_RE = re.compile(r'"zip":\s*"(\d{3})')
 for s_, ev_ in pre:
     if s_:
         splitter.observe_fec(canon_key(s_), ev_)
+        zm = _ZIP_RE.search(ev_ or "")
+        if zm and zm.group(1) != "000":
+            fec_regions_db[first_last(s_)].add(zm.group(1))
 pre.close()
 pre = conn.cursor(name="split_prepass_patents")
 pre.itersize = 100_000
@@ -203,6 +238,47 @@ print(f"Bulk FEC treasurers (>{MAX_TREASURER_COMMITTEES} committees) whose treas
 print(f"Ambiguous names to split: {len(splitter.fec_ambiguous)} FEC donors, "
       f"{len(splitter.inv_ambiguous)} inventors ({len(exempt)} verified exempt)")
 split_base = {}   # split node key -> the name key it was split from
+
+# --- union officers vs. elite namesakes (2026-11-01, see disambiguation.UnionSplitter) ---
+# Region table: first+last -> how many FEC donor ZIP3 regions use the name --
+# the larger of the 2026 bulk donor file (1.46M names; ~/fec/fec_name_regions.py
+# on the optiplex, refreshed weekly with the midterm stats) and the DB's own
+# multi-cycle FEC donations (the 2026 file alone saw one Michael Grunwald; the
+# DB has three: CA, MN, WA). With neither the rule is off -- nothing is split.
+NAME_REGIONS = os.environ.get("FEC_NAME_REGIONS", os.path.expanduser("~/fec/fec_name_regions.json.gz"))
+name_regions = {}
+if os.path.exists(NAME_REGIONS):
+    with gzip.open(NAME_REGIONS, "rt", encoding="utf-8") as f:
+        name_regions = json.load(f)["fl"]
+for k_, z_ in fec_regions_db.items():
+    if k_ and len(z_) > name_regions.get(k_, 0):
+        name_regions[k_] = len(z_)
+del fec_regions_db
+union_split = UnionSplitter(name_regions)
+if name_regions:
+    pre = conn.cursor(name="union_prepass_lm2")
+    pre.itersize = 100_000
+    pre.execute("SELECT source_name, target_name, evidence FROM relationships "
+                "WHERE source_data = 'OLMS_LM2' AND source_type = 'PERSON'")
+    for s_, t_, ev_ in pre:
+        if s_ and t_:
+            union_split.observe_lm2(canon_key(s_), s_, t_, ev_)
+    pre.close()
+    pre = conn.cursor(name="union_prepass_elite")
+    pre.itersize = 100_000
+    pre.execute("SELECT source_name, target_name, source_data FROM relationships "
+                "WHERE source_type = 'PERSON' AND source_data = ANY(%s) AND relation_type <> ALL(%s)",
+                (list(UNION_ELITE_SOURCES), list(UNION_SKIP_RELATIONS)))
+    for s_, t_, sd_ in pre:
+        if s_:
+            k_ = canon_key(s_)
+            if union_split.has_union_roles(k_):
+                union_split.observe_other(k_, t_, sd_)
+    pre.close()
+    union_split.finalize()
+else:
+    print(f"WARNING: {NAME_REGIONS} missing -- union-officer namesake split is off")
+print(f"Union-officer names split from elite namesakes: {len(union_split.split_names):,}")
 
 # --- Alumni by class year (user decision 2026-10-08) ---
 # Two people who went to the same school are linked at full EDUCATION
@@ -292,9 +368,9 @@ for s, t, r, src, ev in _stream(c):
         n_fec_named += not t.startswith(FEC_PLACEHOLDER)
     sl, tl = s.lower(), t.lower()
     # conflation: position-type edge between two people -> drop
-    if r in POS_RELS:
-        s_person = sl in persons or looks_like_person(s)
-        t_person = tl in persons or looks_like_person(t)
+    if r in POS_RELS and not (src or "").startswith("IRS_990"):
+        s_person = conflated_person(sl, s)
+        t_person = conflated_person(tl, t)
         if s_person and t_person:
             n_drop += 1
             continue
@@ -318,6 +394,10 @@ for s, t, r, src, ev in _stream(c):
         if mt[0] != tk:
             split_base[mt[0]] = tk
         (sk, s), (tk, t) = ms, mt
+    elif union_split.wants(sk, src, t):
+        m = union_split.endpoint(sk, s, src, t)
+        split_base[m[0]] = sk
+        sk, s = m
     if sk == tk:                    # different raw strings, same person -> not an edge
         n_selfmerge += 1
         display_votes[sk][s] += 1
@@ -351,6 +431,8 @@ print(f"Donations under ${MIN_DONATION_LINK_USD:,} left out of the graph: {n_sma
 print(f"Self-reported user links kept private (other person not a verified public figure): {n_private_user_links}")
 print(f"Common-name splits: {splitter.split} edge endpoints moved to {len(split_base)} per-employer/company nodes; "
       f"{splitter.dropped} unattributable edges dropped")
+print(f"Union-officer splits: {union_split.moved:,} edge endpoints moved to per-union nodes "
+      f"for {len(union_split.split_names):,} names")
 
 def best_display(key):
     votes = display_votes.get(key)

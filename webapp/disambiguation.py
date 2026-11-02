@@ -19,6 +19,7 @@ to anyone, so they're dropped (they're weak links anyway).
 Used by build_scored_edges.py, and also copied to optiplex with it.
 """
 import json
+import unicodedata
 import re
 
 MIN_DISTINCT = 4
@@ -153,3 +154,98 @@ def fec_recipient(evidence, committee_names):
     if rid in FEC_CONDUITS:
         return None
     return committee_names.get(rid) or f"{FEC_PLACEHOLDER} {rid}"
+
+
+# --- Union officers vs. elite namesakes (2026-11-01) -----------------------
+# "Michael Grunwald" was one node: an Overbrook Foundation trustee, a
+# Washington Post journalist, an AFGE Local 2040 vice president ($599/yr) and
+# an IBEW international rep -- so paths ran from a foundation board straight
+# into the unions. Union officer filings (OLMS LM-2, ~488K rows, mostly
+# locals) are the likeliest source of such merges. For a name that
+#   * holds LM-2 union roles, AND
+#   * also has ELITE ties (corporate insider, LittleSis, Wikidata, law firm,
+#     judge, investment adviser) to non-union organizations, AND
+#   * is shared by 2+ different people (2+ FEC donor regions, 2026 donor file),
+# the union roles and union-related organizations (locals, union funds,
+# apprenticeship trusts...) move to a per-union node "Name (Union)". Known
+# union leaders -- a national union role AND a LittleSis/Wikidata record of a
+# union role -- stay merged. Measured on the DB 2026-11-01: 14,903 names split, ~76%
+# estimated correct (rare-name baseline); the broader rule (any non-union
+# board) was only ~23% correct, because local officers really do sit on food
+# bank, Boys & Girls Club and chamber boards.
+UNION_RE = re.compile(
+    r"\b(local|union|afl[- ]?cio|apprentic|joint (board|council)|health (and|&) welfare|pension|"
+    r"annuity|benefit (fund|trust|plan)|trust fund|training (fund|trust|center)|workers|brotherhood|"
+    r"teamsters|laborers|steelworkers|machinists|carpenters|electricians|plumbers|pipefitters|"
+    r"ironworkers|iron workers|seiu|afscme|ibew|uaw|ufcw|liuna|iatse|nurses association|"
+    r"education association|federation of teachers|ind|teachers|federation of|guild|players association|"
+    r"craftsmen|employees|building service|32 ?b-?j|wkrs|labor|letter carriers|firefighters|fire fighters|"
+    r"police|nurses|sheet metal|electrical|musicians|actors|operating engineers|painters|bricklayers|"
+    r"roofers|boilermakers|insulators|glaziers|elevator|sprinkler|stagehands|transit|transport|aft|nea|"
+    r"cwa|unite here|seafarers|longshore|pilots|flight attendants|carriers|postal|retirees|scholarship)\b", re.I)
+UNION_ELITE_SOURCES = ("LITTLESIS", "SEC_FORM_345", "SEC_FORM_4", "WIKIDATA", "WIKIDATA_MEDIA",
+                       "WIKIDATA_INFLUENCERS", "AMLAW_ROSTER", "CL_JUDGES", "SEC_ADV", "SEC_ADV_OWNERS")
+UNION_KNOWN_SOURCES = {"LITTLESIS", "WIKIDATA", "WIKIDATA_MEDIA", "WIKIDATA_INFLUENCERS"}
+UNION_SKIP_RELATIONS = ("MENTIONED_WITH", "DONATION", "TRANSACTION", "LOBBYING", "PAID_BY")
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "md", "phd", "esq", "dr", "mr", "mrs", "ms"}
+_NATIONAL = ("NHQ", "NAT", "INTL")
+
+
+def first_last(name):
+    """'Michael R. Grunwald Jr' -> 'michael grunwald' (the FEC region-table key)."""
+    s = re.sub(r"[^a-z ]", " ", unicodedata.normalize("NFKD", (name or "").lower()))
+    t = [w for w in s.split() if w not in _NAME_SUFFIXES]
+    return f"{t[0]} {t[-1]}" if len(t) >= 2 else ""
+
+
+class UnionSplitter:
+    """Two phases, like Splitter: observe_* in a pre-pass, finalize(), then
+    endpoint() in the main loop for each row of a split name."""
+
+    def __init__(self, name_regions):
+        self.name_regions = name_regions or {}    # first+last -> FEC donor ZIP3 regions
+        self._unions = {}                         # key -> Counter(union -> rows)
+        self._national = set()
+        self._elite, self._known = set(), set()
+        self._display = {}
+        self.split_names = set()
+        self.primary = {}
+        self.moved = 0
+
+    def observe_lm2(self, key, display, union, evidence):
+        from collections import Counter
+        self._unions.setdefault(key, Counter())[union] += 1
+        self._display.setdefault(key, display)
+        if (_evidence(evidence).get("designation") or "").strip().startswith(_NATIONAL):
+            self._national.add(key)
+
+    def has_union_roles(self, key):
+        return key in self._unions
+
+    def observe_other(self, key, target, source):
+        """An elite-source row of a union-filing name (call only for those keys)."""
+        # a union leader is one whose LittleSis/Wikidata record is itself a union
+        # role -- Michael Grunwald's Wikidata record is the Post journalist's
+        if source in UNION_KNOWN_SOURCES and target and UNION_RE.search(target):
+            self._known.add(key)
+        if (target and not UNION_RE.search(target) and not re.search(r"\d{5,}|\(\d{4} (film|work)\)", target)
+                and target.lower() != self._display.get(key, "").lower()):
+            self._elite.add(key)
+
+    def finalize(self):
+        for key in self._elite:
+            if key in self._national and key in self._known:
+                continue                           # a known union leader: one person
+            if self.name_regions.get(first_last(self._display.get(key, key)), 0) >= 2:
+                self.split_names.add(key)
+                self.primary[key] = self._unions[key].most_common(1)[0][0]
+        self._unions = self._elite = self._known = self._national = None
+
+    def wants(self, key, source, target):
+        return key in self.split_names and (source == "OLMS_LM2" or bool(UNION_RE.search(target or "")))
+
+    def endpoint(self, key, display, source, target):
+        """(key, display) of the per-union node for this row."""
+        union = target if source == "OLMS_LM2" else self.primary[key]
+        self.moved += 1
+        return f"{key} ({org_norm(union)})", f"{display} ({_display_org(union)})"
