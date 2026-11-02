@@ -103,3 +103,57 @@ def test_fec_recipient_names_committees_and_drops_conduits():
     assert fec_recipient(ev("C00401224"), names) is None      # ActBlue: real recipient unknown
     assert fec_recipient(ev("C00694323"), names) is None      # WinRed
     assert fec_recipient(ev(""), names) is None
+
+
+# --- union officers vs. elite namesakes ---
+def _union(regions=None):
+    from disambiguation import UnionSplitter
+    us = UnionSplitter(regions if regions is not None else {"michael grunwald": 3, "rare person": 1})
+    lm2 = lambda d: json.dumps({"title": "VICE PRESIDENT", "designation": d})
+    us.observe_lm2("michael grunwald", "Michael Grunwald", "GOVERNMENT EMPLOYEES AFGE AFL-CIO", lm2("LU 2040"))
+    us.observe_lm2("michael grunwald", "Michael Grunwald", "GOVERNMENT EMPLOYEES AFGE AFL-CIO", lm2("LU 2040"))
+    us.observe_lm2("michael grunwald", "Michael Grunwald", "ELECTRICAL WORKERS IBEW AFL-CIO", lm2("NHQ"))
+    for k, d in (("rare person", "Rare Person"), ("jane local", "Jane Local"), ("pat leader", "Pat Leader")):
+        us.observe_lm2(k, d, "TEAMSTERS", lm2("NHQ" if k == "pat leader" else "LU 5"))
+    assert us.has_union_roles("michael grunwald") and not us.has_union_roles("someone else")
+    us.observe_other("michael grunwald", "The Washington Post", "WIKIDATA_MEDIA")
+    us.observe_other("rare person", "Acme Corp", "SEC_FORM_345")               # elite, but a one-region name
+    us.observe_other("jane local", "TEAMSTERS LOCAL 5 PENSION FUND", "LITTLESIS")  # union-related only
+    us.observe_other("pat leader", "Democratic Party", "LITTLESIS")              # elite tie...
+    us.observe_other("pat leader", "International Brotherhood of Teamsters", "LITTLESIS")  # ...but a known leader
+    return us
+
+
+def test_union_split_targets_shared_names_with_elite_ties():
+    us = _union({"michael grunwald": 3, "rare person": 1, "jane local": 9, "pat leader": 9})
+    us.finalize()
+    assert us.split_names == {"michael grunwald"}     # rare name, union-only ties and known leader all stay
+    assert us.primary["michael grunwald"] == "GOVERNMENT EMPLOYEES AFGE AFL-CIO"
+
+
+def test_union_split_moves_union_rows_only():
+    us = _union({"michael grunwald": 3})
+    us.finalize()
+    assert us.wants("michael grunwald", "OLMS_LM2", "ELECTRICAL WORKERS IBEW AFL-CIO")
+    assert us.wants("michael grunwald", "IRS_990", "IBEW LOCAL 76 HEALTH & WELFARE TRUST")
+    assert not us.wants("michael grunwald", "IRS_990", "Overbrook Foundation")
+    assert not us.wants("michael grunwald", "WIKIDATA_MEDIA", "The Washington Post")
+    assert not us.wants("someone else", "OLMS_LM2", "TEAMSTERS")
+    # LM-2 rows land on their own union; other union-related rows on the main one
+    assert us.endpoint("michael grunwald", "Michael Grunwald", "OLMS_LM2", "ELECTRICAL WORKERS IBEW AFL-CIO") == \
+        ("michael grunwald (electrical workers ibew afl cio)", "Michael Grunwald (Electrical Workers Ibew Afl-Cio)")
+    assert us.endpoint("michael grunwald", "Michael Grunwald", "IRS_990", "IBEW LOCAL 76 TRUST")[1] == \
+        "Michael Grunwald (Government Employees Afge Afl-Cio)"
+    assert us.moved == 2
+
+
+def test_union_split_off_without_region_table():
+    us = _union({})
+    us.finalize()
+    assert us.split_names == set()
+
+
+def test_first_last():
+    from disambiguation import first_last
+    assert first_last("Michael R. Grunwald Jr") == "michael grunwald"
+    assert first_last("MADONNA") == ""
