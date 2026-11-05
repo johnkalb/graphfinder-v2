@@ -168,8 +168,8 @@ def fec_recipient(evidence, committee_names):
 #   * is shared by 2+ different people (2+ FEC donor regions, 2026 donor file),
 # the union roles and union-related organizations (locals, union funds,
 # apprenticeship trusts...) move to a per-union node "Name (Union)". Known
-# union leaders -- a national union role AND a LittleSis/Wikidata record of a
-# union role -- stay merged. Measured on the DB 2026-11-01: 14,903 names split, ~76%
+# union figures -- a LittleSis/Wikidata record of a union role -- stay merged.
+# Measured on the DB 2026-11-01: 14,903 names split, ~76%
 # estimated correct (rare-name baseline); the broader rule (any non-union
 # board) was only ~23% correct, because local officers really do sit on food
 # bank, Boys & Girls Club and chamber boards.
@@ -234,8 +234,9 @@ class UnionSplitter:
 
     def finalize(self):
         for key in self._elite:
-            if key in self._national and key in self._known:
-                continue                           # a known union leader: one person
+            if key in self._known:
+                continue   # LittleSis/Wikidata record a union role: a documented union figure, one person
+                           # (2026-11-05: requiring a NATIONAL role too split Sen. Laphonza Butler, SEIU Local 2015)
             if self.name_regions.get(first_last(self._display.get(key, key)), 0) >= 2:
                 self.split_names.add(key)
                 self.primary[key] = self._unions[key].most_common(1)[0][0]
