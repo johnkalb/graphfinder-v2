@@ -121,11 +121,15 @@ def _union(regions=None):
     us.observe_other("jane local", "TEAMSTERS LOCAL 5 PENSION FUND", "LITTLESIS")  # union-related only
     us.observe_other("pat leader", "Democratic Party", "LITTLESIS")              # elite tie...
     us.observe_other("pat leader", "International Brotherhood of Teamsters", "LITTLESIS")  # ...but a known leader
+    # a LOCAL union leader documented in LittleSis (Laphonza Butler, SEIU Local 2015) stays one person too
+    us.observe_lm2("laphonza butler", "Laphonza Butler", "SERVICE EMPLOYEES", lm2("LU 2015"))
+    us.observe_other("laphonza butler", "United States Senate", "LITTLESIS")
+    us.observe_other("laphonza butler", "Service Employees International Union Local 2015", "LITTLESIS")
     return us
 
 
 def test_union_split_targets_shared_names_with_elite_ties():
-    us = _union({"michael grunwald": 3, "rare person": 1, "jane local": 9, "pat leader": 9})
+    us = _union({"michael grunwald": 3, "rare person": 1, "jane local": 9, "pat leader": 9, "laphonza butler": 4})
     us.finalize()
     assert us.split_names == {"michael grunwald"}     # rare name, union-only ties and known leader all stay
     assert us.primary["michael grunwald"] == "GOVERNMENT EMPLOYEES AFGE AFL-CIO"
