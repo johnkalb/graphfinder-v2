@@ -73,6 +73,15 @@ def test_duplicate_request_not_stored_twice(client, tester_data_dir):
     assert len(_access_rows(tester_data_dir, "twice@example.org")) == 1
 
 
+def test_sixdegrees_request_does_not_block_hooconnex_request(client, tester_data_dir):
+    with patch("pathfinder._notify_operator_of_new_submission"):
+        client.post("/request-access/submit", json={"email": "both@example.org"})
+        for _ in range(2):
+            client.post("/request-access/submit", json={"email": "both@example.org"}, headers={"host": "hooconnex.com"})
+    sites = sorted(json.loads(r["metadata"])["site"] for r in _access_rows(tester_data_dir, "both@example.org"))
+    assert sites == ["hooconnex.com", "sixdegrees.net"]
+
+
 def test_honeypot_stores_nothing(client, tester_data_dir):
     r = client.post("/request-access/submit", json={"email": "bot@example.org", "website": "http://spam"})
     assert r.status_code == 200 and r.json()["success"] is True

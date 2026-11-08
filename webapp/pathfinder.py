@@ -4749,9 +4749,18 @@ async def request_access_submit(req: AccessRequest, request: Request):
     try:
         conn = db.connect(_test_department_db_path())
         c = conn.cursor()
-        dup = c.execute("SELECT id FROM service_items WHERE item_type = 'access_request' AND submitter_email = ? "
-                        "AND status IN ('new', 'needs_review', 'approved')", (email,)).fetchone()
-        if dup:
+        # Duplicates are per site: approval for sixdegrees.net doesn't grant
+        # hooconnex.com (separate Access policy), so it mustn't swallow a
+        # hooconnex request (2026-11-08). Rows without metadata.site predate
+        # hooconnex and are sixdegrees.net.
+        prior = c.execute("SELECT metadata FROM service_items WHERE item_type = 'access_request' AND submitter_email = ? "
+                          "AND status IN ('new', 'needs_review', 'approved')", (email,)).fetchall()
+        def _row_site(meta):
+            try:
+                return (json.loads(meta or "{}") or {}).get("site") or "sixdegrees.net"
+            except (ValueError, TypeError, AttributeError):
+                return "sixdegrees.net"
+        if any(_row_site(r[0]) == site for r in prior):
             conn.close()
             return accepted
         c.execute("""
