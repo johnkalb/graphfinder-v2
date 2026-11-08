@@ -3651,13 +3651,27 @@ def _turnstile_ok(token: Optional[str], ip: Optional[str]) -> bool:
 
 
 def _access_request_rate_limited(ip: str) -> bool:
+    """True if this IP already has the hourly limit of counted submissions.
+    Only checks; _record_access_request counts a submission (2026-11-08)."""
     import time
     now = time.time()
     hits = [t for t in _access_request_hits.get(ip, []) if now - t < 3600]
-    _access_request_hits[ip] = hits + [now]
+    if hits:
+        _access_request_hits[ip] = hits
+    else:
+        _access_request_hits.pop(ip, None)
+    return len(hits) >= _ACCESS_REQUEST_LIMIT_PER_HOUR
+
+
+def _record_access_request(ip: str):
+    """Count a submission against the IP's hourly limit. Called only after
+    Turnstile passes, so failed verifications, bad input and already-limited
+    retries don't lock a real person out (2026-11-08: a Turnstile hostname
+    misconfiguration locked the owner out for an hour)."""
+    import time
     if len(_access_request_hits) > 10000:  # bound memory; worst case resets everyone's window
         _access_request_hits.clear()
-    return len(hits) >= _ACCESS_REQUEST_LIMIT_PER_HOUR
+    _access_request_hits.setdefault(ip, []).append(time.time())
 
 
 class AccessRequest(BaseModel):
@@ -4731,6 +4745,7 @@ async def request_access_submit(req: AccessRequest, request: Request):
     loop = asyncio.get_running_loop()
     if not await loop.run_in_executor(None, _turnstile_ok, req.turnstile_token, ip):
         return JSONResponse(status_code=400, content={"success": False, "error": "Verification failed. Please try again."})
+    _record_access_request(ip)
     try:
         conn = db.connect(_test_department_db_path())
         c = conn.cursor()

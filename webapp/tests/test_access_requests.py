@@ -93,6 +93,28 @@ def test_rate_limited_per_ip(client):
     assert codes[:-1] == [200] * limit and codes[-1] == 429
 
 
+def test_failed_turnstile_does_not_use_up_rate_limit(client, tester_data_dir, monkeypatch):
+    monkeypatch.setenv("TURNSTILE_SECRET_KEY", "test-secret")
+    limit = pf._ACCESS_REQUEST_LIMIT_PER_HOUR
+    with patch("pathfinder._turnstile_ok", return_value=False):
+        assert all(client.post("/request-access/submit", json={"email": "locked@example.org"}).status_code == 400
+                   for _ in range(limit + 2))
+    with patch("pathfinder._turnstile_ok", return_value=True), \
+            patch("pathfinder._notify_operator_of_new_submission"):
+        assert client.post("/request-access/submit", json={"email": "locked@example.org"}).status_code == 200
+    assert len(_access_rows(tester_data_dir, "locked@example.org")) == 1
+
+
+def test_rate_limited_retries_do_not_extend_the_window(client):
+    limit = pf._ACCESS_REQUEST_LIMIT_PER_HOUR
+    with patch("pathfinder._notify_operator_of_new_submission"):
+        for i in range(limit):
+            client.post("/request-access/submit", json={"email": f"ext{i}@example.org"})
+        for _ in range(3):
+            assert client.post("/request-access/submit", json={"email": "ext-more@example.org"}).status_code == 429
+    assert sum(len(v) for v in pf._access_request_hits.values()) == limit
+
+
 def test_turnstile_required_when_configured(client, monkeypatch):
     monkeypatch.setenv("TURNSTILE_SECRET_KEY", "test-secret")
     assert client.post("/request-access/submit", json={"email": "noturnstile@example.org"}).status_code == 400
