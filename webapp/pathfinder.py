@@ -4757,10 +4757,11 @@ async def request_access_submit(req: AccessRequest, request: Request):
                           "AND status IN ('new', 'needs_review', 'approved')", (email,)).fetchall()
         def _row_site(meta):
             try:
-                return (json.loads(meta or "{}") or {}).get("site") or "sixdegrees.net"
+                meta = meta if isinstance(meta, dict) else json.loads(meta or "{}")
+                return (meta or {}).get("site") or "sixdegrees.net"
             except (ValueError, TypeError, AttributeError):
                 return "sixdegrees.net"
-        if any(_row_site(r[0]) == site for r in prior):
+        if any(_row_site(r["metadata"]) == site for r in prior):
             conn.close()
             return accepted
         c.execute("""
