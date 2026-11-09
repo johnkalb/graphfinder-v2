@@ -269,3 +269,59 @@ def test_well_known_redirects_to_gotosocial(client, path):
     assert r.status_code == 301
     assert r.headers["location"] == (f"https://social.sixdegrees.net{path}"
                                      "?resource=acct%3Acrawlie%40sixdegrees.net")
+
+
+# --- seat cap / waiting list (2026-11-09) ------------------------------------
+
+def test_full_site_puts_request_on_waiting_list(client, tester_data_dir):
+    with patch("pathfinder._cf_access_user_count", return_value=pf._ACCESS_SEAT_CAP), \
+            patch("pathfinder._notify_telegram") as tg, patch("pathfinder._notify_operator_of_new_submission"):
+        r = client.post("/request-access/submit", json={"email": "late@example.org"}, headers={"host": "hooconnex.com"})
+    assert r.status_code == 200 and r.json()["success"] is True
+    assert r.json()["message"].startswith("Sorry, hooconnex.com is full for now.")
+    row = _access_rows(tester_data_dir, "late@example.org")[0]
+    assert row["status"] == "new" and row["subject"].startswith("Waiting list: ")
+    assert json.loads(row["metadata"])["waitlist"] is True
+    assert "WAITING-LIST" in tg.call_args[0][0]
+
+
+def test_below_cap_is_a_normal_request(client, tester_data_dir):
+    with patch("pathfinder._cf_access_user_count", return_value=pf._ACCESS_SEAT_CAP - 1), \
+            patch("pathfinder._notify_operator_of_new_submission"):
+        r = client.post("/request-access/submit", json={"email": "early@example.org"})
+    assert r.json()["message"].startswith("Thanks!")
+    row = _access_rows(tester_data_dir, "early@example.org")[0]
+    assert row["subject"].startswith("Access request: ") and json.loads(row["metadata"])["waitlist"] is False
+
+
+def test_unknown_count_treated_as_open(client, tester_data_dir):
+    with patch("pathfinder._cf_access_user_count", return_value=None), \
+            patch("pathfinder._notify_operator_of_new_submission"):
+        r = client.post("/request-access/submit", json={"email": "unknown@example.org"})
+    assert r.json()["message"].startswith("Thanks!")
+
+
+def test_user_count_unions_all_allow_policies(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "t")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "a")
+    pf._access_user_count_cache.update(at=0.0, count=None)
+    pages = {
+        1: [{"decision": "allow", "include": [{"email": {"email": "A@x.org"}}, {"email": {"email": "b@x.org"}},
+                                              {"email_domain": {"domain": "corp.org"}}]},
+            {"decision": "bypass", "include": [{"everyone": {}}]}],
+        2: [{"decision": "allow", "include": [{"email": {"email": "a@x.org"}}, {"email": {"email": "c@x.org"}}]},
+            {"decision": "deny", "include": [{"email": {"email": "blocked@x.org"}}]}],
+    }
+
+    def fake_get(url, params=None, **kw):
+        m = MagicMock()
+        m.json.return_value = {"success": True, "result": pages[params["page"]],
+                               "result_info": {"total_pages": 2}}
+        return m
+    with patch("requests.get", side_effect=fake_get):
+        assert pf._cf_access_user_count() == 3
+    pf._access_user_count_cache.update(at=0.0, count=None)
+
+
+def test_request_page_mentions_limited_spots(client):
+    assert "small group of early users" in client.get("/request-access").text

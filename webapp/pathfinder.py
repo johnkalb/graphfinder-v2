@@ -3618,6 +3618,55 @@ def _cf_access_allow_email(email: str, policy_id: Optional[str] = None) -> tuple
         return False, str(e)
 
 
+# Cloudflare's free Zero Trust plan has 50 seats, shared by every Access app
+# on the account. Once this many people are on the allow-lists, new requests
+# go on a waiting list with a "sorry, we're full" reply instead (2026-11-09).
+# The count is every email on every "allow" policy in the account (both sites,
+# plus lists like Kenya_network); it can't see access granted by other rule
+# types (email domains, groups).
+_ACCESS_SEAT_CAP = int(os.environ.get("ACCESS_SEAT_CAP", "45"))
+_access_user_count_cache = {"at": 0.0, "count": None}
+
+
+def _cf_access_user_count() -> Optional[int]:
+    """Unique emails across the account's allow policies, cached 5 minutes.
+    None if Cloudflare can't be read -- callers then treat the site as open."""
+    import time
+    import requests
+    if time.time() - _access_user_count_cache["at"] < 300:
+        return _access_user_count_cache["count"]
+    token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not token or not account:
+        return None
+    emails = set()
+    try:
+        page = 1
+        while True:
+            got = requests.get(f"https://api.cloudflare.com/client/v4/accounts/{account}/access/policies",
+                               params={"page": page, "per_page": 50},
+                               headers={"Authorization": f"Bearer {token}"}, timeout=15).json()
+            if not got.get("success"):
+                logger.warning("access user count: list policies failed: %s", got.get("errors"))
+                return None
+            for policy in got.get("result") or []:
+                if policy.get("decision") != "allow":
+                    continue
+                for rule in policy.get("include") or []:
+                    e = ((rule.get("email") or {}).get("email") or "").strip().lower()
+                    if e:
+                        emails.add(e)
+            info = got.get("result_info") or {}
+            if page >= (info.get("total_pages") or 1):
+                break
+            page += 1
+    except Exception:
+        logger.exception("access user count failed")
+        return None
+    _access_user_count_cache.update(at=time.time(), count=len(emails))
+    return len(emails)
+
+
 def _access_request_site(item) -> str:
     """The site an access request came from (metadata.site, set at submit
     time). Requests from before hooconnex existed have none: sixdegrees.net."""
@@ -3734,7 +3783,7 @@ __TURNSTILE_SCRIPT__
 </style></head>
 <body><main>
   <h1>Request access</h1>
-  <p class="lead">sixdegrees.net maps how public figures are connected, from filings, court records and news. It's in private beta. Tell us who you are and we'll add you.</p>
+  <p class="lead">sixdegrees.net maps how public figures are connected, from filings, court records and news. It's in private beta, open to a small group of early users. Tell us who you are and we'll add you while spots last.</p>
   <form id="f" novalidate>
     <label for="email">Email <span class="hint">(you'll log in with a code sent here)</span></label>
     <input id="email" name="email" type="email" autocomplete="email" required maxlength="254">
@@ -4769,6 +4818,12 @@ async def request_access_submit(req: AccessRequest, request: Request):
     if not await loop.run_in_executor(None, _turnstile_ok, req.turnstile_token, ip):
         return JSONResponse(status_code=400, content={"success": False, "error": "Verification failed. Please try again."})
     _record_access_request(ip)
+    users = await loop.run_in_executor(None, _cf_access_user_count)
+    full = users is not None and users >= _ACCESS_SEAT_CAP
+    if full:
+        accepted = {"success": True, "message": (
+            f"Sorry, {site} is full for now. We're keeping it to a small group while we get started. "
+            "You're on the waiting list, and we'll email you when a spot opens.")}
     try:
         conn = db.connect(_test_department_db_path())
         c = conn.cursor()
@@ -4790,14 +4845,16 @@ async def request_access_submit(req: AccessRequest, request: Request):
         c.execute("""
             INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata)
             VALUES ('access_request', 'new', 'normal', ?, ?, ?, ?)
-        """, (f"Access request: {email}" + (f" ({handle})" if handle else ""), note or "", email,
-              json.dumps({"handle": handle, "source": "request-access page", "site": site})))
+        """, (("Waiting list: " if full else "Access request: ") + email + (f" ({handle})" if handle else ""),
+              note or "", email,
+              json.dumps({"handle": handle, "source": "request-access page", "site": site, "waitlist": full})))
         conn.commit()
         conn.close()
     except Exception:
         logger.exception("access request insert failed")
         return JSONResponse(status_code=500, content={"success": False, "error": "Something went wrong. Please try again later."})
-    summary = f"New {site} access request: {email}" + (f" ({handle})" if handle else "")
+    summary = (f"New {site} {'WAITING-LIST' if full else 'access'} request: {email}" + (f" ({handle})" if handle else "")
+               + (f"\n\n{users} of {_ACCESS_SEAT_CAP} spots used -- told them we're full." if full else ""))
     if note:
         summary += f"\n\n{note[:500]}"
     summary += "\n\nReview: https://sixdegrees.net/admin"
