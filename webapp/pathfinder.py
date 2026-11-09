@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import networkx as nx
 import igraph as ig
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, PlainTextResponse
 from pydantic import BaseModel, Field, ConfigDict
 import base64
 import pysodium
@@ -86,8 +86,31 @@ async def log_requests(request: Request, call_next):
             "path": path,
             "query_params": dict(request.query_params)
         })
-        
+
     return response
+
+
+# Only serve the real site names. Cloudflare Access (the approval gate) only
+# covers sixdegrees.net and hooconnex.com, so the DigitalOcean default address
+# (graphapp-*.ondigitalocean.app) served the whole site -- search, /debug,
+# /meminfo -- to anyone (found 2026-11-06, fixed 2026-11-09). DO's edge
+# refuses a forged Host for this app's custom domains (tested: 403), so
+# checking Host here is enough. /health stays open for platform checks.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "testserver"}
+
+
+def _allowed_hosts() -> set:
+    extra = os.environ.get("APP_ALLOWED_HOSTS", "sixdegrees.net,www.sixdegrees.net")
+    return ({h.strip().lower() for h in extra.split(",") if h.strip()}
+            | _HOOCONNEX_HOSTS | _LOCAL_HOSTS)
+
+
+@app.middleware("http")
+async def only_known_hosts(request: Request, call_next):
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if request.url.path != "/health" and host not in _allowed_hosts():
+        return PlainTextResponse("Not found", status_code=404)
+    return await call_next(request)
 
 try:
     from link_scoring import (CATEGORY_PROB as _CATEGORY_PROB, CATEGORY_DESC as _CATEGORY_DESC,
