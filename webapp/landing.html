@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hooconnex: see how you're connected to anyone</title>
+<meta name="description" content="hooconnex maps __EDGES__ documented connections among __NODES__ people and organizations from public records. Find the chain between any two people, or the best route through the people you know.">
+<meta property="og:title" content="hooconnex: who do you know who knows them?">
+<meta property="og:description" content="__EDGES__ documented connections among __NODES__ people and organizations, built from public records. Try the demo or request access.">
+<meta property="og:url" content="https://hooconnex.com/welcome">
+<meta property="og:type" content="website">
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --border:#30363d; --accent:#58a6ff; --accent-ink:#0d1117; --chip:#21262d; --node:#1f2937; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --muted:#59636e; --border:#d1d9e0; --accent:#0969da; --accent-ink:#fff; --chip:#eaeef2; --node:#eef3fb; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:17px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  a { color:var(--accent); }
+  .wrap { max-width:1000px; margin:0 auto; padding:0 1rem; }
+  header.top { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 0; }
+  .brand { font-weight:700; font-size:1.25rem; letter-spacing:-.01em; color:var(--text); text-decoration:none; }
+  .brand span { color:var(--accent); }
+  nav a { margin-left:1.1rem; color:var(--muted); text-decoration:none; font-size:.95rem; }
+  nav a:hover { color:var(--text); }
+  .hero { padding:3.5rem 0 2.5rem; display:grid; grid-template-columns:1.15fr 1fr; gap:2.5rem; align-items:center; }
+  h1 { font-size:clamp(2rem, 4.5vw, 3rem); line-height:1.1; margin:0 0 1rem; letter-spacing:-.02em; }
+  .lead { font-size:1.12rem; color:var(--muted); margin:0 0 1.6rem; max-width:34rem; }
+  .lead strong { color:var(--text); }
+  .ctas { display:flex; flex-wrap:wrap; gap:.75rem; }
+  .btn { display:inline-block; padding:.75rem 1.3rem; border-radius:8px; font-weight:600; text-decoration:none; border:1px solid var(--border); color:var(--text); background:var(--panel); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .btn:hover { filter:brightness(1.08); }
+  .fine { margin:1rem 0 0; font-size:.9rem; color:var(--muted); }
+  .chain { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:1.4rem 1.4rem 1.2rem; }
+  .chain .cap { font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 .9rem; }
+  .chain ol { list-style:none; margin:0; padding:0; }
+  .chain li.n { background:var(--node); border:1px solid var(--border); border-radius:8px; padding:.55rem .8rem; font-weight:600; }
+  .chain li.n small { display:block; font-weight:400; color:var(--muted); font-size:.82rem; }
+  .chain li.r { margin-left:1.1rem; padding:.35rem 0 .35rem .9rem; border-left:2px solid var(--accent); color:var(--muted); font-size:.85rem; }
+  .chain li.n.you { border-color:var(--accent); }
+  section { padding:2.5rem 0; border-top:1px solid var(--border); }
+  h2 { font-size:1.5rem; margin:0 0 1.2rem; letter-spacing:-.01em; }
+  .grid3 { display:grid; grid-template-columns:repeat(3, 1fr); gap:1rem; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:1.2rem; }
+  .card h3 { margin:0 0 .4rem; font-size:1.05rem; }
+  .card p { margin:0; color:var(--muted); font-size:.95rem; }
+  .card .ic { font-size:1.4rem; display:block; margin-bottom:.4rem; }
+  .sources { display:flex; flex-wrap:wrap; gap:.5rem; margin:0; padding:0; list-style:none; }
+  .sources li { background:var(--chip); border:1px solid var(--border); border-radius:999px; padding:.3rem .8rem; font-size:.9rem; }
+  .who { margin:0; padding-left:1.2rem; color:var(--muted); }
+  .who li { margin:.35rem 0; }
+  .who strong { color:var(--text); }
+  .closing { text-align:center; }
+  .closing p { color:var(--muted); max-width:36rem; margin:0 auto 1.4rem; }
+  .closing .ctas { justify-content:center; }
+  footer { padding:2rem 0 3rem; color:var(--muted); font-size:.85rem; border-top:1px solid var(--border); }
+  @media (max-width:760px) {
+    .hero { grid-template-columns:1fr; padding-top:2rem; gap:2rem; }
+    .grid3 { grid-template-columns:1fr; }
+    nav a.hide-sm { display:none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="/welcome">hoo<span>connex</span></a>
+    <nav>
+      <a class="hide-sm" href="/demo?ref=landing">Demo</a>
+      <a class="hide-sm" href="/request-access?from=landing">Request access</a>
+      <a href="/?signin=1">Sign in</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <div>
+      <h1>Who do you know who knows them?</h1>
+      <p class="lead">hooconnex maps <strong>__EDGES__ documented connections</strong> among <strong>__NODES__ people and organizations</strong>, built from public records. Pick any two people and see the chain between them, or find the best route to someone through the people you already know.</p>
+      <div class="ctas">
+        <a class="btn primary" href="/demo?ref=landing">Try the demo</a>
+        <a class="btn" href="/request-access?from=landing">Request access</a>
+      </div>
+      <p class="fine">Free, by invitation. We're opening it to a small group of early users. Already approved? <a href="/?signin=1">Sign in</a>.</p>
+    </div>
+    <div class="chain" aria-label="Example of a connection chain">
+      <p class="cap">An example route</p>
+      <ol>
+        <li class="n you">You</li>
+        <li class="r">worked together at a law firm</li>
+        <li class="n">Your former colleague<small>now on a hospital board</small></li>
+        <li class="r">serve on the same board</li>
+        <li class="n">A foundation trustee<small>named in its IRS filing</small></li>
+        <li class="r">co-founded a company together</li>
+        <li class="n">The person you want to meet</li>
+      </ol>
+    </div>
+  </div>
+
+  <section>
+    <h2>What you can do</h2>
+    <div class="grid3">
+      <div class="card"><span class="ic" aria-hidden="true">🔎</span><h3>Look up anyone in the record</h3>
+        <p>Search a CEO, judge, senator, donor or nonprofit board member and see their documented ties: boards, schools, investments, campaigns and court cases.</p></div>
+      <div class="card"><span class="ic" aria-hidden="true">🧭</span><h3>Find the path between two people</h3>
+        <p>Enter two names and hooconnex finds the shortest chain of real connections between them. Every link shows the record it came from.</p></div>
+      <div class="card"><span class="ic" aria-hidden="true">📇</span><h3>"How do I reach…?"</h3>
+        <p>Add the people you know. If any of them appear in the public record, hooconnex shows which one is closest to the person you want to meet, and who the next introduction would be. Your contacts stay private to you.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the connections come from</h2>
+    <ul class="sources">
+      <li>Corporate boards and officers</li><li>SEC filings</li><li>Political donations</li><li>Lobbying disclosures</li>
+      <li>Nonprofit filings</li><li>Court records</li><li>Schools and alumni</li><li>News coverage</li><li>Wikidata</li>
+    </ul>
+    <p class="fine">Refreshed every day. A link means two people appear together in a record, not that they know each other well.</p>
+  </section>
+
+  <section>
+    <h2>Who it's for</h2>
+    <ul class="who">
+      <li><strong>Job seekers:</strong> find the warm introduction instead of sending a cold application.</li>
+      <li><strong>Founders and fundraisers:</strong> see which contacts can get you in front of an investor or board.</li>
+      <li><strong>Sales and business development:</strong> turn a cold prospect into a referral.</li>
+      <li><strong>Nonprofits:</strong> find the path to a potential donor or board member.</li>
+      <li><strong>Journalists and the curious:</strong> see how the powerful are connected, with the source for every link.</li>
+    </ul>
+  </section>
+
+  <section class="closing">
+    <h2>See it for yourself</h2>
+    <p>The demo lets anyone trace connections between well-known public figures, with no sign-up. For the full map and "How do I reach…?", request an invitation while spots last.</p>
+    <div class="ctas">
+      <a class="btn primary" href="/demo?ref=landing">Try the demo</a>
+      <a class="btn" href="/request-access?from=landing">Request access</a>
+    </div>
+  </section>
+
+  <footer>hooconnex.com &bull; built from public records &bull; <a href="/?signin=1">Sign in</a></footer>
+</div>
+</body>
+</html>

@@ -3903,14 +3903,51 @@ def _demo_redact_paths(paths, verified):
     return out
 
 
+def _graph_size_words():
+    """("7.5 million", "3.5 million"): connections and nodes in the loaded
+    graph, for public pages. Falls back to the 2026-11 figures before load."""
+    def words(n):
+        return f"{n / 1e6:.1f} million" if n >= 1e6 else f"{n:,}"
+    g = _igraph_graph
+    if g is not None and g.vcount() > 0:
+        return words(g.ecount()), words(g.vcount())
+    return "7.5 million", "3.5 million"
+
+
 @app.get("/demo", response_class=HTMLResponse)
-async def demo_page():
+async def demo_page(request: Request):
     try:
-        return HTMLResponse(Path(__file__).with_name("demo.html").read_text(encoding="utf-8"),
-                            headers={"Cache-Control": "no-cache"})
+        page = Path(__file__).with_name("demo.html").read_text(encoding="utf-8")
+        page = page.replace("3.4 million", _graph_size_words()[1])
+        if _is_hooconnex(request):
+            for old, new in (("<title>sixdegrees.net demo</title>", "<title>hooconnex demo</title>"),
+                             ("sixdegrees traces", "hooconnex traces"),
+                             ("full sixdegrees graph", "full hooconnex graph"),
+                             ("<body><main>", '<body><main><p style="margin:0 0 1rem"><a href="/welcome" '
+                                              'style="color:var(--accent);text-decoration:none">&larr; hooconnex</a></p>')):
+                page = page.replace(old, new)
+        return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
     except Exception:
         logger.exception("demo page failed to load")
         return HTMLResponse("<h1>Demo unavailable</h1>", status_code=500)
+
+
+# Public hooconnex landing page (2026-11-11). Cloudflare: a Bypass app covers
+# hooconnex.com/welcome, and a redirect rule sends logged-out visitors (no
+# CF_Authorization cookie) from hooconnex.com/ to /welcome; "Sign in" links
+# use /?signin=1, which the rule skips.
+@app.get("/welcome", response_class=HTMLResponse)
+async def welcome_page(request: Request):
+    if not _is_hooconnex(request) and not os.environ.get("LANDING_ON_ALL_HOSTS"):
+        return RedirectResponse("/", status_code=302)
+    try:
+        page = Path(__file__).with_name("landing.html").read_text(encoding="utf-8")
+    except Exception:
+        logger.exception("landing page failed to load")
+        return RedirectResponse("/request-access", status_code=302)
+    edges, nodes = _graph_size_words()
+    page = page.replace("__EDGES__", edges).replace("__NODES__", nodes)
+    return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/demo/search")
