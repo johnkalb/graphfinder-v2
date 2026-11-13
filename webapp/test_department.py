@@ -228,6 +228,27 @@ def init_test_department_db(db_path: str) -> None:
         )
         """
     )
+    # Team workspaces (hooconnex Teams, webapp/workspaces.py, 2026-11-13): a
+    # private overlay per organization. Never read by the nightly build.
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS workspaces (
+            id {_PK}, name TEXT NOT NULL, seat_limit INTEGER NOT NULL DEFAULT 10,
+            created_by TEXT, created_at TEXT NOT NULL, deleted_at TEXT)""")
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS workspace_members (
+            id {_PK}, workspace_id INTEGER NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
+            added_by TEXT, added_at TEXT NOT NULL, removed_at TEXT)""")
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS ws_sources (
+            id {_PK}, workspace_id INTEGER NOT NULL, kind TEXT NOT NULL, filename TEXT, uploaded_by TEXT,
+            row_count INTEGER, mapping TEXT, created_at TEXT NOT NULL, deleted_at TEXT)""")
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS ws_entities (
+            id {_PK}, workspace_id INTEGER NOT NULL, source_id INTEGER, known_by TEXT, name TEXT NOT NULL,
+            entity_type TEXT NOT NULL DEFAULT 'PERSON', company TEXT, title TEXT, node TEXT,
+            status TEXT NOT NULL, candidates TEXT, created_at TEXT NOT NULL, deleted_at TEXT)""")
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS ws_audit (
+            id {_PK}, workspace_id INTEGER NOT NULL, email TEXT, action TEXT NOT NULL, detail TEXT,
+            at TEXT NOT NULL)""")
+    cur.execute("CREATE INDEX IF NOT EXISTS ws_members_ws ON workspace_members (workspace_id, email)")
+    cur.execute("CREATE INDEX IF NOT EXISTS ws_entities_ws ON ws_entities (workspace_id, status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS ws_audit_ws ON ws_audit (workspace_id)")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS user_agreements (
