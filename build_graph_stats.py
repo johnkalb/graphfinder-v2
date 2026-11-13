@@ -203,6 +203,64 @@ def law_firm_stats(conn):
             "largest_firm": rows[0][0], "largest_attorneys": rows[0][1]}
 
 
+def investor_stats(conn, nodes, edges, people_mask):
+    """Startup investors named in PR Newswire funding announcements
+    (angel_news_extract.py, source_data PRNEWSWIRE_FUNDING): angels (people
+    investing personally) and firms, the most active of each, the startups
+    with the most named backers, and the best-connected angel in the graph."""
+    cur = conn.cursor()
+    cur.execute("""SELECT count(DISTINCT evidence::jsonb->>'url'), count(DISTINCT target_name),
+                          min(evidence::jsonb->>'month'), max(evidence::jsonb->>'month'),
+                          count(DISTINCT source_name) FILTER (WHERE source_type = 'PERSON'),
+                          count(DISTINCT source_name) FILTER (WHERE source_type = 'ORG')
+                   FROM relationships WHERE source_data = 'PRNEWSWIRE_FUNDING'""")
+    releases, companies, first, last, angels, firms = cur.fetchone()
+    if not releases:
+        return None
+
+    def ranked(sql):
+        cur.execute(sql)
+        return [{"name": n, "count": c, "examples": ex[:3]} for n, c, ex in cur.fetchall()]
+    top_angels = ranked("""SELECT source_name, count(DISTINCT target_name),
+                                  array_agg(DISTINCT target_name)
+                           FROM relationships WHERE source_data = 'PRNEWSWIRE_FUNDING' AND source_type = 'PERSON'
+                           GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 40""")
+    top_firms = ranked("""SELECT source_name, count(DISTINCT target_name), array_agg(DISTINCT target_name)
+                          FROM relationships WHERE source_data = 'PRNEWSWIRE_FUNDING' AND source_type = 'ORG'
+                          GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 25""")
+    top_leads = ranked("""SELECT source_name, count(DISTINCT target_name), array_agg(DISTINCT target_name)
+                          FROM relationships WHERE source_data = 'PRNEWSWIRE_FUNDING' AND source_type = 'ORG'
+                            AND evidence::jsonb->>'role' = 'lead'
+                          GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 25""")
+    most_backed = ranked("""SELECT target_name, count(DISTINCT source_name), array_agg(DISTINCT source_name)
+                            FROM relationships WHERE source_data = 'PRNEWSWIRE_FUNDING'
+                            GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10""")
+    out = {"releases": releases, "companies": companies, "angels": angels, "firms": firms,
+           "first_month": first, "last_month": last, "top_angels": top_angels, "top_firms": top_firms,
+           "top_leads": top_leads, "most_backed": most_backed}
+
+    # best-connected angels among the graph's people, by the site's PageRank
+    cur.execute("SELECT DISTINCT source_name FROM relationships "
+                "WHERE source_data = 'PRNEWSWIRE_FUNDING' AND source_type = 'PERSON'")
+    exact = {n: i for i, n in enumerate(nodes)}
+    idx = [exact[n] for (n,) in cur.fetchall() if n in exact and people_mask[exact[n]]]
+    if idx:
+        w = {}
+        for e in edges:
+            a, b = (e[0], e[1]) if e[0] <= e[1] else (e[1], e[0])
+            w[(a, b)] = float(e[2])
+        G = ig.Graph(n=len(nodes), edges=list(w), directed=False)
+        pr = np.array(G.pagerank(weights=list(w.values()), damping=0.85))
+        deg = np.array(G.degree())
+        people_pr = np.sort(pr[np.array(people_mask, dtype=bool)])[::-1]
+        rank = lambda i: int(np.searchsorted(-people_pr, -pr[i], side="left")) + 1   # noqa: E731
+        out["in_graph"] = len(idx)
+        out["people_ranked"] = len(people_pr)
+        out["top_pagerank"] = [{"name": nodes[i], "degree": int(deg[i]), "rank": rank(i)}
+                               for i in sorted(idx, key=lambda i: -pr[i])[:25]]
+    return out
+
+
 def inventor_stats(conn):
     """Patent co-inventor network (source_data=PATENT_COINVENTOR): inventors,
     co-inventor ties, the largest connected co-inventor group, the most
@@ -480,6 +538,11 @@ def main():
             log(f"advisers: {json.dumps(stats['advisers'])[:400]}")
         except Exception as e:
             log(f"adviser stats skipped: {e}")
+        try:
+            stats["investors"] = investor_stats(conn, nodes, g["edges"], people_mask) or {}
+            log(f"investors: {json.dumps(stats['investors'])[:400]}")
+        except Exception as e:
+            log(f"investor stats skipped: {e}")
         conn.close()
 
     try:
