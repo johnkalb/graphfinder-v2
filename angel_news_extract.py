@@ -358,7 +358,16 @@ def validate(reply, body, title=""):
     if not company or _key(company) not in _key(full):
         return None, [], {"company_not_in_text": 1}
     kept, seen = [], set()
-    for inv in reply.get("investors") or []:
+    investors = reply.get("investors") or []
+    if isinstance(investors, str):        # the tool has no strict schema: now and then a JSON string
+        try:
+            investors = json.loads(investors)
+        except ValueError:
+            investors = []
+    for inv in investors if isinstance(investors, list) else []:
+        if not isinstance(inv, dict):      # or a bare name instead of an object (2026-11-13 run)
+            counts["malformed"] = counts.get("malformed", 0) + 1
+            continue
         name = (inv.get("name") or "").strip()
         kind = inv.get("kind")
         if kind == "person":
