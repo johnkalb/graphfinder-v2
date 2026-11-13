@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team workspace</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --border:#30363d; --accent:#58a6ff; --accent-ink:#0d1117; --err:#f85149; --ok:#3fb950; --warn:#d29922; --chip:#21262d; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --muted:#59636e; --border:#d1d9e0; --accent:#0969da; --accent-ink:#fff; --err:#cf222e; --ok:#1a7f37; --warn:#9a6700; --chip:#eaeef2; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:1rem; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+  h1 { font-size:1.4rem; margin:0; } h2 { font-size:1.05rem; margin:0 0 .7rem; }
+  a { color:var(--accent); }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem; }
+  .muted { color:var(--muted); } .small { font-size:.85rem; }
+  input, select, button { font:inherit; color:var(--text); }
+  input[type=text], input[type=email], input[type=number], select { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:.45rem .6rem; }
+  button { background:var(--chip); border:1px solid var(--border); border-radius:6px; padding:.45rem .8rem; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+  button.link { background:none; border:0; color:var(--accent); padding:0 .2rem; }
+  .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .row > input[type=text] { flex:1; min-width:200px; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th, td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .tbl { overflow-x:auto; }
+  .st-matched { color:var(--ok); } .st-ambiguous { color:var(--warn); } .st-unmatched { color:var(--muted); }
+  .stats { display:flex; gap:1.5rem; flex-wrap:wrap; }
+  .stats b { font-size:1.3rem; display:block; }
+  .msg { margin-top:.5rem; } .msg.err { color:var(--err); } .msg.ok { color:var(--ok); }
+  ol.chain { list-style:none; padding:0; margin:.5rem 0 0; }
+  ol.chain li { padding:.15rem 0; } ol.chain li.rel { color:var(--muted); font-size:.85rem; padding-left:1rem; }
+  .path { border-top:1px solid var(--border); padding:.6rem 0; }
+  .hidden { display:none; }
+</style>
+</head>
+<body><main>
+<header>
+  <h1>Team workspace</h1>
+  <div class="row"><select id="ws-pick" aria-label="Workspace"></select><a href="/" class="small">Back to search</a></div>
+</header>
+
+<div id="agreement" class="panel hidden">
+  <h2>Before you start</h2>
+  <p>Please read and accept the <a href="/terms" target="_blank">user agreement</a>. Your team's uploads stay private to your workspace and are never added to the public network.</p>
+  <button class="primary" onclick="acceptAgreement()">I accept</button>
+</div>
+
+<div id="empty" class="panel hidden"><p class="muted">You aren't a member of any workspace yet. Ask your team's workspace admin to add you.</p></div>
+
+<div id="create" class="panel hidden">
+  <h2>Create a workspace (site admin)</h2>
+  <div class="row">
+    <input type="text" id="new-name" placeholder="Organization name">
+    <input type="email" id="new-admin" placeholder="Admin's email">
+    <input type="number" id="new-seats" value="10" min="1" max="500" style="width:6rem" aria-label="Seats">
+    <button class="primary" onclick="createWs()">Create</button>
+  </div>
+  <div id="create-msg" class="msg small"></div>
+</div>
+
+<div id="ws" class="hidden">
+  <div class="panel">
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div class="panel">
+    <h2>How do I reach…?</h2>
+    <p class="muted small">Finds the best route to anyone in the network through the contacts your whole team has uploaded.</p>
+    <div class="row"><input type="text" id="target" placeholder="A person or organization" onkeydown="if(event.key==='Enter')reach()"><button class="primary" onclick="reach()">Find routes</button></div>
+    <div id="reach-out"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Upload contacts</h2>
+    <p class="muted small">LinkedIn Connections.csv, Google or Outlook contacts (CSV), or vCard. Only names, companies and titles are kept; emails and phone numbers are dropped. Uploading a file with the same name again replaces your earlier copy.</p>
+    <div class="row"><input type="file" id="file" accept=".csv,.vcf,.vcard,text/csv,text/vcard"><button class="primary" onclick="upload()">Upload</button></div>
+    <div id="upload-msg" class="msg small"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="justify-content:space-between"><h2>Contacts</h2>
+      <div class="row">
+        <select id="filter" onchange="loadContacts()"><option value="">All</option><option value="ambiguous">Needs a pick</option><option value="matched">Matched</option><option value="unmatched">Not in the network</option></select>
+        <input type="text" id="q" placeholder="Search" onkeydown="if(event.key==='Enter')loadContacts()">
+        <a id="export" class="small" href="#">Export CSV</a>
+      </div></div>
+    <div class="tbl"><table><thead><tr><th>Name</th><th>Company</th><th>Matched to</th><th>Added by</th><th></th></tr></thead><tbody id="contacts"></tbody></table></div>
+  </div>
+
+  <div class="panel">
+    <h2>Uploaded files</h2>
+    <div class="tbl"><table><thead><tr><th>File</th><th>Rows</th><th>By</th><th>When</th><th></th></tr></thead><tbody id="sources"></tbody></table></div>
+  </div>
+
+  <div class="panel">
+    <h2>Members</h2>
+    <div class="tbl"><table><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody id="members"></tbody></table></div>
+    <div id="add-member" class="row hidden" style="margin-top:.7rem">
+      <input type="email" id="m-email" placeholder="colleague@example.com">
+      <select id="m-role"><option value="member">Member</option><option value="admin">Admin</option></select>
+      <button class="primary" onclick="addMember()">Add</button>
+    </div>
+    <div id="member-msg" class="msg small"></div>
+  </div>
+
+  <div id="audit-panel" class="panel hidden">
+    <h2>Activity</h2>
+    <div class="tbl"><table><tbody id="audit"></tbody></table></div>
+  </div>
+</div>
+
+<script>
+let state = { ws: null, info: null };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  let body = null; try { body = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((body && (body.error || body.detail)) || ('HTTP ' + r.status));
+  return body;
+}
+function show(id, on) { $(id).classList.toggle('hidden', !on); }
+
+async function init() {
+  const d = await api('/api/ws');
+  show('agreement', !d.agreement_accepted);
+  show('create', d.site_admin && d.agreement_accepted);
+  const pick = $('ws-pick');
+  pick.innerHTML = d.workspaces.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('');
+  pick.onchange = () => openWs(+pick.value);
+  show('empty', d.agreement_accepted && !d.workspaces.length);
+  if (d.agreement_accepted && d.workspaces.length) {
+    const saved = +(localStorageGet('ws') || 0);
+    const id = d.workspaces.some(w => w.id === saved) ? saved : d.workspaces[0].id;
+    pick.value = id; openWs(id);
+  }
+}
+function localStorageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+async function acceptAgreement() { await api('/api/agreement/accept', { method: 'POST' }); init(); }
+
+async function createWs() {
+  try {
+    const d = await api('/api/ws', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name: $('new-name').value, admin_email: $('new-admin').value, seat_limit: +$('new-seats').value }) });
+    $('create-msg').className = 'msg small ok';
+    $('create-msg').textContent = 'Created.' + (d.access.ok ? '' : ' Note: ' + d.access.message);
+    init();
+  } catch (e) { $('create-msg').className = 'msg small err'; $('create-msg').textContent = e.message; }
+}
+
+async function openWs(id) {
+  state.ws = id; localStorageSet('ws', id);
+  show('ws', true);
+  state.info = await api(`/api/ws/${id}`);
+  const c = state.info.contacts || {};
+  $('stats').innerHTML = [
+    ['Members', `${state.info.members} of ${state.info.seat_limit}`],
+    ['Matched contacts', c.matched || 0], ['Need a pick', c.ambiguous || 0], ['Not in the network', c.unmatched || 0]
+  ].map(([k, v]) => `<div><b>${esc(v)}</b><span class="muted small">${esc(k)}</span></div>`).join('');
+  $('export').href = `/api/ws/${id}/export`;
+  const admin = state.info.role === 'admin';
+  show('add-member', admin); show('audit-panel', admin);
+  loadContacts(); loadSources(); loadMembers(); if (admin) loadAudit();
+}
+
+async function upload() {
+  const f = $('file').files[0]; if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  $('upload-msg').className = 'msg small'; $('upload-msg').textContent = 'Uploading and matching…';
+  try {
+    const d = await api(`/api/ws/${state.ws}/contacts`, { method: 'POST', body: fd });
+    $('upload-msg').className = 'msg small ok';
+    $('upload-msg').textContent = `${d.rows} contacts: ${d.matched} matched, ${d.ambiguous} need a pick, ${d.unmatched} not in the network.`
+      + (d.replaced_previous ? ' Replaced your earlier copy of this file.' : '');
+    openWs(state.ws);
+  } catch (e) { $('upload-msg').className = 'msg small err'; $('upload-msg').textContent = e.message; }
+}
+
+async function loadContacts() {
+  const p = new URLSearchParams(); if ($('filter').value) p.set('status', $('filter').value); if ($('q').value) p.set('q', $('q').value);
+  const d = await api(`/api/ws/${state.ws}/contacts?` + p);
+  $('contacts').innerHTML = d.contacts.map(c => {
+    let match = '';
+    if (c.status === 'matched') match = `<span class="st-matched">${esc(c.node)}</span>`;
+    else if (c.status === 'ambiguous') match = `<select onchange="resolveC(${c.id}, this.value)"><option value="">Which one?</option>`
+        + c.candidates.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + `<option value="__none">None of these</option></select>`;
+    else match = '<span class="st-unmatched">Not in the network</span>';
+    const wrong = c.status === 'matched' ? `<button class="link small" onclick="resolveC(${c.id}, '__none')">Wrong person</button>` : '';
+    return `<tr><td>${esc(c.name)}<div class="muted small">${esc(c.title)}</div></td><td>${esc(c.company)}</td><td>${match}</td>`
+      + `<td class="small muted">${esc(c.known_by)}</td><td>${wrong}<button class="link small" onclick="delC(${c.id})">Remove</button></td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">No contacts yet.</td></tr>';
+}
+async function resolveC(id, v) {
+  if (!v) return;
+  await api(`/api/ws/${state.ws}/contacts/${id}/resolve`, { method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ node: v === '__none' ? null : v }) });
+  openWs(state.ws);
+}
+async function delC(id) { await api(`/api/ws/${state.ws}/contacts/${id}`, { method: 'DELETE' }); openWs(state.ws); }
+
+async function loadSources() {
+  const d = await api(`/api/ws/${state.ws}/sources`);
+  $('sources').innerHTML = d.sources.map(s => `<tr><td>${esc(s.filename)}</td><td>${esc(s.row_count)}</td><td class="small muted">${esc(s.uploaded_by)}</td>`
+    + `<td class="small muted">${esc((s.created_at || '').slice(0, 10))}</td><td><button class="link small" onclick="delS(${s.id})">Remove file and its contacts</button></td></tr>`).join('')
+    || '<tr><td colspan="5" class="muted">No uploads yet.</td></tr>';
+}
+async function delS(id) { await api(`/api/ws/${state.ws}/sources/${id}`, { method: 'DELETE' }); openWs(state.ws); }
+
+async function loadMembers() {
+  const d = await api(`/api/ws/${state.ws}/members`);
+  const admin = state.info.role === 'admin';
+  $('members').innerHTML = d.members.map(m => `<tr><td>${esc(m.email)}</td><td>${esc(m.role)}</td><td>`
+    + (admin ? `<button class="link small" onclick="removeM('${esc(m.email)}')">Remove</button>` : '') + '</td></tr>').join('');
+}
+async function addMember() {
+  try {
+    const d = await api(`/api/ws/${state.ws}/members`, { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ email: $('m-email').value, role: $('m-role').value }) });
+    $('member-msg').className = 'msg small ok';
+    $('member-msg').textContent = `Added ${d.email}.` + (d.access.ok ? ' They can sign in at hooconnex.com now.' : ' Sign-in access still needs setting up: ' + d.access.message);
+    openWs(state.ws);
+  } catch (e) { $('member-msg').className = 'msg small err'; $('member-msg').textContent = e.message; }
+}
+async function removeM(e) {
+  try { await api(`/api/ws/${state.ws}/members/${encodeURIComponent(e)}`, { method: 'DELETE' }); openWs(state.ws); }
+  catch (err) { $('member-msg').className = 'msg small err'; $('member-msg').textContent = err.message; }
+}
+async function loadAudit() {
+  const d = await api(`/api/ws/${state.ws}/audit`);
+  $('audit').innerHTML = d.events.slice(0, 50).map(a => `<tr><td class="small muted">${esc(a.at.slice(0, 16).replace('T', ' '))}</td>`
+    + `<td class="small">${esc(a.email)}</td><td class="small">${esc(a.action.replace(/_/g, ' '))}</td></tr>`).join('');
+}
+
+async function reach() {
+  const t = $('target').value.trim(); if (!t) return;
+  $('reach-out').innerHTML = '<p class="muted small">Searching…</p>';
+  try {
+    const d = await api(`/api/ws/${state.ws}/reach?target=` + encodeURIComponent(t));
+    if (d.error) { $('reach-out').innerHTML = `<p class="msg err small">${esc(d.error)}</p>`; return; }
+    if (!d.paths || !d.paths.length) { $('reach-out').innerHTML = `<p class="muted small">No route found through your team's ${d.contacts_considered || 0} matched contacts.</p>`; return; }
+    $('reach-out').innerHTML = d.paths.map((p, i) => {
+      const steps = p.path.map((s, j) => {
+        const rel = j < p.path.length - 1 ? `<li class="rel">↓ ${esc((s.cats || [s.relation || ''])[0]).replace(/_/g, ' ').toLowerCase()}</li>` : '';
+        return `<li>${esc(s.label || s.node)}</li>` + rel;
+      }).join('');
+      return `<div class="path"><b>Route ${i + 1}</b> <span class="muted small">${p.length} steps · ${esc(p.band || '')}</span><ol class="chain">${steps}</ol></div>`;
+    }).join('');
+  } catch (e) { $('reach-out').innerHTML = `<p class="msg err small">${esc(e.message)}</p>`; }
+}
+init().catch(e => { document.querySelector('main').insertAdjacentHTML('beforeend', `<p class="msg err">${esc(e.message)}</p>`); });
+</script>
+</main></body></html>

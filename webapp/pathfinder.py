@@ -11,7 +11,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 import networkx as nx
 import igraph as ig
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, PlainTextResponse
 from pydantic import BaseModel, Field, ConfigDict
 import base64
@@ -4303,6 +4303,346 @@ async def my_reach(request: Request, target: str = Query(..., max_length=300)):
     owner = _display_name_for_email(email) or email
     loop = asyncio.get_event_loop()
     res = await loop.run_in_executor(None, _reach_via_contacts, owner, contacts, target, 3)
+    return _drop_removed_link_paths(res)
+
+
+# --- Team workspaces (hooconnex Teams Phase 1, 2026-11-13) ----------------------
+# A private overlay per organization: members upload contact files, which are
+# matched to graph people and used only in that workspace's "How do I reach".
+# Logic and the isolation rule are in workspaces.py; plan in
+# ~/.claude/plans/peppy-imagining-lynx.md. Beta flag WORKSPACES_BETA:
+# unset/"admins" -> site admins only (default), "all" -> any logged-in user
+# who is a member of a workspace. Workspaces are created by site admins.
+try:
+    import workspaces as _ws
+except ImportError:
+    from webapp import workspaces as _ws
+
+
+def _workspaces_enabled(email):
+    if not email:
+        return False
+    mode = (os.environ.get("WORKSPACES_BETA") or "admins").strip().lower()
+    return mode == "all" or email in _ADMIN_EMAILS
+
+
+def _ws_guard(request, need_agreement=True):
+    """(email, None) if the feature is open to this user, else (None, error)."""
+    email = _request_user_email(request)
+    if not email:
+        return None, JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
+    if not _workspaces_enabled(email):
+        return None, JSONResponse(status_code=404, content={"detail": "Not Found"})
+    if need_agreement and not _ml.agreement_accepted(_ml_db(), email):
+        return None, JSONResponse(status_code=428, content={"success": False, "error": "agreement_required",
+                                                           "agreement_url": "/terms"})
+    return email.lower(), None
+
+
+def _ws_error(e):
+    return JSONResponse(status_code=e.status, content={"success": False, "error": str(e)}
+                        if e.status != 404 else {"detail": "Not Found"})
+
+
+_namesake_index = None
+
+
+def _ws_namesakes():
+    """{lowercased base name: [split namesake nodes]} -- "Mark Greene (Ibm)"
+    under "mark greene". Built once from the node list."""
+    global _namesake_index
+    if _namesake_index is None:
+        idx = {}
+        for low, node in _load_node_lookup().items():
+            i = low.find(" (")
+            if i > 0 and low.endswith(")"):
+                idx.setdefault(low[:i], []).append(node)
+        _namesake_index = idx
+    return _namesake_index
+
+
+_ORG_STOP = {"inc", "llc", "llp", "lp", "ltd", "limited", "co", "corp", "corporation", "company", "the", "group",
+             "plc", "holdings", "sa", "ag", "gmbh", "of", "and", "us", "usa"}
+
+
+def _org_tokens(s):
+    return {t for t in re.sub(r"[^a-z0-9 ]", " ", (s or "").lower().replace("&", " and ")).split()
+            if t and t not in _ORG_STOP}
+
+
+def _ws_resolve(contact):
+    """(status, node, candidates) for one uploaded contact. A namesake whose
+    employer matches the contact's company wins; a single exact node with no
+    namesakes is a match; anything with several possibilities waits for the
+    member to pick ("which one?"); no node at all stays unmatched."""
+    name = contact["name"].strip()
+    low = name.lower()
+    exact = _load_node_lookup().get(low)
+    splits = _ws_namesakes().get(low, [])
+    company = _org_tokens(contact.get("company"))
+    if company and splits:
+        hits = [n for n in splits if _org_tokens(n[n.find(" (") + 2:-1]) & company]
+        if len(hits) == 1:
+            return _ws.MATCHED, hits[0], []
+    if exact and not splits:
+        return _ws.MATCHED, exact, []
+    cands = ([exact] if exact else []) + splits
+    if cands:
+        return _ws.AMBIGUOUS, None, cands
+    return _ws.UNMATCHED, None, []
+
+
+class WorkspaceCreate(BaseModel):
+    name: str = Field(..., max_length=120)
+    admin_email: str = Field(..., max_length=200)
+    seat_limit: int = Field(_ws.DEFAULT_SEAT_LIMIT, ge=1, le=500)
+
+
+class WorkspaceMemberAdd(BaseModel):
+    email: str = Field(..., max_length=200)
+    role: str = Field("member", max_length=10)
+
+
+class WorkspaceResolve(BaseModel):
+    node: Optional[str] = Field(None, max_length=300)
+
+
+def _ws_allow_through_access(email):
+    """Best effort: let a new member through Cloudflare Access on hooconnex.com."""
+    if not _CF_ACCESS_POLICY_ID_HOOCONNEX:
+        return False, "CF_ACCESS_POLICY_ID_HOOCONNEX not configured"
+    try:
+        return _cf_access_allow_email(email, _CF_ACCESS_POLICY_ID_HOOCONNEX)
+    except Exception as e:
+        logger.exception("workspace: Cloudflare Access allow failed")
+        return False, str(e)
+
+
+@app.get("/workspace", response_class=HTMLResponse)
+async def workspace_page(request: Request):
+    email, err = _ws_guard(request, need_agreement=False)
+    if err:
+        return err
+    return HTMLResponse(Path(__file__).with_name("workspace.html").read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/ws")
+async def ws_list(request: Request):
+    email, err = _ws_guard(request, need_agreement=False)
+    if err:
+        return err
+    return {"workspaces": _ws.my_workspaces(_ml_db(), email), "site_admin": email in _ADMIN_EMAILS,
+            "agreement_accepted": _ml.agreement_accepted(_ml_db(), email)}
+
+
+@app.post("/api/ws")
+async def ws_create(req: WorkspaceCreate, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    if email not in _ADMIN_EMAILS:
+        return JSONResponse(status_code=403, content={"success": False, "error": "only site admins create workspaces"})
+    try:
+        ws_id = _ws.create_workspace(_ml_db(), req.name, req.admin_email, email, req.seat_limit)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    ok, msg = await asyncio.get_event_loop().run_in_executor(None, _ws_allow_through_access, req.admin_email.lower())
+    return {"success": True, "id": ws_id, "access": {"ok": ok, "message": msg}}
+
+
+@app.get("/api/ws/{ws_id}")
+async def ws_get(ws_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        return _ws.get_workspace(_ml_db(), ws_id, email)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+
+
+@app.delete("/api/ws/{ws_id}")
+async def ws_delete(ws_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        _ws.delete_workspace(_ml_db(), ws_id, email)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    return {"success": True}
+
+
+@app.get("/api/ws/{ws_id}/members")
+async def ws_members(ws_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        return {"members": _ws.list_members(_ml_db(), ws_id, email)}
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+
+
+@app.post("/api/ws/{ws_id}/members")
+async def ws_add_member(ws_id: int, req: WorkspaceMemberAdd, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        new = _ws.add_member(_ml_db(), ws_id, email, req.email, req.role)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    ok, msg = await asyncio.get_event_loop().run_in_executor(None, _ws_allow_through_access, new)
+    return {"success": True, "email": new, "access": {"ok": ok, "message": msg}}
+
+
+@app.delete("/api/ws/{ws_id}/members/{member_email}")
+async def ws_remove_member(ws_id: int, member_email: str, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        _ws.remove_member(_ml_db(), ws_id, email, member_email)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    return {"success": True}
+
+
+@app.post("/api/ws/{ws_id}/contacts")
+async def ws_upload_contacts(ws_id: int, request: Request, file: UploadFile = File(...)):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    data = await file.read(_ws.MAX_UPLOAD_BYTES + 1)
+    filename = (file.filename or "contacts.csv")[:200]
+    loop = asyncio.get_event_loop()
+    try:
+        _ws.get_workspace(_ml_db(), ws_id, email)          # membership before any parsing
+        contacts = _ws.parse_contacts(data, filename)
+        if not contacts:
+            return JSONResponse(status_code=400, content={"success": False, "error":
+                                "no contacts with a first and last name were found in that file"})
+        res = await loop.run_in_executor(None, _ws.import_contacts, _ml_db(), ws_id, email, filename,
+                                         contacts, _ws_resolve)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    return {"success": True, **res}
+
+
+@app.get("/api/ws/{ws_id}/contacts")
+async def ws_contacts(ws_id: int, request: Request, status: Optional[str] = Query(None, max_length=12),
+                      q: Optional[str] = Query(None, max_length=100), offset: int = Query(0, ge=0)):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        return {"contacts": _ws.list_contacts(_ml_db(), ws_id, email, status, q, 500, offset)}
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+
+
+@app.post("/api/ws/{ws_id}/contacts/{entity_id}/resolve")
+async def ws_resolve_contact(ws_id: int, entity_id: int, req: WorkspaceResolve, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        _ws.resolve_contact(_ml_db(), ws_id, email, entity_id, req.node,
+                            lambda n: _load_node_lookup().get(n.lower()) == n)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    return {"success": True}
+
+
+@app.delete("/api/ws/{ws_id}/contacts/{entity_id}")
+async def ws_delete_contact(ws_id: int, entity_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        _ws.delete_contact(_ml_db(), ws_id, email, entity_id)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    return {"success": True}
+
+
+@app.get("/api/ws/{ws_id}/sources")
+async def ws_sources(ws_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        return {"sources": _ws.list_sources(_ml_db(), ws_id, email)}
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+
+
+@app.delete("/api/ws/{ws_id}/sources/{source_id}")
+async def ws_delete_source(ws_id: int, source_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        n = _ws.delete_source(_ml_db(), ws_id, email, source_id)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    return {"success": True, "contacts_removed": n}
+
+
+@app.get("/api/ws/{ws_id}/export")
+async def ws_export(ws_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        text = _ws.export_csv(_ml_db(), ws_id, email)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    return PlainTextResponse(text, media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="workspace-{ws_id}-contacts.csv"'})
+
+
+@app.get("/api/ws/{ws_id}/audit")
+async def ws_audit(ws_id: int, request: Request):
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        return {"events": _ws.audit_log(_ml_db(), ws_id, email)}
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+
+
+@app.get("/api/ws/{ws_id}/reach")
+async def ws_reach(ws_id: int, request: Request, target: str = Query(..., max_length=300)):
+    """'How do I reach X' through the whole team's matched contacts; the first
+    step names the colleague who knows that contact."""
+    email, err = _ws_guard(request)
+    if err:
+        return err
+    try:
+        info = _ws.get_workspace(_ml_db(), ws_id, email)
+        pairs = _ws.matched_contacts(_ml_db(), ws_id, email)
+    except _ws.WorkspaceError as e:
+        return _ws_error(e)
+    known_by = {}
+    for node, who in pairs:
+        known_by.setdefault(node, set()).add(who)
+    contacts = [{"contact": n, "contact_type": "PERSON", "visibility": "private"} for n in known_by]
+    loop = asyncio.get_event_loop()
+    res = await loop.run_in_executor(None, _reach_via_contacts, info["name"], contacts, target, 5)
+    for p in res.get("paths", []):
+        who = sorted(known_by.get(p.get("via_contact"), []))
+        names = [(_display_name_for_email(w) or w) for w in who]
+        if names and p.get("path"):
+            first = p["path"][0]
+            first["node"] = first["label"] = names[0] + (f" (+{len(names) - 1} more)" if len(names) > 1 else "")
+            first["team_members"] = names
+            first["relation"] = "TEAM_CONTACT"
+            first["cats"] = ["TEAM_CONTACT"]
+    res["contacts_considered"] = len(known_by)
     return _drop_removed_link_paths(res)
 
 
