@@ -417,9 +417,13 @@ def tool_input(msg):
 
 def finish(cur, dbm, url, title, month, body, msg, cost):
     reply = tool_input(msg)
-    company, kept, counts = validate(reply, body, title)
-    if kept:
-        write_links(dbm, url, title, month, reply, company, kept)
+    try:
+        company, kept, counts = validate(reply, body, title)
+        if kept:
+            write_links(dbm, url, title, month, reply, company, kept)
+    except Exception as e:                 # one odd reply must not stop a multi-hour run
+        log(f"finish: {url}: {type(e).__name__}: {e}")
+        kept, counts = [], {"error": 1}
     cur.execute("UPDATE funding_news SET stage='done', result=%s, n_links=%s, input_tokens=%s, output_tokens=%s, "
                 "cost_usd=coalesce(cost_usd,0)+%s, updated_at=now() WHERE url=%s",
                 (json.dumps({"reply": reply, "counts": counts}), len(kept),
