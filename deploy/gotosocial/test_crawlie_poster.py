@@ -122,3 +122,18 @@ def test_failed_post_stays_queued(env_state, monkeypatch):
     monkeypatch.setattr(cp, "publish", boom)
     cp.cmd_tick(env, state)
     assert [f["key"] for f in state["queue"]] == ["g1"] and state["posted"] == {}
+
+
+def test_focus_category_fills_the_day_first():
+    facts = [{"key": f"stats_investors:{i}", "category": "stats_investors", "text": f"inv {i}"} for i in range(5)]
+    facts += [{"key": "bridge:x", "category": "bridge", "text": "b"}]
+    picks = cp.pick_candidates(facts, set(), {}, "stats_investors")
+    assert [p["category"] for p in picks] == ["stats_investors"] * cp.MAX_PER_DAY
+
+
+def test_focus_tops_up_from_rotation_when_short():
+    facts = [{"key": "stats_investors:a", "category": "stats_investors", "text": "a"},
+             {"key": "bridge:x", "category": "bridge", "text": "b"},
+             {"key": "stats_law:y", "category": "stats_law", "text": "c"}]
+    picks = cp.pick_candidates(facts, set(), {}, "stats_investors")
+    assert picks[0]["key"] == "stats_investors:a" and len(picks) == 3

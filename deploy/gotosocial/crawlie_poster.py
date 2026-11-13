@@ -9,6 +9,8 @@ Runs on optiplex from cron, in ~/gotosocial/poster/:
                               # ("all" / "1 3" / "none"), then post approved facts
                               # at most one per POST_SPACING
   crawlie_poster.py status    # print the state (no network)
+  crawlie_poster.py focus stats_investors 3   # for 3 days, propose that
+                              # category's facts first (focus off: "focus off")
 
 Inputs:
   crawlie_facts.json.gz  copied here by rebuild_and_deploy.py after each nightly
@@ -57,9 +59,10 @@ HASHTAGS = {
     "stats_inventors": "#Patents #Innovation #OpenData",
     "stats_scale": "#OpenData #NetworkScience",
     "community_establishment": "#NetworkScience #Power #Establishment",
+    "stats_investors": "#Startups #VentureCapital #AngelInvesting",
 }
 # Proposal order: rotate through categories so a day isn't three of one kind.
-CATEGORY_ORDER = ["community_establishment", "group_vs_group", "stats_separation", "who_you_know", "stats_charity", "pagerank_ladder",
+CATEGORY_ORDER = ["stats_investors", "community_establishment", "group_vs_group", "stats_separation", "who_you_know", "stats_charity", "pagerank_ladder",
                   "bridge", "stats_banks", "stats_inventors", "stats_law", "top_degree_public", "stats_scale",
                   "top_pagerank", "top_degree"]
 
@@ -166,11 +169,18 @@ def publish(env, fact):
 
 # --- commands ------------------------------------------------------------------
 
-def pick_candidates(facts, posted, offered=None):
+def pick_candidates(facts, posted, offered=None, focus=None):
     """Up to MAX_PER_DAY never-posted facts, one per category in turn. Facts
     (and categories) offered least recently come first, so a day that gets no
-    reply, or "none", doesn't bring back the same three the next morning."""
+    reply, or "none", doesn't bring back the same three the next morning.
+    focus: a category whose facts fill the day first (operator's "focus"
+    command), the usual rotation only topping up what it can't fill."""
     offered = offered or {}
+    if focus:
+        mine = sorted((f for f in facts if f["category"] == focus and f["key"] not in posted),
+                      key=lambda f: offered.get(f["key"], 0))[:MAX_PER_DAY]
+        rest = pick_candidates([f for f in facts if f["category"] != focus], posted, offered)
+        return (mine + rest)[:MAX_PER_DAY]
     by_cat = {}
     for f in facts:
         if f["key"] not in posted:
@@ -198,8 +208,12 @@ def cmd_propose(env, state):
     with gzip.open(FACTS, "rt", encoding="utf-8") as f:
         data = json.load(f)
     queued = {f["key"] for f in state["queue"]}
+    focus = state.get("focus")
+    if focus and now >= focus.get("until", 0):
+        log(f"focus on {focus.get('category')} ended")
+        focus = state["focus"] = None
     candidates = pick_candidates(data.get("publishable", []), set(state["posted"]) | queued,
-                                 state.get("offered"))
+                                 state.get("offered"), (focus or {}).get("category"))
     if not candidates:
         log("no never-posted publishable facts; nothing to propose")
         state["proposal"] = None
@@ -281,7 +295,17 @@ def main():
     state = load_state()
     if cmd == "status":
         print(json.dumps({"posted": len(state["posted"]), "queue": len(state["queue"]),
-                          "proposal": bool(state.get("proposal"))}, indent=1))
+                          "proposal": bool(state.get("proposal")), "focus": state.get("focus")}, indent=1))
+        return
+    if cmd == "focus":
+        if len(sys.argv) < 3 or sys.argv[2] == "off":
+            state["focus"] = None
+            log("focus off")
+        else:
+            days = float(sys.argv[3]) if len(sys.argv) > 3 else 2
+            state["focus"] = {"category": sys.argv[2], "until": time.time() + days * 86400}
+            log(f"focus on {sys.argv[2]} for {days:g} day(s)")
+        save_state(state)
         return
     env = load_env()
     missing = [k for k in ("CRAWLIE_TELEGRAM_BOT_TOKEN", "CRAWLIE_TELEGRAM_CHAT_ID", "GTS_TOKEN")

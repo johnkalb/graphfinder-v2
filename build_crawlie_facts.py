@@ -528,6 +528,86 @@ def adviser_facts(a):
     return out
 
 
+def _month_name(ym):
+    try:
+        return datetime.strptime(ym, "%Y-%m").strftime("%B %Y")
+    except (TypeError, ValueError):
+        return None
+
+
+def _and(items):
+    items = [short_company(i) for i in items]
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def investor_facts(s, verified):
+    """Startup investors from PR Newswire funding announcements
+    (build_graph_stats.investor_stats; angel_news_extract.py). Angels are named
+    people, so a fact naming one is publishable only if they're verified."""
+    if not s or not s.get("releases"):
+        return []
+    since = _month_name(s.get("first_month")) or "2014"
+    out = [fact("stats_investors",
+                f"Startup funding announcements since {since} name {s['angels']:,} angel investors and "
+                f"{s['firms']:,} investment firms backing {s['companies']:,} companies. sixdegrees links "
+                f"every one of them to the press release that names them.",
+                ["count"])]
+    angels = [a for a in s.get("top_angels", []) if is_clean_label(a["name"])]
+    if angels:
+        a = angels[0]
+        out.append(fact("stats_investors",
+                        f"The most active angel investor in startup funding announcements since {since}: "
+                        f"{a['name']}, named as a personal backer of {a['count']} companies, including "
+                        f"{_and(a['examples'][:2])}.",
+                        ["top_angel"], [a["name"]]))
+    # one post per well-known angel (verified public figures only)
+    famous = [a for a in angels if a["name"].lower() in verified][:12]
+    for a in famous:
+        if a["count"] == 1:
+            text = (f"{a['name']} is named as a personal investor in {short_company(a['examples'][0])}'s "
+                    f"funding round, according to the company's announcement.")
+        else:
+            text = (f"{a['name']} is named as a personal investor in {a['count']} startup funding rounds "
+                    f"announced since {since}, including {_and(a['examples'][:3])}.")
+        out.append(fact("stats_investors", text, ["angel", a["name"]], [a["name"]]))
+    leads = [f for f in s.get("top_leads", []) if is_clean_label(f["name"])]
+    if leads:
+        f = leads[0]
+        out.append(fact("stats_investors",
+                        f"{f['name']} led more startup funding rounds than any other investor in press-release "
+                        f"announcements since {since}: {f['count']}, including {_and(f['examples'][:2])}.",
+                        ["top_lead"]))
+    firms = [f for f in s.get("top_firms", []) if is_clean_label(f["name"])][:3]
+    if len(firms) == 3:
+        out.append(fact("stats_investors",
+                        "The investment firms named in the most startup funding announcements since "
+                        f"{since}: " + ", ".join(f"{f['name']} ({f['count']})" for f in firms[:2])
+                        + f" and {firms[2]['name']} ({firms[2]['count']}).",
+                        ["top_firms"]))
+    backed = [c for c in s.get("most_backed", []) if is_clean_label(c["name"])]
+    if backed:
+        c = backed[0]
+        out.append(fact("stats_investors",
+                        f"{short_company(c['name'])} has more named investors than any other startup in funding "
+                        f"announcements since {since}: {c['count']}.",
+                        ["most_backed"]))
+    pr = [e for e in s.get("top_pagerank", []) if is_clean_label(e["name"])]
+    if pr:
+        e = pr[0]
+        out.append(fact("stats_investors",
+                        f"Of the {s['in_graph']:,} angel investors who also appear elsewhere in sixdegrees, the "
+                        f"best connected is {e['name']}: #{e['rank']:,} by PageRank among "
+                        f"{s['people_ranked']:,} people.",
+                        ["angel_pagerank"], [e["name"]]))
+        pub = next((e for e in pr if e["name"].lower() in verified), None)
+        if pub and pub is not e:
+            out.append(fact("stats_investors",
+                            f"Among well-known angel investors, {pub['name']} is the best connected in sixdegrees: "
+                            f"#{pub['rank']:,} by PageRank among {s['people_ranked']:,} people.",
+                            ["angel_pagerank_public"], [pub["name"]]))
+    return out
+
+
 # Facebook's whole friend graph, May 2011: Ugander, Karrer, Backstrom & Marlow,
 # "The Anatomy of the Facebook Social Graph" (arXiv:1111.4503). Only published
 # full-network counts here -- no estimates for networks that publish none.
@@ -901,6 +981,7 @@ def main():
     graph_stats = load_optional_json(GRAPH_STATS) or {}
     stat_records = stats_facts(graph_stats)
     stat_records += midterm_facts(load_optional_json(FEC_MIDTERM))
+    stat_records += investor_facts(graph_stats.get("investors"), verified)
     stat_records += community_facts(graph_stats.get("establishment"), verified,
                                     (graph_stats.get("separation") or {}).get("median_steps"),
                                     unavailable_people(graph_stats.get("establishment")))
