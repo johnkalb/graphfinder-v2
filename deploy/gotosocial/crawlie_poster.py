@@ -11,6 +11,8 @@ Runs on optiplex from cron, in ~/gotosocial/poster/:
   crawlie_poster.py status    # print the state (no network)
   crawlie_poster.py focus stats_investors 3   # for 3 days, propose that
                               # category's facts first (focus off: "focus off")
+  crawlie_poster.py focus stats_nonprofits 3 next   # queue a focus to start
+                              # when the current one ends
 
 Inputs:
   crawlie_facts.json.gz  copied here by rebuild_and_deploy.py after each nightly
@@ -60,9 +62,10 @@ HASHTAGS = {
     "stats_scale": "#OpenData #NetworkScience",
     "community_establishment": "#NetworkScience #Power #Establishment",
     "stats_investors": "#Startups #VentureCapital #AngelInvesting",
+    "stats_nonprofits": "#Nonprofits #Philanthropy #Boards",
 }
 # Proposal order: rotate through categories so a day isn't three of one kind.
-CATEGORY_ORDER = ["stats_investors", "community_establishment", "group_vs_group", "stats_separation", "who_you_know", "stats_charity", "pagerank_ladder",
+CATEGORY_ORDER = ["stats_nonprofits", "stats_investors", "community_establishment", "group_vs_group", "stats_separation", "who_you_know", "stats_charity", "pagerank_ladder",
                   "bridge", "stats_banks", "stats_inventors", "stats_law", "top_degree_public", "stats_scale",
                   "top_pagerank", "top_degree"]
 
@@ -199,6 +202,21 @@ def pick_candidates(facts, posted, offered=None, focus=None):
     return picks
 
 
+def advance_focus(state, now):
+    """The focus in force now: an expired focus ends, and a queued one
+    ("focus <category> <days> next") starts in its place."""
+    focus = state.get("focus")
+    if focus and now >= focus.get("until", 0):
+        log(f"focus on {focus.get('category')} ended")
+        focus = state["focus"] = None
+    nxt = state.get("focus_next")
+    if not focus and nxt:
+        focus = state["focus"] = {"category": nxt["category"], "until": now + nxt["days"] * 86400}
+        state["focus_next"] = None
+        log(f"focus on {nxt['category']} for {nxt['days']:g} day(s) (queued)")
+    return focus
+
+
 def cmd_propose(env, state):
     now = time.time()
     p = state.get("proposal")
@@ -208,10 +226,7 @@ def cmd_propose(env, state):
     with gzip.open(FACTS, "rt", encoding="utf-8") as f:
         data = json.load(f)
     queued = {f["key"] for f in state["queue"]}
-    focus = state.get("focus")
-    if focus and now >= focus.get("until", 0):
-        log(f"focus on {focus.get('category')} ended")
-        focus = state["focus"] = None
+    focus = advance_focus(state, now)
     candidates = pick_candidates(data.get("publishable", []), set(state["posted"]) | queued,
                                  state.get("offered"), (focus or {}).get("category"))
     if not candidates:
@@ -295,7 +310,8 @@ def main():
     state = load_state()
     if cmd == "status":
         print(json.dumps({"posted": len(state["posted"]), "queue": len(state["queue"]),
-                          "proposal": bool(state.get("proposal")), "focus": state.get("focus")}, indent=1))
+                          "proposal": bool(state.get("proposal")), "focus": state.get("focus"),
+                          "focus_next": state.get("focus_next")}, indent=1))
         return
     if cmd == "focus":
         if len(sys.argv) < 3 or sys.argv[2] == "off":
@@ -303,8 +319,12 @@ def main():
             log("focus off")
         else:
             days = float(sys.argv[3]) if len(sys.argv) > 3 else 2
-            state["focus"] = {"category": sys.argv[2], "until": time.time() + days * 86400}
-            log(f"focus on {sys.argv[2]} for {days:g} day(s)")
+            if len(sys.argv) > 4 and sys.argv[4] == "next":
+                state["focus_next"] = {"category": sys.argv[2], "days": days}
+                log(f"after the current focus: {sys.argv[2]} for {days:g} day(s)")
+            else:
+                state["focus"] = {"category": sys.argv[2], "until": time.time() + days * 86400}
+                log(f"focus on {sys.argv[2]} for {days:g} day(s)")
         save_state(state)
         return
     env = load_env()
