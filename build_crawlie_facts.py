@@ -608,6 +608,128 @@ def investor_facts(s, verified):
     return out
 
 
+_CHARITY_SMALL = {"and", "of", "the", "for", "in", "at", "on", "to", "a", "an"}
+_CHARITY_DROP = {"inc", "inc.", "incorporated", "corp", "corporation", "co", "ltd", "llc"}
+
+
+def charity_name(name):
+    """IRS-style ALL-CAPS charity names read as titles: "THE NEW YORK AND
+    PRESBYTERIAN HOSPITAL" -> "The New York and Presbyterian Hospital"; a
+    trailing "Inc" goes."""
+    words = name.split()
+    if len(words) > 2 and " ".join(words[-2:]).lower() == "group return":   # IRS group-exemption filings
+        words = words[:-2]
+    while len(words) > 1 and words[-1].lower().strip(",") in _CHARITY_DROP:
+        words.pop()
+    if words:
+        words[-1] = words[-1].rstrip(",")
+    if any(c.islower() for c in name):
+        return " ".join(words)
+    out = []
+    for i, w in enumerate(words):
+        lw = w.lower()
+        if "-" in w and all(len(x) <= 3 for x in w.split("-")):
+            out.append(w)                    # RFE-RL, not Rfe-Rl
+        else:
+            out.append(lw if i and lw in _CHARITY_SMALL else "-".join(x[:1].upper() + x[1:] for x in lw.split("-")))
+    return " ".join(out)
+
+
+def _distinct_charities(names, k):
+    """The first k names, skipping near-duplicates ("NEW YORK-PRESBYTERIAN FUND"
+    after "The New York and Presbyterian Hospital", "EMORY" after "Emory University")."""
+    stop = _CHARITY_SMALL | _CHARITY_DROP | {"fund", "foundation", "trust", "group", "return"}
+    out, seen = [], []
+    for n in names:
+        t = {w for w in "".join(c if c.isalnum() else " " for c in n.lower()).split() if w not in stop}
+        if not t or any(len(t & s) / len(t | s) >= 0.5 for s in seen):
+            continue
+        seen.append(t)
+        out.append(charity_name(n))
+        if len(out) == k:
+            break
+    return out
+
+
+def nonprofit_facts(s, excluded):
+    """501(c)(3) charities and their boards (build_graph_stats.nonprofit_stats,
+    2026-11-14). The people named are verified figures with distinctive names
+    (checked there); excluded = lowercased dead or detained among them, or None
+    if that couldn't be checked -- then no fact names anyone."""
+    if not s or not s.get("board_people"):
+        return []
+    ok = lambda n: excluded is not None and n.lower() not in excluded   # noqa: E731
+    out = [fact("stats_nonprofits",
+                f"sixdegrees has the boards of {s['c3_with_board']:,} 501(c)(3) charities from their IRS filings: "
+                f"{s['board_people']:,} people serve on them as directors, officers or advisers, and "
+                f"{s['multi_board_people']:,} of them sit on more than one charity's board.",
+                ["count"])]
+    if s.get("interlocked_charities"):
+        share = s["giant_charities"] / s["interlocked_charities"]
+        out.append(fact("stats_nonprofits",
+                        f"Charity boards form one web. Of the {s['interlocked_charities']:,} charities that share a "
+                        f"board member with another, {pct(share)} are joined into a single network by the "
+                        f"{s['giant_people']:,} people who sit on more than one of their boards.",
+                        ["web"]))
+    hubs = [h for h in s.get("hub_charities", []) if is_clean_label(h["name"])]
+    if hubs:
+        h = hubs[0]
+        out.append(fact("stats_nonprofits",
+                        f"{charity_name(h['name'])} shares more board members with other charities than any other "
+                        f"501(c)(3) in sixdegrees: {h['shared']:,} of its directors and officers also sit on "
+                        f"another charity's board.",
+                        ["hub_charity"]))
+    most = [m for m in s.get("most_boards", []) if ok(m["name"])]
+    if most:
+        m = most[0]
+        out.append(fact("stats_nonprofits",
+                        f"Among well-known figures, {m['name']} sits on the most charity boards in sixdegrees: "
+                        f"{m['boards']} 501(c)(3)s, including {_join(_distinct_charities(m['examples'], 3))}.",
+                        ["most_boards"], [m["name"]]))
+        for m in most[1:8]:
+            out.append(fact("stats_nonprofits",
+                            f"{m['name']} has served on the boards of {m['boards']} 501(c)(3) charities, "
+                            f"including {_join(_distinct_charities(m['examples'], 3))}, according to their "
+                            f"IRS filings.",
+                            ["boards", m["name"]], [m["name"]]))
+    bridge = next((b for b in s.get("top_bridges", []) if ok(b["name"]) and b["boards"] >= 3), None)
+    if bridge:
+        out.append(fact("stats_nonprofits",
+                        f"More shortest paths across the web of charity boards run through {bridge['name']} than "
+                        f"through any other well-known figure. {bridge['name'].split()[-1]}'s {bridge['boards']} "
+                        f"boards include "
+                        f"{_join(_distinct_charities(bridge['examples'], 3))}.",
+                        ["bridge"], [bridge["name"]]))
+    n_comm = s.get("communities")
+    for c in s.get("clusters", []):
+        orgs = _distinct_charities(c["hub_charities"], 3)
+        if len(orgs) < 3:
+            continue
+        out.append(fact("stats_nonprofits",
+                        f"One of the {n_comm} communities in the web of charity boards: {c['charities']:,} "
+                        f"501(c)(3)s and {c['people']:,} shared board members, centred on {_join(orgs)}. "
+                        f"{COMMUNITY_DEF}",
+                        ["community", orgs[0]]))
+        figs = [n for n in c.get("figures", []) if ok(n)][:5]
+        if len(figs) >= 3:
+            out.append(fact("stats_nonprofits",
+                            f"The central figures of the charity-board community around {_join(orgs)}: "
+                            f"{_join(figs)}, the best-known people who sit on three or more of its boards and "
+                            f"link most of it together. {COMMUNITY_DEF}",
+                            ["community_core", orgs[0]], figs))
+    return out
+
+
+def nonprofit_people(s):
+    """Everyone a nonprofit fact could name, for the dead/detained check."""
+    if not s:
+        return set()
+    names = {m["name"] for m in s.get("most_boards", [])[:8]} | {b["name"] for b in s.get("top_bridges", [])[:10]}
+    for c in s.get("clusters", []):
+        names |= set(c.get("figures", [])[:8])
+    return names
+
+
 # Facebook's whole friend graph, May 2011: Ugander, Karrer, Backstrom & Marlow,
 # "The Anatomy of the Facebook Social Graph" (arXiv:1111.4503). Only published
 # full-network counts here -- no estimates for networks that publish none.
@@ -832,6 +954,12 @@ def unavailable_people(est):
     cands |= set(est.get("top_bridges", []))     # the bridge crawlie, same rule (2026-10-31)
     for sub in est.get("subcommunities", []):
         cands |= {n for n, _o in sub.get("hub_people", [])[:CORE_WITHIN]}
+    return dead_or_detained(cands)
+
+
+def dead_or_detained(cands):
+    """Lowercased names among cands that Wikidata lists as dead or currently
+    detained; None if Wikidata can't be asked (see unavailable_people)."""
     qids = {}
     for path in (QID_MAP, QID_IMPORTS):
         try:
@@ -982,6 +1110,8 @@ def main():
     stat_records = stats_facts(graph_stats)
     stat_records += midterm_facts(load_optional_json(FEC_MIDTERM))
     stat_records += investor_facts(graph_stats.get("investors"), verified)
+    np_stats = graph_stats.get("nonprofits")
+    stat_records += nonprofit_facts(np_stats, dead_or_detained(nonprofit_people(np_stats)) if np_stats else set())
     stat_records += community_facts(graph_stats.get("establishment"), verified,
                                     (graph_stats.get("separation") or {}).get("median_steps"),
                                     unavailable_people(graph_stats.get("establishment")))

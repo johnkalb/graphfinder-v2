@@ -17,6 +17,8 @@ the webapp.
   charities   the IRS Business Master File candidates ($10M+ assets) and how
               many of them the harvester has processed so far
   law_firms   AMLAW_ROSTER attorneys per firm (only the firms we harvest)
+  nonprofits  501(c)(3) charities, their board members, and the communities
+              their shared board members form (nonprofit_stats)
   advisers    owners/control persons of SEC-registered investment advisers
               (SEC_ADV_OWNERS): count, most connected, highest PageRank
   establishment  the "establishment" community (Leiden over people only,
@@ -39,7 +41,7 @@ import igraph as ig
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from build_crawlie_facts import is_clean_label, looks_like_person  # noqa: E402
+from build_crawlie_facts import is_clean_label, load_verified_people, looks_like_person  # noqa: E402
 import person_graph  # noqa: E402
 
 SCORED = "webapp/data/graph_scored.json.gz"
@@ -259,6 +261,137 @@ def investor_stats(conn, nodes, edges, people_mask):
         out["top_pagerank"] = [{"name": nodes[i], "degree": int(deg[i]), "rank": rank(i)}
                                for i in sorted(idx, key=lambda i: -pr[i])[:25]]
     return out
+
+
+C3_BOARD_CATS = {"CO_DIRECTOR", "CO_EXECUTIVE", "ADVISORY"}   # board/officer seats, not alumni or staff
+C3_CLUSTERS = 12
+C3_BRIDGE_SOURCES = 1000
+C3_FIGURE_BOARDS = 3   # a community's named figure sits on 3+ of its charities (fewer let namesakes in)
+NAMESAKE_MAX = 0.3   # expected same-name people (first-name x surname frequency) above this = too common to name
+
+
+def _norm_org(s):
+    s = s.lower().replace("&", " and ")
+    return " ".join("".join(ch for ch in s if ch.isalnum() or ch == " ").replace(" the ", " ").split())
+
+
+def _name_tokens(name):
+    t = [w.strip(".,").lower() for w in name.split("(")[0].split()]
+    t = [w for w in t if w and w not in {"jr", "sr", "ii", "iii", "iv", "dr", "mr", "ms", "mrs"} and len(w) > 1]
+    return (t[0], t[-1]) if len(t) >= 2 else None
+
+
+def nonprofit_stats(conn, nodes, edges, people_mask, verified=None):
+    """501(c)(3) charities and the people on their boards (2026-11-14). A
+    charity is a graph organization whose name matches an org_exempt_status
+    row with subsection 03 (the IRS Business Master File, $1M+ assets); a
+    board member is a person tied to it by a director/officer/adviser link.
+
+    The community question: people on two or more charity boards join those
+    boards into one web (an "interlock"). Leiden on that web (charities +
+    multi-board people) finds its communities; each is named by its
+    best-connected charities and its well-known members. Bridges = sampled
+    betweenness. Only distinctive names are listed as people: "Michael Smith"
+    on 90 boards is many people sharing a node, so any name whose first-name x
+    surname frequency predicts more than NAMESAKE_MAX namesakes is left out."""
+    cur = conn.cursor()
+    cur.execute("SELECT name, subsection, asset_amt FROM org_exempt_status")
+    sub = {}
+    for n, s, a in cur.fetchall():
+        k = _norm_org(n)
+        if k not in sub or (a or 0) > (sub[k][1] or 0):
+            sub[k] = (s, a)
+    known_c3 = sum(1 for s, _a in sub.values() if s == "03")
+    people = np.asarray(people_mask, bool)
+    c3 = np.zeros(len(nodes), bool)
+    for i, n in enumerate(nodes):
+        if not people[i] and sub.get(_norm_org(n), ("",))[0] == "03":
+            c3[i] = True
+    boards = {}
+    for e in edges:
+        if len(e) < 4 or not (set(e[3]) & C3_BOARD_CATS):
+            continue
+        a, b = e[0], e[1]
+        if c3[a] and people[b]:
+            boards.setdefault(b, set()).add(a)
+        elif c3[b] and people[a]:
+            boards.setdefault(a, set()).add(b)
+    if not boards:
+        return None
+    orgs_with_board = {o for s in boards.values() for o in s}
+
+    # how common each first name and surname is among the graph's people
+    first, last = {}, {}
+    n_people = 0
+    for i in np.flatnonzero(people).tolist():
+        t = _name_tokens(nodes[i])
+        if t:
+            n_people += 1
+            first[t[0]] = first.get(t[0], 0) + 1
+            last[t[1]] = last.get(t[1], 0) + 1
+
+    def distinctive(name):
+        t = _name_tokens(name)
+        return bool(t) and first.get(t[0], 0) * last.get(t[1], 0) / max(1, n_people) <= NAMESAKE_MAX
+    verified = verified or set()
+    nameable = lambda n: n.lower() in verified and is_clean_label(n) and distinctive(n)   # noqa: E731
+
+    multi = {p: s for p, s in boards.items() if len(s) >= 2}
+    orgs = sorted({o for s in multi.values() for o in s})
+    oi = {o: k for k, o in enumerate(orgs)}
+    pl = sorted(multi)
+    B = ig.Graph(n=len(orgs) + len(pl),
+                 edges=[(len(orgs) + j, oi[o]) for j, p in enumerate(pl) for o in multi[p]])
+    comps = B.connected_components()
+    gv = max(comps, key=len)
+    H = B.induced_subgraph(gv)
+    node_of = lambda k: orgs[gv[k]] if gv[k] < len(orgs) else pl[gv[k] - len(orgs)]   # noqa: E731
+    is_person = np.array([gv[k] >= len(orgs) for k in range(H.vcount())])
+    rng = random.Random(42)
+    t = time.time()
+    btw = np.array(H.betweenness(sources=rng.sample(range(H.vcount()), min(C3_BRIDGE_SOURCES, H.vcount()))))
+    log(f"  charity interlock: {H.vcount():,} nodes, betweenness {time.time() - t:.0f}s")
+    deg = np.array(H.degree())
+
+    def examples(org_ids):
+        """the person's best-known charities: clean labels first, then the largest by assets"""
+        return [nodes[o] for o in sorted(org_ids, key=lambda o: (not is_clean_label(nodes[o]),
+                                                                  -(sub[_norm_org(nodes[o])][1] or 0)))][:3]
+
+    def person_entry(k):
+        p = node_of(k)
+        return {"name": nodes[p], "boards": len(boards[p]), "examples": examples(boards[p])}
+    ppl = np.flatnonzero(is_person)
+    top_bridges = [person_entry(k) for k in ppl[np.argsort(-btw[ppl], kind="stable")]
+                   if nameable(nodes[node_of(k)])][:25]
+    most_boards = [{"name": nodes[p], "boards": len(s), "examples": examples(s)}
+                   for p, s in sorted(boards.items(), key=lambda kv: -len(kv[1])) if nameable(nodes[p])][:25]
+    org_k = np.flatnonzero(~is_person)
+    hub_charities = [{"name": nodes[node_of(k)], "shared": int(deg[k])}
+                     for k in org_k[np.argsort(-deg[org_k], kind="stable")] if is_clean_label(nodes[node_of(k)])][:15]
+
+    random.seed(42)
+    L = H.community_leiden(objective_function="modularity", n_iterations=4)
+    memb = np.array(L.membership)
+    sizes = np.bincount(memb)
+    clusters = []
+    for c in np.argsort(-sizes, kind="stable")[:C3_CLUSTERS].tolist():
+        ks = np.flatnonzero(memb == c)
+        ok = ks[~is_person[ks]]
+        pk = ks[is_person[ks]]
+        hub = [nodes[node_of(k)] for k in ok[np.argsort(-deg[ok], kind="stable")]][:8]
+        # a named member must sit on C3_FIGURE_BOARDS+ of this community's charities
+        inside = set(node_of(k) for k in ok)
+        figures = [nodes[node_of(k)] for k in pk[np.argsort(-btw[pk], kind="stable")]
+                   if nameable(nodes[node_of(k)]) and len(boards[node_of(k)] & inside) >= C3_FIGURE_BOARDS][:10]
+        clusters.append({"charities": int(len(ok)), "people": int(len(pk)), "hub_charities": hub,
+                         "figures": figures})
+    return {"known_c3": known_c3, "c3_in_graph": int(c3.sum()), "c3_with_board": len(orgs_with_board),
+            "board_people": len(boards), "multi_board_people": len(multi),
+            "interlocked_charities": len(orgs), "giant_charities": int((~is_person).sum()),
+            "giant_people": int(is_person.sum()), "modularity": round(L.modularity, 3),
+            "communities": len(L), "top_bridges": top_bridges, "most_boards": most_boards,
+            "hub_charities": hub_charities, "clusters": clusters}
 
 
 def inventor_stats(conn):
@@ -543,6 +676,12 @@ def main():
             log(f"investors: {json.dumps(stats['investors'])[:400]}")
         except Exception as e:
             log(f"investor stats skipped: {e}")
+        try:
+            stats["nonprofits"] = nonprofit_stats(conn, nodes, g["edges"], people_mask,
+                                                  load_verified_people()) or {}
+            log(f"nonprofits: {json.dumps(stats['nonprofits'])[:400]}")
+        except Exception as e:
+            log(f"nonprofit stats skipped: {e}")
         conn.close()
 
     try:

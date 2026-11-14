@@ -137,3 +137,13 @@ def test_focus_tops_up_from_rotation_when_short():
              {"key": "stats_law:y", "category": "stats_law", "text": "c"}]
     picks = cp.pick_candidates(facts, set(), {}, "stats_investors")
     assert picks[0]["key"] == "stats_investors:a" and len(picks) == 3
+
+
+def test_queued_focus_starts_when_current_ends():
+    state = {"focus": {"category": "stats_investors", "until": 100},
+             "focus_next": {"category": "stats_nonprofits", "days": 3}}
+    assert cp.advance_focus(state, 50)["category"] == "stats_investors"
+    assert state["focus_next"]
+    f = cp.advance_focus(state, 150)
+    assert f == {"category": "stats_nonprofits", "until": 150 + 3 * 86400} and state["focus_next"] is None
+    assert cp.advance_focus(state, 150 + 3 * 86400 + 1) is None
