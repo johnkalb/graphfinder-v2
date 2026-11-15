@@ -18,6 +18,7 @@ data/ford_macarthur_progress.json
 # Environment
 .env
 *.env.local
+plane.env
 
 # IDE
 .vscode/
