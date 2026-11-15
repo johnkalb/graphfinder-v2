@@ -25,7 +25,10 @@ services:
   - key: CONTACT_PSI_SERVER_SECRET
     type: SECRET
     value: change-this-set-via-dashboard
+  # Must equal the key version the manifest was built with. The LIVE DO spec
+  # doesn't set it (so the app's default, 1, applies); manifests are built
+  # with 1 since 2026-11-15.
   - key: CONTACT_PSI_KEY_VERSION
-    value: "3"
+    value: "1"
   - key: OPERATOR_EMAIL
     value: change-this-set-via-dashboard
