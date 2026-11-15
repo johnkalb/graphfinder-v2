@@ -249,6 +249,28 @@ def init_test_department_db(db_path: str) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS ws_members_ws ON workspace_members (workspace_id, email)")
     cur.execute("CREATE INDEX IF NOT EXISTS ws_entities_ws ON ws_entities (workspace_id, status)")
     cur.execute("CREATE INDEX IF NOT EXISTS ws_audit_ws ON ws_audit (workspace_id)")
+    # Contact lookup through the subscriber's own provider key (contact_lookup.py,
+    # 2026-11-15). Keys are AES-GCM ciphertext; results are never stored --
+    # lookup_audit records only who looked up whom, how, and how many items.
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS lookup_keys (
+            id {_PK}, owner_email TEXT, workspace_id INTEGER, provider TEXT NOT NULL, ciphertext TEXT NOT NULL,
+            last4 TEXT, set_by TEXT, created_at TEXT NOT NULL, deleted_at TEXT)""")
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS lookup_certifications (
+            id {_PK}, email TEXT NOT NULL, version TEXT NOT NULL, purpose TEXT, accepted_at TEXT NOT NULL)""")
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS lookup_audit (
+            id {_PK}, email TEXT NOT NULL, workspace_id INTEGER, person TEXT, provider TEXT, mode TEXT,
+            outcome TEXT, n_items INTEGER, at TEXT NOT NULL)""")
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS lookup_blocks (
+            id {_PK}, node TEXT NOT NULL, scope TEXT NOT NULL, status TEXT NOT NULL, requested_by TEXT,
+            note TEXT, created_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT)""")
+    cur.execute("CREATE INDEX IF NOT EXISTS lookup_audit_email ON lookup_audit (email, at)")
+    # One-time bulk allowance for in-browser contact matching (2026-11-15):
+    # each user may check one large file (10,000 contacts) on top of the daily
+    # quota, within 24 hours of starting it; a site admin can grant another.
+    cur.execute("""CREATE TABLE IF NOT EXISTS psi_bulk (
+            email TEXT PRIMARY KEY, points_used INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL,
+            reset_by TEXT, reset_at TEXT)""")
+    cur.execute("CREATE INDEX IF NOT EXISTS lookup_blocks_node ON lookup_blocks (node, status)")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS user_agreements (

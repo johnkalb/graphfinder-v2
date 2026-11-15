@@ -42,19 +42,25 @@ def fetch_all(token):
         since = batch[-1]["id"]
 
 
+# Public user links are treated like every other public link (2026-11-15):
+# the edge names its two people and nothing else -- never which account
+# approved it, when, or its id in the app, so the shared graph can't reveal
+# which hooconnex customer a link came from.
+EVIDENCE = json.dumps({"source": SOURCE, "visibility": "public"}, separators=(",", ":"))
+
+
 def main():
     links, public, removed = fetch_all(pg_secret.load_secret("USER_LINKS_SYNC_TOKEN"))
     rows = []
     for l in links:
-        ev = json.dumps({"source": SOURCE, "user_link_id": l["id"], "submitter": l.get("submitter_email"),
-                         "approved_at": l.get("approved_at"), "evidence": l.get("evidence")}, separators=(",", ":"))
+        ev = EVIDENCE
         rows.append((None, l["subject"], l.get("subject_type") or "PERSON", None, l["object"],
                      l.get("object_type") or "PERSON", l["predicate"], SOURCE, ev))
     # each user's PUBLIC links (my_links; private ones never leave the app)
     for l in public:
         if not l.get("owner"):
             continue
-        ev = json.dumps({"source": SOURCE, "my_link_id": l["my_link_id"], "visibility": "public"}, separators=(",", ":"))
+        ev = EVIDENCE
         rows.append((None, l["owner"], "PERSON", None, l["contact"], l.get("contact_type") or "PERSON",
                      l["relation"], SOURCE, ev))
     from psycopg2.extras import execute_values
@@ -76,10 +82,14 @@ def main():
                     "AND md5(target_name) = md5(%s) AND relation_type = %s",
                     (SOURCE, l["owner"], l["contact"], l["relation"]))
         deleted += cur.rowcount
+    # rows synced before 2026-11-15 carried the approver's email / link ids
+    cur.execute("UPDATE relationships SET evidence = %s WHERE source_data = %s AND evidence::jsonb IS DISTINCT FROM %s::jsonb",
+                (EVIDENCE, SOURCE, EVIDENCE))
+    scrubbed = cur.rowcount
     conn.commit()
     cur.execute("SELECT count(*) FROM relationships WHERE source_data = %s", (SOURCE,))
     print(f"user links: {len(links)} approved via review, {len(public)} public my_links; {added} new rows, "
-          f"{deleted} removed; {cur.fetchone()[0]} {SOURCE} rows in total")
+          f"{deleted} removed, {scrubbed} scrubbed of approver details; {cur.fetchone()[0]} {SOURCE} rows in total")
 
 
 if __name__ == "__main__":

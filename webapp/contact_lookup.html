@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact lookup</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --border:#30363d; --accent:#58a6ff; --accent-ink:#0d1117; --err:#f85149; --ok:#3fb950; --warn:#d29922; --chip:#21262d; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --muted:#59636e; --border:#d1d9e0; --accent:#0969da; --accent-ink:#fff; --err:#cf222e; --ok:#1a7f37; --warn:#9a6700; --chip:#eaeef2; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:900px; margin:0 auto; padding:1rem; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+  h1 { font-size:1.4rem; margin:0; } h2 { font-size:1.05rem; margin:0 0 .7rem; } h3 { font-size:.95rem; margin:1rem 0 .4rem; }
+  a { color:var(--accent); }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:1rem; margin-bottom:1rem; }
+  .muted { color:var(--muted); } .small { font-size:.85rem; }
+  input, select, button, textarea { font:inherit; color:var(--text); }
+  input[type=text], input[type=password], select, textarea { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:.45rem .6rem; max-width:100%; }
+  button { background:var(--chip); border:1px solid var(--border); border-radius:6px; padding:.45rem .8rem; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.link { background:none; border:0; color:var(--accent); padding:0 .2rem; }
+  .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:.6rem; }
+  .grid label { display:flex; flex-direction:column; gap:.2rem; font-size:.85rem; color:var(--muted); }
+  .grid input { width:100%; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th, td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .tbl { overflow-x:auto; }
+  .msg { margin-top:.5rem; } .msg.err { color:var(--err); } .msg.ok { color:var(--ok); }
+  .notice { border-left:3px solid var(--warn); padding:.4rem .7rem; margin:.6rem 0; background:var(--chip); border-radius:0 6px 6px 0; }
+  .notice.stop { border-color:var(--err); }
+  ul.cert { padding-left:1.2rem; margin:.4rem 0; } ul.cert li { margin:.25rem 0; }
+  .tabs { display:inline-flex; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .tabs button { border:0; border-radius:0; }
+  .tabs button.on { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .result { border-top:1px solid var(--border); padding:.5rem 0; display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap; }
+  .result code { font-size:.95rem; word-break:break-all; }
+  .tag { font-size:.75rem; padding:0 .45rem; border-radius:10px; background:var(--chip); color:var(--muted); }
+  .hidden { display:none; }
+</style>
+</head>
+<body><main>
+<header>
+  <h1>Contact lookup <span class="tag">beta</span></h1>
+  <a href="/" class="small">Back to search</a>
+</header>
+
+<div id="agreement" class="panel hidden">
+  <h2>Before you start</h2>
+  <p>Please read and accept the <a href="/terms" target="_blank">user agreement</a>.</p>
+  <button class="primary" onclick="acceptAgreement()">I accept</button>
+</div>
+
+<div id="how" class="panel">
+  <p class="small muted" style="margin:0">Lookups run under <b>your own</b> (or your team's) account with a contact-data provider.
+  hooconnex passes the request on and shows the answer; it does <b>not</b> store the email addresses, phone numbers or
+  addresses that come back. It records who looked up whom, with which provider, and how many items came back.
+  Personal details (home address, personal email, mobile) are never available for judges, law enforcement,
+  prosecutors or election officials, or for anyone who has switched lookups about themselves off.</p>
+</div>
+
+<div id="cert" class="panel hidden">
+  <h2>Certify your purpose</h2>
+  <p class="small">Required once before any lookup:</p>
+  <ul class="cert small" id="cert-list"></ul>
+  <div class="row">
+    <label class="small">My main purpose: <select id="cert-purpose"></select></label>
+  </div>
+  <label class="row small" style="margin-top:.5rem"><input type="checkbox" id="cert-accept"> I certify all of the above.</label>
+  <div class="row" style="margin-top:.6rem"><button class="primary" onclick="certify()">Accept</button></div>
+  <div id="cert-msg" class="msg small"></div>
+</div>
+<div id="cert-done" class="small muted hidden" style="margin:-.5rem 0 1rem"></div>
+
+<div id="find" class="panel hidden">
+  <h2>Find a person</h2>
+  <div class="row"><input type="text" id="find-name" placeholder="Name of someone in the network" style="flex:1;min-width:220px">
+    <button class="primary" onclick="openPerson($('find-name').value)">Look up</button></div>
+  <div id="find-msg" class="msg small"></div>
+</div>
+
+<div id="person" class="panel hidden">
+  <h2 id="p-name"></h2>
+  <div id="p-notices"></div>
+  <div class="row" style="margin:.4rem 0 .8rem">
+    <div class="tabs" role="tablist">
+      <button id="mode-work" class="on" onclick="setMode('work')">Work contact</button>
+      <button id="mode-personal" onclick="setMode('personal')">Personal contact</button>
+    </div>
+    <label class="small">Account: <select id="p-account" onchange="renderProviders()"></select></label>
+  </div>
+  <div class="grid">
+    <label>Company <input type="text" id="p-company" list="p-employers" placeholder="Current employer"></label>
+    <datalist id="p-employers"></datalist>
+    <label>Company web domain <input type="text" id="p-domain" placeholder="acme.com"></label>
+    <label>LinkedIn URL <input type="text" id="p-linkedin" placeholder="https://www.linkedin.com/in/…"></label>
+    <label id="p-location-wrap" class="hidden">City, state <input type="text" id="p-location" placeholder="Seattle, WA"></label>
+  </div>
+  <p class="small muted">The name always comes from the network record. Check the company: the right employer is what makes a match.</p>
+  <div class="row" id="p-providers"></div>
+  <div id="p-msg" class="msg small"></div>
+  <div id="p-results"></div>
+  <h3>Or search on a provider's own site</h3>
+  <div class="row small" id="p-links"></div>
+  <div id="p-self" class="hidden" style="margin-top:1rem">
+    <div class="notice small">This looks like you. <button class="link" onclick="$('blk-name').value=state.person.node; $('block').scrollIntoView()">Switch lookups about yourself off</button></div>
+  </div>
+</div>
+
+<div id="keys" class="panel hidden">
+  <h2>Your provider accounts</h2>
+  <p class="small muted">Paste an API key from your own account with a provider. Keys are stored encrypted and shown back
+  only as their last 4 characters. A workspace admin can also set one key for the whole team.</p>
+  <div class="tbl"><table><thead><tr><th>Provider</th><th>Returns</th><th>Your key</th><th id="team-col">Team keys</th></tr></thead>
+  <tbody id="key-rows"></tbody></table></div>
+  <div id="key-msg" class="msg small"></div>
+</div>
+
+<div id="block" class="panel hidden">
+  <h2>Switch lookups about yourself off</h2>
+  <p class="small muted">If you're in the network, you can stop subscribers looking up your personal contact details,
+  or all contact details, through hooconnex. This takes effect immediately. If the name doesn't match your account,
+  we'll confirm it's you before it's final, and the block stays on while we do.</p>
+  <div class="row">
+    <input type="text" id="blk-name" placeholder="Your name as it appears in the network" style="flex:1;min-width:220px">
+    <select id="blk-scope"><option value="personal">Personal details (home address, personal email, mobile)</option>
+      <option value="all">All contact details</option></select>
+  </div>
+  <textarea id="blk-note" rows="2" style="width:100%;margin-top:.5rem" placeholder="Optional: anything that helps us confirm it's you (e.g. your employer, a work email)"></textarea>
+  <div class="row" style="margin-top:.5rem"><button class="primary" onclick="requestBlock()">Switch off</button></div>
+  <div id="blk-msg" class="msg small"></div>
+  <div class="tbl"><table><tbody id="blk-rows"></tbody></table></div>
+</div>
+
+<div id="pending" class="panel hidden">
+  <h2>Blocks waiting for confirmation (site admin)</h2>
+  <div class="tbl"><table><thead><tr><th>Person</th><th>Scope</th><th>Requested by</th><th>Note</th><th></th></tr></thead>
+  <tbody id="pending-rows"></tbody></table></div>
+</div>
+
+<div id="history" class="panel hidden">
+  <h2>Your recent lookups</h2>
+  <div class="tbl"><table><thead><tr><th>When</th><th>Person</th><th>Provider</th><th>Mode</th><th>Outcome</th></tr></thead>
+  <tbody id="hist-rows"></tbody></table></div>
+</div>
+
+<script>
+const state = { s: null, person: null, mode: 'work' };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(path, opts = {}) {
+  if (opts.json !== undefined) { opts.body = JSON.stringify(opts.json); opts.headers = {'Content-Type': 'application/json'}; delete opts.json; }
+  const r = await fetch(path, opts);
+  let body = null; try { body = await r.json(); } catch (e) {}
+  if (!r.ok) { const e = new Error((body && (body.error || body.detail)) || ('HTTP ' + r.status)); e.code = body && body.code; throw e; }
+  return body;
+}
+function show(id, on) { $(id).classList.toggle('hidden', !on); }
+function msg(id, text, ok) { $(id).className = 'msg small ' + (ok ? 'ok' : 'err'); $(id).textContent = text || ''; }
+const when = s => (s || '').replace('T', ' ').slice(0, 16);
+
+async function init() {
+  const s = state.s = await api('/api/lookup/status');
+  show('agreement', !s.agreement_accepted);
+  const ready = s.agreement_accepted;
+  show('cert', ready && !s.certified);
+  show('cert-done', ready && !!s.certified);
+  if (s.certified) $('cert-done').textContent = 'Purpose certified ' + when(s.certified.accepted_at) + ' (' + s.certified.purpose + ').';
+  $('cert-list').innerHTML = s.cert_statements.map(t => '<li>' + esc(t) + '</li>').join('');
+  $('cert-purpose').innerHTML = '<option value="">Choose…</option>' + s.purposes.map(p => `<option>${esc(p)}</option>`).join('');
+  ['find', 'keys', 'block', 'history'].forEach(id => show(id, ready));
+  renderKeys();
+  renderBlocks();
+  if (ready) loadHistory();
+  const name = new URLSearchParams(location.search).get('name');
+  if (ready && name && !state.person) openPerson(name);
+  else if (state.person) renderProviders();
+  if (!$('blk-name').value && s.account_name) $('blk-name').value = s.account_name;
+}
+
+async function acceptAgreement() { await api('/api/agreement/accept', { method: 'POST' }); init(); }
+
+async function certify() {
+  try {
+    await api('/api/lookup/certify', { method: 'POST', json: { purpose: $('cert-purpose').value, accept: $('cert-accept').checked } });
+    init();
+  } catch (e) { msg('cert-msg', e.message); }
+}
+
+// --- provider keys ---
+function adminWs() { return (state.s.workspaces || []).filter(w => w.role === 'admin'); }
+function renderKeys() {
+  const s = state.s, aw = adminWs();
+  show('team-col', aw.length > 0);
+  $('key-rows').innerHTML = s.providers.map(p => {
+    const mine = p.my_key ? `<code>${esc(p.my_key)}</code> <button class="link" onclick="delKey('${p.id}')">remove</button>`
+      : `<span class="row"><input type="password" id="k-${p.id}" placeholder="API key" autocomplete="off" style="width:11rem">
+         <button onclick="saveKey('${p.id}')">Save</button></span>`;
+    const team = aw.map(w => {
+      const k = p.team_keys[String(w.id)];
+      return `<div class="small">${esc(w.name)}: ` + (k ? `<code>${esc(k)}</code> <button class="link" onclick="delKey('${p.id}', ${w.id})">remove</button>`
+        : `<input type="password" id="k-${p.id}-${w.id}" placeholder="team key" autocomplete="off" style="width:9rem"> <button onclick="saveKey('${p.id}', ${w.id})">Save</button>`) + '</div>';
+    }).join('');
+    return `<tr><td><b>${esc(p.label)}</b><br><a class="small" href="${esc(p.site)}" target="_blank" rel="noopener">get a key</a></td>
+      <td class="small">${p.modes.join(' + ')}<br><span class="muted">${esc(p.note)}</span></td><td>${mine}</td>${aw.length ? '<td>' + team + '</td>' : ''}</tr>`;
+  }).join('');
+}
+async function saveKey(provider, wsId) {
+  const el = $('k-' + provider + (wsId ? '-' + wsId : ''));
+  try {
+    await api('/api/lookup/keys', { method: 'PUT', json: { provider, key: el.value, ws_id: wsId || null } });
+    msg('key-msg', 'Saved.', true); init();
+  } catch (e) { msg('key-msg', e.message); }
+}
+async function delKey(provider, wsId) {
+  try { await api('/api/lookup/keys/' + provider + (wsId ? '?ws_id=' + wsId : ''), { method: 'DELETE' }); msg('key-msg', 'Removed.', true); init(); }
+  catch (e) { msg('key-msg', e.message); }
+}
+
+// --- a person ---
+async function openPerson(name) {
+  msg('find-msg', '');
+  if (!name || !name.trim()) return;
+  try {
+    const p = state.person = await api('/api/lookup/person?name=' + encodeURIComponent(name.trim()));
+    $('find-name').value = p.label;
+    $('p-name').textContent = p.label;
+    const n = [];
+    if (p.work_blocked) n.push(`<div class="notice stop small">${esc(p.name)} has switched contact lookups through hooconnex off.</div>`);
+    else if (p.personal_blocked) n.push(`<div class="notice small">Personal details are not available: ${esc(p.protected || p.personal_blocked)}. Work contact lookups are allowed.</div>`);
+    $('p-notices').innerHTML = n.join('');
+    $('p-employers').innerHTML = p.employers.map(e => `<option value="${esc(e)}">`).join('');
+    $('p-company').value = p.employers[0] || '';
+    $('p-domain').value = ''; $('p-linkedin').value = ''; $('p-location').value = ''; $('p-results').innerHTML = ''; msg('p-msg', '');
+    show('p-self', p.is_you);
+    show('person', true);
+    setMode(p.personal_blocked ? 'work' : state.mode);
+    history.replaceState(null, '', '/contact-lookup?name=' + encodeURIComponent(p.node));
+  } catch (e) { show('person', false); msg('find-msg', e.message); }
+}
+function setMode(m) {
+  const p = state.person;
+  if (m === 'personal' && p && p.personal_blocked) m = 'work';
+  state.mode = m;
+  $('mode-work').classList.toggle('on', m === 'work');
+  $('mode-personal').classList.toggle('on', m === 'personal');
+  $('mode-personal').disabled = !!(p && p.personal_blocked);
+  show('p-location-wrap', m === 'personal');
+  renderProviders();
+}
+function renderProviders() {
+  const s = state.s, p = state.person;
+  if (!p) return;
+  const accts = [{ v: '', label: 'My keys' }].concat((s.workspaces || []).map(w => ({ v: String(w.id), label: w.name + ' (team keys)' })));
+  const cur = $('p-account').value;
+  $('p-account').innerHTML = accts.map(a => `<option value="${a.v}">${esc(a.label)}</option>`).join('');
+  $('p-account').value = accts.some(a => a.v === cur) ? cur : '';
+  const ws = $('p-account').value;
+  const usable = s.providers.filter(x => x.modes.includes(state.mode) && (ws ? x.team_keys[ws] : x.my_key));
+  const blocked = p.work_blocked || (state.mode === 'personal' && p.personal_blocked);
+  const left = s.daily_cap[state.mode] - (s.used_today[state.mode] || 0);
+  $('p-providers').innerHTML = blocked ? '' : (usable.length
+    ? usable.map(x => `<button class="primary" ${s.certified ? '' : 'disabled'} onclick="run('${x.id}', this)">Ask ${esc(x.label)}</button>`).join('')
+      + `<span class="small muted">${left} ${state.mode} lookups left today</span>`
+    : `<span class="small muted">No ${state.mode === 'personal' ? 'personal-capable ' : ''}provider key ${ws ? 'for this team' : 'saved'} yet. Add one under "Your provider accounts" below.</span>`);
+  const L = p.links[state.mode] || [];
+  $('p-links').innerHTML = L.length ? L.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join(' · ')
+    : '<span class="muted">None for this person.</span>';
+}
+async function run(provider, btn) {
+  const p = state.person;
+  btn.disabled = true; const t = btn.textContent; btn.textContent = 'Asking…'; msg('p-msg', '');
+  try {
+    const d = await api('/api/lookup/run', { method: 'POST', json: {
+      name: p.node, provider, mode: state.mode, company: $('p-company').value, domain: $('p-domain').value,
+      linkedin: $('p-linkedin').value, location: $('p-location').value, ws_id: $('p-account').value ? +$('p-account').value : null } });
+    const label = state.s.providers.find(x => x.id === provider).label;
+    let h = `<h3>${esc(label)}: ` + ({ found: 'found', no_match: 'no match', pending: 'still searching', opted_out: 'opted out' }[d.outcome] || d.outcome)
+      + (d.confidence != null ? ` <span class="tag">confidence ${esc(d.confidence)}</span>` : '') + '</h3>';
+    if (d.note) h += `<div class="small muted">${esc(d.note)}</div>`;
+    h += d.items.map(i => `<div class="result"><span class="tag">${esc(i.kind)} ${esc(i.type)}</span><code>${esc(i.value)}</code>`
+      + (i.detail ? `<span class="small muted">${esc(i.detail)}</span>` : '')
+      + `<button class="link small" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(i.value))})">copy</button></div>`).join('');
+    h += `<div class="small muted">Searched for: ${esc(Object.values(d.queried).join(' · '))}. Not saved by hooconnex; copy what you need.</div>`;
+    $('p-results').insertAdjacentHTML('afterbegin', h);
+    state.s.used_today[state.mode] = (state.s.used_today[state.mode] || 0) + 1;
+    loadHistory();
+  } catch (e) {
+    msg('p-msg', e.message);
+    if (e.code === 'certification_required') init();
+  }
+  btn.disabled = false; btn.textContent = t;
+  renderProviders();
+}
+
+// --- blocks ---
+function renderBlocks() {
+  const s = state.s;
+  $('blk-rows').innerHTML = (s.my_blocks || []).map(b => `<tr><td>${esc(b.node)}</td><td>${b.scope === 'all' ? 'all details' : 'personal details'}</td>
+    <td>${b.status === 'verified' ? '<span style="color:var(--ok)">in effect</span>' : '<span style="color:var(--warn)">in effect, being confirmed</span>'}</td>
+    <td><button class="link" onclick="unblock(${b.id})">turn back on</button></td></tr>`).join('');
+  show('pending', !!s.site_admin && (s.pending_blocks || []).length > 0);
+  $('pending-rows').innerHTML = (s.pending_blocks || []).map(b => `<tr><td>${esc(b.node)}</td><td>${esc(b.scope)}</td><td>${esc(b.requested_by)}</td>
+    <td class="small">${esc(b.note)}</td><td><button onclick="decide(${b.id}, true)">Confirm</button> <button onclick="decide(${b.id}, false)">Reject</button></td></tr>`).join('');
+}
+async function requestBlock() {
+  try {
+    const d = await api('/api/lookup/block', { method: 'POST', json: { name: $('blk-name').value, scope: $('blk-scope').value, note: $('blk-note').value } });
+    msg('blk-msg', d.status === 'verified' ? 'Done. Lookups about you are switched off.' : 'Switched off now. We\'ll confirm it\'s you.', true);
+    $('blk-note').value = '';
+    await init();
+    if (state.person) openPerson(state.person.node);
+  } catch (e) { msg('blk-msg', e.message); }
+}
+async function unblock(id) { try { await api('/api/lookup/block/' + id, { method: 'DELETE' }); init(); } catch (e) { msg('blk-msg', e.message); } }
+async function decide(id, approve) { try { await api('/api/lookup/block/' + id + '/decide', { method: 'POST', json: { approve } }); init(); } catch (e) { alert(e.message); } }
+
+async function loadHistory() {
+  try {
+    const d = await api('/api/lookup/history');
+    $('hist-rows').innerHTML = d.lookups.map(l => `<tr><td class="small">${esc(when(l.at))}</td><td>${esc(l.person)}</td><td>${esc(l.provider)}</td>
+      <td>${esc(l.mode)}</td><td>${esc(l.outcome)}${l.n_items ? ' (' + l.n_items + ')' : ''}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">None yet.</td></tr>';
+  } catch (e) {}
+}
+
+init().catch(e => { document.querySelector('main').insertAdjacentHTML('beforeend', '<p class="msg err">' + esc(e.message) + '</p>'); });
+</script>
+</main></body>
+</html>
