@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import networkx as nx
 import igraph as ig
 from fastapi import FastAPI, Query, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field, ConfigDict
 import base64
 import pysodium
@@ -536,6 +536,31 @@ async def startup():
         try:
             secret = base64.b64decode(secret_b64, validate=True)
             version = int(os.environ.get("CONTACT_PSI_KEY_VERSION", "1"))
+            exact_parts = [manifest_dir / contact_psi_manifest.exact_filename(i)
+                           for i in range(contact_psi_manifest.EXACT_PARTS)]
+            if all(p.exists() for p in exact_parts):
+                # compact format 2 (2026-11-15): the exact tier is downloaded
+                # whole by every browser; fuzzy shards only for small uploads
+                fuzzy = sorted(manifest_dir.glob("contact_psi_fuzzy_*.bin"))
+                digest = hashlib.sha256()
+                for p in exact_parts + fuzzy:
+                    st = p.stat()
+                    digest.update(f"{p.name}:{st.st_size}:{int(st.st_mtime)}".encode())
+                v = digest.hexdigest()[:16]
+                contact_psi_app.configure(secret, version, None, {
+                    "key_version": version, "format": 2,
+                    "exact_urls": [f"/api/contacts/manifest-exact/{i}?v={v}" for i in range(len(exact_parts))],
+                    "exact_bytes": sum(p.stat().st_size for p in exact_parts),
+                    "exact_prefix_bytes": contact_psi_manifest.COMPACT_PREFIX_BYTES,
+                    "tag_bytes": contact_psi_manifest.COMPACT_TAG_BYTES,
+                    "fuzzy_batch_url": "/api/contacts/manifest-fuzzy",
+                    "fuzzy_batch_max": FUZZY_SHARD_BATCH_MAX,
+                    "fuzzy_max_contacts": PSI_FUZZY_MAX_CONTACTS,
+                    "fuzzy_min_shards": PSI_FUZZY_MIN_SHARDS,
+                    "manifest_digest": digest.hexdigest(),
+                    "built_at": datetime.now(timezone.utc).isoformat(),
+                })
+                return
             shard_files = sorted(manifest_dir.glob("contact_psi_manifest_*.json.gz"))
             if not shard_files:
                 raise ValueError("no manifest shards found")
@@ -2219,13 +2244,15 @@ class OPRFEvalResponse(BaseModel):
     key_version: int
     points: list[str]
 
-# The daily quota (contact_psi.app.DAILY_MAX_POINTS, ~1,000 contacts at 5
-# points each) stops anyone dumping the network through the OPRF. A team
-# member's first upload is often bigger, so each logged-in user also gets ONE
-# bulk allowance of 10,000 contacts: it starts with the first request the
-# daily quota can't cover and closes 24 hours later. Kept in the app DB so a
-# deploy doesn't reset it; a site admin can grant another.
-PSI_POINTS_PER_CONTACT = 5          # exact + phonetic + 3 LSH bands (contact_psi.keys.BANDS)
+# The daily quota (contact_psi.app.DAILY_MAX_POINTS) stops anyone dumping the
+# network through the OPRF. Since the compact manifest (format 2) a contact
+# costs 2 points (exact + phonetic) in files of up to PSI_FUZZY_MAX_CONTACTS,
+# and 1 (exact only) in bigger ones. A team member's first upload is often
+# big, so each logged-in user also gets ONE bulk allowance of 10,000 contacts:
+# it starts with the first request the daily quota can't cover and closes 24
+# hours later. Kept in the app DB so a deploy doesn't reset it; a site admin
+# can grant another.
+PSI_POINTS_PER_CONTACT = 1          # bulk files are exact-only
 PSI_BULK_CONTACTS = 10_000
 PSI_BULK_MAX_POINTS = PSI_BULK_CONTACTS * PSI_POINTS_PER_CONTACT
 PSI_BULK_WINDOW_S = 24 * 3600
@@ -2346,6 +2373,45 @@ async def contacts_manifest_shard(shard: str):
     if not path.exists():
         return JSONResponse(status_code=404, content={"detail": "contact manifest shard unavailable"})
     return FileResponse(path, media_type="application/gzip", headers={"Cache-Control": "public, max-age=86400"})
+
+@app.get("/api/contacts/manifest-exact/{part}")
+async def contacts_manifest_exact(part: int):
+    """One part of the exact-name tier (compact format 2). Every browser
+    fetches every part, so the download says nothing about its contacts.
+    The URL carries a version (?v=) so it can be cached for good."""
+    if not 0 <= part < contact_psi_manifest.EXACT_PARTS:
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    path = DATA_DIR / "contact_psi_manifest" / contact_psi_manifest.exact_filename(part)
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"detail": "contact manifest unavailable"})
+    return FileResponse(path, media_type="application/octet-stream",
+                        headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
+FUZZY_SHARD_BATCH_MAX = 64
+PSI_FUZZY_MAX_CONTACTS = 1000   # larger files are checked by exact name only
+PSI_FUZZY_MIN_SHARDS = 32       # the browser pads its fuzzy requests with random shards
+
+
+class FuzzyShardsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    shards: list[str]
+
+
+@app.post("/api/contacts/manifest-fuzzy")
+async def contacts_manifest_fuzzy(body: FuzzyShardsRequest):
+    """Several phonetic-tier shards in one response: for each, 1 byte shard id
+    + 4-byte little-endian length + the compact file (missing shards: length 0)."""
+    if not body.shards or len(body.shards) > FUZZY_SHARD_BATCH_MAX \
+            or not all(re.fullmatch(r"[0-9a-f]{2}", s) for s in body.shards):
+        return JSONResponse(status_code=400, content={"detail": f"1-{FUZZY_SHARD_BATCH_MAX} two-hex-digit shard ids"})
+    out = []
+    for s in dict.fromkeys(body.shards):
+        p = DATA_DIR / "contact_psi_manifest" / contact_psi_manifest.fuzzy_filename(s)
+        data = p.read_bytes() if p.exists() else b""
+        out.append(bytes([int(s, 16)]) + len(data).to_bytes(4, "little") + data)
+    return Response(b"".join(out), media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
 
 class ManifestShardsBatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -4770,6 +4836,10 @@ _PROTECTED_ORG_RE = re.compile(
     r"district attorney|prosecutors?|prosecuting attorney|attorney'?s office|state'?s attorney|"
     r"board of elections?|elections? (?:board|commission|office|division|department)|registrar of voters|"
     r"supervisor of elections|county clerk)\b", re.I)
+# Only a job-type link to such a body counts: a LittleSis "professional" or
+# "other" tie to the FBI (Peter Thiel, as an informant) is not a role there.
+_PROTECTED_ROLE_CATS = {"PUBLIC_OFFICE", "EMPLOYMENT", "CO_EXECUTIVE", "STAFF_AIDE", "FELLOW_OFFICEHOLDER"}
+_EMPLOYER_CAT_RANK = {"CO_EXECUTIVE": 0, "SEC_INSIDER": 1, "EMPLOYMENT": 2, "CO_DIRECTOR": 3, "FOUNDER": 4}
 _PROTECTED_LABEL_RE = re.compile(r"\b(judge|justice|magistrate|sheriff|police|prosecutor|district attorney)\b", re.I)
 
 
@@ -4829,7 +4899,7 @@ def _lookup_protected(node, neighbors=None):
     for label, cats in (neighbors if neighbors is not None else _lookup_neighbors(node)):
         if "FELLOW_OFFICEHOLDER" in cats:
             return "serves or served as a judge or in a similar office"
-        if set(cats) - {"DONATION"} and _PROTECTED_ORG_RE.search(label or ""):
+        if set(cats) & _PROTECTED_ROLE_CATS and _PROTECTED_ORG_RE.search(label or ""):
             return f"connected to {label} (courts, law enforcement, prosecutors and election offices are protected)"
     return None
 
@@ -4958,9 +5028,14 @@ async def lookup_person(request: Request, name: str = Query(..., max_length=300)
     m = re.search(r"\(([^)]*)\)\s*$", label)
     if m:
         employers.append(m.group(1))
+    ranked = []
     for olabel, cats in neighbors:
-        if {"EMPLOYMENT", "CO_EXECUTIVE", "CO_DIRECTOR", "SEC_INSIDER", "FOUNDER"} & set(cats) \
-                and not _looks_like_person(olabel) and olabel not in employers:
+        r = min((_EMPLOYER_CAT_RANK[c] for c in cats if c in _EMPLOYER_CAT_RANK), default=None)
+        if r is None or _looks_like_person(olabel) or ("EDUCATION" in cats and r > 1):
+            continue   # schools someone attended aren't employers
+        ranked.append((r, olabel))
+    for _r, olabel in sorted(ranked, key=lambda x: x[0]):
+        if olabel not in employers:
             employers.append(olabel)
     return {"node": node, "name": _cl.base_name(label), "label": label,
             "protected": protected, "block": block,
@@ -7937,6 +8012,132 @@ for (const c of 'mn') CONTACT_PSI_SOUNDEX[c] = '5';
 CONTACT_PSI_SOUNDEX['r'] = '6';
 for (const c of 'aeiouy') CONTACT_PSI_SOUNDEX[c] = '0';
 
+// --- Compact contact-matching manifest (format 2, contact_psi/manifest.py) ---
+// The exact-name tier is downloaded WHOLE (and cached in the browser), so
+// the download says nothing about which contacts are being checked. The
+// sound-alike tier comes in 256 small shards; we ask for the ones we need
+// plus random others, in random order.
+async function contactPsiFetchCached(url, onChunk) {
+  const abs = new URL(url, location.href).href;
+  let cache = null;
+  try { cache = await caches.open('contact-psi-v2'); } catch (e) {}
+  if (cache) {
+    try { const hit = await cache.match(abs); if (hit) return new Uint8Array(await hit.arrayBuffer()); } catch (e) {}
+  }
+  const res = await fetch(abs);
+  if (!res.ok) throw new Error('Could not download the private matching file (HTTP ' + res.status + ') -- try again.');
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); got += value.length;
+    if (onChunk) onChunk(value.length);
+  }
+  const buf = new Uint8Array(got);
+  let o = 0;
+  for (const c of chunks) { buf.set(c, o); o += c.length; }
+  if (cache) {
+    try {
+      const base = abs.split('?')[0];
+      for (const k of await cache.keys()) if (k.url.split('?')[0] === base && k.url !== abs) await cache.delete(k);
+      await cache.put(abs, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }));
+    } catch (e) {}
+  }
+  return buf;
+}
+
+function contactPsiParseCompact(buf, prefixBytes) {
+  if (buf[0] !== 0x50 || buf[1] !== 0x53 || buf[2] !== 0x49 || buf[3] !== 0x58) throw new Error('The matching file is damaged -- try again.');
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const n = dv.getUint32(9, true);
+  const p0 = 13, o0 = p0 + n * prefixBytes;
+  return { buf, dv, n, p0, o0, b0: o0 + (n + 1) * 4, pb: prefixBytes };
+}
+
+function contactPsiCompactFind(f, key) {
+  const cmp = i => { const base = f.p0 + i * f.pb; for (let j = 0; j < f.pb; j++) { const d = f.buf[base + j] - key[j]; if (d) return d; } return 0; };
+  let lo = 0, hi = f.n;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (cmp(mid) < 0) lo = mid + 1; else hi = mid; }
+  const out = [];
+  for (let i = lo; i < f.n && cmp(i) === 0; i++) {
+    const a = f.dv.getUint32(f.o0 + i * 4, true), b = f.dv.getUint32(f.o0 + (i + 1) * 4, true);
+    out.push(f.buf.subarray(f.b0 + a, f.b0 + b));
+  }
+  return out;
+}
+
+async function contactPsiCompactLookup(queries, meta, loading, sha256, textBytes, concatBytes) {
+  const pb = meta.exact_prefix_bytes || 6, tagBits = (meta.tag_bytes || 12) * 8;
+  const decryptAll = async (q, cts) => {
+    if (!cts.length) return;
+    const k = await crypto.subtle.importKey('raw', q.aesKeyBytes, 'AES-GCM', false, ['decrypt']);
+    const iv = (await sha256(concatBytes(textBytes('contact-psi-nonce-v1'), q.aesKeyBytes))).slice(0, 12);
+    for (const ct of cts) {
+      try {
+        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, tagLength: tagBits }, k, ct);
+        const found = new TextDecoder().decode(pt).split('\n').filter(Boolean);
+        (q.payloads || (q.payloads = [])).push({ matches: found.map(n => ({ id: n, name: n })) });
+      } catch (e) { /* another key with the same prefix -- expected */ }
+    }
+  };
+  // 1. exact names: every part, always
+  const totalMB = Math.max(1, Math.round((meta.exact_bytes || 0) / 1e6));
+  let got = 0;
+  const show = () => {
+    loading.innerHTML = `<span class="psi-spinner"></span> Downloading the private matching file `
+      + `(${Math.round(got / 1e6)} of ~${totalMB} MB; your browser keeps it for next time)…`;
+  };
+  const parts = [];
+  for (const url of meta.exact_urls) parts.push(contactPsiParseCompact(await contactPsiFetchCached(url, n => { got += n; show(); }), pb));
+  loading.innerHTML = '<span class="psi-spinner"></span> Matching…';
+  for (const q of queries) {
+    if (q.tier !== 'exact') continue;
+    await decryptAll(q, contactPsiCompactFind(parts[Math.floor(q.aesKeyBytes[0] * parts.length / 256)], q.aesKeyBytes));
+  }
+  // 2. sound-alike names: needed shards + random padding, shuffled
+  const fq = queries.filter(q => q.tier === 'phonetic');
+  if (!fq.length) return { gaveUp: 0, fuzzyShards: 0 };
+  const hex = b => b.toString(16).padStart(2, '0');
+  const want = new Set(fq.map(q => hex(q.aesKeyBytes[0])));
+  const minShards = Math.min(256, meta.fuzzy_min_shards || 32);
+  while (want.size < minShards) want.add(hex(crypto.getRandomValues(new Uint8Array(1))[0]));
+  const ids = [...want];
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+  const shards = {};
+  let gaveUp = 0;
+  const max = meta.fuzzy_batch_max || 64;
+  for (let i = 0; i < ids.length; i += max) {
+    const batch = ids.slice(i, i + max);
+    let res = null;
+    for (let attempt = 0; attempt < 4 && !(res && res.ok); attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, 500 * attempt));
+      try {
+        res = await fetch(meta.fuzzy_batch_url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                  body: JSON.stringify({ shards: batch }) });
+      } catch (e) { res = null; }
+    }
+    if (!(res && res.ok)) { gaveUp += batch.length; continue; }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const dv = new DataView(buf.buffer);
+    for (let o = 0; o + 5 <= buf.length; ) {
+      const id = hex(buf[o]), len = dv.getUint32(o + 1, true);
+      o += 5;
+      if (len) shards[id] = contactPsiParseCompact(buf.subarray(o, o + len), pb);
+      o += len;
+    }
+  }
+  for (const q of fq) {
+    const f = shards[hex(q.aesKeyBytes[0])];
+    if (f) await decryptAll(q, contactPsiCompactFind(f, q.aesKeyBytes));
+  }
+  return { gaveUp, fuzzyShards: ids.length };
+}
+
 function contactPsiNormalizeExact(name) {
   let text = String(name).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   text = text.replace(/[-'.,]/g, ' ').replace(/[^a-z0-9\s]/g, '');
@@ -8644,13 +8845,17 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
 
     // Build every (contact, tier, item) query, keeping a back-reference to
     // the contact for possible-tier re-verification.
+    // Compact manifest (format 2): exact always, sound-alike only for files of
+    // up to meta.fuzzy_max_contacts, no LSH "possible" tier.
+    const compact = meta.format === 2;
+    const fuzzyOn = !compact || names.length <= (meta.fuzzy_max_contacts || 1000);
     const queries = [];
     for (const name of names) {
       const exact = contactPsiNormalizeExact(name);
       if (exact) queries.push({ name, tier: 'exact', item: exact });
-      const phonetic = contactPsiPhoneticKey(name);
+      const phonetic = fuzzyOn ? contactPsiPhoneticKey(name) : null;
       if (phonetic) queries.push({ name, tier: 'phonetic', item: phonetic });
-      for (const token of contactPsiLshBandTokens(name)) queries.push({ name, tier: 'possible', item: token });
+      if (!compact) for (const token of contactPsiLshBandTokens(name)) queries.push({ name, tier: 'possible', item: token });
     }
 
     // Refuse up front, before any quota is spent, if the file is bigger than
@@ -8720,11 +8925,17 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
     // user. Batch many shard IDs into few POST requests instead -- total
     // data transferred is unchanged, but request COUNT (what the rate limit
     // actually counts) drops by ~20x.
-    const neededShardIds = [...new Set(queries.map(q => q.shardId))];
+    const neededShardIds = compact ? [] : [...new Set(queries.map(q => q.shardId))];
     const batchUrl = meta.manifest_shards_batch_url || '/api/contacts/manifest-shards';
     const batchMax = meta.manifest_shards_batch_max || 25;
     const buckets = {};
     let shardsGaveUp = 0;
+    let shardsTotal = neededShardIds.length;
+    if (compact) {
+      const r = await contactPsiCompactLookup(queries, meta, loading, sha256, textBytes, concatBytes);
+      shardsGaveUp = r.gaveUp;
+      shardsTotal = r.fuzzyShards;
+    }
     async function fetchBatch(shardIds) {
       for (let attempt = 0; ; attempt++) {
         let response;
@@ -8765,18 +8976,22 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
     // and the server-side order is by degree, not by who the contact is.
     const candsByContact = {};
     for (const q of queries) {
-      const aesKeyBytes = q.aesKeyBytes;
-      const entries = buckets[q.prefix] || [];
-      if (!entries.length) continue;
-      const cryptoKey = await crypto.subtle.importKey('raw', aesKeyBytes, 'AES-GCM', false, ['decrypt']);
-      for (const entry of entries) {
-        let payload;
-        try {
-          const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(entry.nonce) }, cryptoKey, fromB64(entry.ct));
-          payload = JSON.parse(new TextDecoder().decode(pt));
-        } catch (e) {
-          continue; // wrong key for this bucket (prefix collision) -- expected, not an error
+      let payloads = q.payloads;   // compact format: already looked up
+      if (!payloads) {
+        payloads = [];
+        const entries = buckets[q.prefix] || [];
+        if (!entries.length) continue;
+        const cryptoKey = await crypto.subtle.importKey('raw', q.aesKeyBytes, 'AES-GCM', false, ['decrypt']);
+        for (const entry of entries) {
+          try {
+            const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(entry.nonce) }, cryptoKey, fromB64(entry.ct));
+            payloads.push(JSON.parse(new TextDecoder().decode(pt)));
+          } catch (e) {
+            // wrong key for this bucket (prefix collision) -- expected, not an error
+          }
         }
+      }
+      for (const payload of payloads) {
         for (const m of payload.matches || []) {
           // Both phonetic and possible tiers are many-to-one (many
           // distinct real names can share one Soundex code or LSH band --
@@ -8816,7 +9031,7 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
     };
     psiCandidates = {};
     const warningHtml = shardsGaveUp > 0
-      ? `<div style="color:#d29922;margin-top:6px;">Note: ${shardsGaveUp} of ${neededShardIds.length} lookup shard${shardsGaveUp === 1 ? '' : 's'} `
+      ? `<div style="color:#d29922;margin-top:6px;">Note: ${shardsGaveUp} of ${shardsTotal} lookup shard${shardsGaveUp === 1 ? '' : 's'} `
         + `couldn’t be reached after retrying — a few matches may be missing. Try again in a moment for a complete check.</div>`
       : '';
     if (!matchedContacts.length) {

@@ -19,7 +19,10 @@ NODES = {"jane doe": "Jane Doe", "judge dredd": "Judge Dredd", "mark greene (acm
 NEIGHBORS = {"Jane Doe": [("Acme Corp", ["EMPLOYMENT"]), ("Jane's PAC", ["DONATION"])],
              "Judge Dredd": [("Superior Court of Mega City", ["PUBLIC_OFFICE"])],
              "Judy Ruiz": [("Ruiz Bakery LLC", ["EMPLOYMENT"])],
-             "Mark Greene (Acme Corp)": [("Springfield Police Department", ["DONATION"])]}   # a donation isn't a role
+             "Mark Greene (Acme Corp)": [("Springfield Police Department", ["DONATION"]),     # a donation isn't a role
+                                         ("Federal Bureau of Investigation", ["PROFESSIONAL"]),  # nor an informant tie
+                                         ("Springfield University", ["EDUCATION", "EMPLOYMENT"]),
+                                         ("Acme Corp", ["CO_EXECUTIVE"])]}
 
 PDL_HIT = {"status": 200, "likelihood": 8, "data": {
     "work_email": "jane@acme.com", "personal_emails": ["janed@gmail.com"], "mobile_phone": "+15551234567",
@@ -132,7 +135,8 @@ def test_protected_people_get_no_personal_lookups(client, setup):
     assert client.post("/api/lookup/run", json={"name": "Judge Dredd", "provider": "pdl", "mode": "work",
                                                 "company": "Court"}, headers=ANN).status_code == 200
     # a donation to a police union PAC doesn't make someone protected; the name is never client-chosen
-    assert not client.get("/api/lookup/person", params={"name": "Mark Greene (Acme Corp)"}, headers=ANN).json()["protected"]
+    mg = client.get("/api/lookup/person", params={"name": "Mark Greene (Acme Corp)"}, headers=ANN).json()
+    assert not mg["protected"] and mg["employers"] == ["Acme Corp"]   # label's employer first, school dropped
     r = client.post("/api/lookup/run", json={"name": "Mark Greene (Acme Corp)", "provider": "pdl", "mode": "work"},
                     headers=ANN)
     assert calls[-1][2]["name"] == "Mark Greene"

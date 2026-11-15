@@ -176,3 +176,167 @@ def lookup(manifest, aes_key: bytes) -> list[dict]:
         except Exception:
             continue
     return results
+
+# ---------------------------------------------------------------------------
+# Compact format (format 2, 2026-11-15).
+#
+# Why: with 256 JSON shards, any upload of more than ~200 contacts needed
+# nearly every shard (~1 GB in the browser), and splitting into smaller shards
+# would let whoever runs the server -- who holds the OPRF secret and so knows
+# which names land in which shard -- narrow each matched contact down to a
+# handful of names from the shard request pattern alone.
+#
+# So the EXACT tier (what nearly every match comes from) is one compact binary
+# file that every browser downloads whole and caches: the fetch reveals
+# nothing about which contacts were checked. The fuzzy tiers (phonetic + LSH)
+# are 256 compact shards fetched only for small uploads, padded with random
+# shards by the browser.
+#
+# Layout (all integers little-endian):
+#   b"PSIX" | u8 format=2 | u32 key_version | u32 N
+#   N x 6-byte key prefixes, sorted ascending (binary-searchable)
+#   (N + 1) x u32 offsets into the blob (entry i = blob[off[i]:off[i+1]])
+#   blob: AES-GCM ciphertexts with the tag truncated to 12 bytes (96-bit,
+#         allowed by GCM and WebCrypto's tagLength); nonce = first 12 bytes
+#         of sha256(b"contact-psi-nonce-v1" + key) -- each key encrypts once
+#   plaintext: the matching graph names, best first, one per line
+# Fuzzy files hold only the phonetic tier: the LSH "possible" tier was most
+# of the volume and its matches were never addable in the UI.
+# ---------------------------------------------------------------------------
+import struct
+
+COMPACT_MAGIC = b"PSIX"
+COMPACT_FORMAT = 2
+COMPACT_PREFIX_BYTES = 6
+COMPACT_TAG_BYTES = 12
+FUZZY_TIERS = ("phonetic",)
+EXACT_PARTS = 4                     # by the key's first byte (0-63, 64-127, ...): keeps each file
+                                    # under GitHub's 100 MB limit; the browser always fetches all parts
+
+
+def exact_filename(part: int) -> str:
+    return f"contact_psi_exact_{part}.bin"
+
+
+def exact_part(key: bytes) -> int:
+    return key[0] * EXACT_PARTS // 256
+
+
+def fuzzy_filename(shard_id: str) -> str:
+    return f"contact_psi_fuzzy_{shard_id}.bin"
+
+
+def compact_nonce(key: bytes) -> bytes:
+    return hashlib.sha256(b"contact-psi-nonce-v1" + key).digest()[:12]
+
+
+def _payload(matches) -> bytes:
+    return "\n".join(m["name"].replace("\n", " ").replace("\r", " ") for m in matches).encode("utf-8")
+
+
+def compact_groups(db_records):
+    """{(tier, item): [match dicts, best first, capped]} for every record."""
+    groups = defaultdict(list)
+    for record in db_records:
+        name = str(record.get("name", "")).strip()
+        if not name:
+            continue
+        match = {"id": record.get("id"), "name": name}
+        for tier, item in _items(name):
+            groups[(tier, item)].append((record.get("score", 0) or 0, match))
+    out = {}
+    for (tier, item), matches in groups.items():
+        cap = MAX_EXACT_BUNDLE_MATCHES if tier == "exact" else MAX_BUNDLE_MATCHES
+        out[(tier, item)] = [m for _, m in sorted(matches, key=lambda p: p[0], reverse=True)[:cap]]
+    return out
+
+
+def encode_compact(entries, key_version: int) -> bytes:
+    """entries: [(key32, plaintext_bytes)] -> the binary file."""
+    rows = []
+    for key, plaintext in entries:
+        ct = AESGCM(key).encrypt(compact_nonce(key), plaintext, None)[:len(plaintext) + COMPACT_TAG_BYTES]
+        rows.append((key[:COMPACT_PREFIX_BYTES], ct))
+    rows.sort(key=lambda r: r[0])
+    offsets, pos = [], 0
+    for _, ct in rows:
+        offsets.append(pos)
+        pos += len(ct)
+    offsets.append(pos)
+    head = COMPACT_MAGIC + struct.pack("<BII", COMPACT_FORMAT, int(key_version), len(rows))
+    return b"".join([head, b"".join(p for p, _ in rows), struct.pack(f"<{len(offsets)}I", *offsets),
+                     b"".join(ct for _, ct in rows)])
+
+
+def build_compact(db_records, secret_scalar: bytes, key_version: int, progress=None):
+    """-> ([exact part bytes x EXACT_PARTS], {shard_id: fuzzy file bytes}, stats)."""
+    groups = compact_groups(db_records)
+    exact, fuzzy = [], defaultdict(list)
+    for i, ((tier, item), matches) in enumerate(groups.items()):
+        if tier != "exact" and tier not in FUZZY_TIERS:
+            continue
+        key = oprf.full_eval(secret_scalar, key_version, tier, item)
+        entry = (key, _payload(matches))
+        if tier == "exact":
+            exact.append(entry)
+        else:
+            fuzzy[key[:1].hex()].append(entry)
+        if progress and i % 200_000 == 0:
+            progress(i, len(groups))
+    parts = defaultdict(list)
+    for e in exact:
+        parts[exact_part(e[0])].append(e)
+    exact_bytes = [encode_compact(parts[i], key_version) for i in range(EXACT_PARTS)]
+    fuzzy_bytes = {sid: encode_compact(e, key_version) for sid, e in fuzzy.items()}
+    return exact_bytes, fuzzy_bytes, {"exact_entries": len(exact), "fuzzy_entries": sum(map(len, fuzzy.values())),
+                                      "exact_bytes": sum(map(len, exact_bytes)),
+                                      "fuzzy_bytes": sum(map(len, fuzzy_bytes.values()))}
+
+
+def decode_compact(data: bytes):
+    """-> (key_version, prefixes list, offsets list, blob memoryview)."""
+    if data[:4] != COMPACT_MAGIC:
+        raise ValueError("not a compact PSI file")
+    fmt, kv, n = struct.unpack_from("<BII", data, 4)
+    if fmt != COMPACT_FORMAT:
+        raise ValueError(f"unknown compact format {fmt}")
+    p0 = 13
+    prefixes = [data[p0 + i * COMPACT_PREFIX_BYTES: p0 + (i + 1) * COMPACT_PREFIX_BYTES] for i in range(n)]
+    o0 = p0 + n * COMPACT_PREFIX_BYTES
+    offsets = list(struct.unpack_from(f"<{n + 1}I", data, o0))
+    return kv, prefixes, offsets, memoryview(data)[o0 + (n + 1) * 4:]
+
+
+def lookup_compact(data: bytes, aes_key: bytes) -> list[dict]:
+    """The matches for one derived key (what the browser does), for tests."""
+    import bisect
+    _kv, prefixes, offsets, blob = decode_compact(data)
+    p = aes_key[:COMPACT_PREFIX_BYTES]
+    i = bisect.bisect_left(prefixes, p)
+    out = []
+    while i < len(prefixes) and prefixes[i] == p:
+        ct = bytes(blob[offsets[i]:offsets[i + 1]])
+        try:
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            d = Cipher(algorithms.AES(aes_key), modes.GCM(compact_nonce(aes_key), ct[-COMPACT_TAG_BYTES:],
+                                                          min_tag_length=COMPACT_TAG_BYTES)).decryptor()
+            pt = d.update(ct[:-COMPACT_TAG_BYTES]) + d.finalize()
+            out += [{"name": n} for n in pt.decode("utf-8").split("\n") if n]
+        except Exception:
+            pass
+        i += 1
+    return out
+
+
+def save_compact(output_dir, exact_bytes: list, fuzzy_bytes: dict):
+    """Write the exact file and fuzzy shards, removing files of the old JSON format."""
+    os.makedirs(output_dir, exist_ok=True)
+    for f in os.listdir(output_dir):
+        if f.startswith(("contact_psi_manifest_", "contact_psi_fuzzy_", "contact_psi_exact")):
+            os.remove(os.path.join(output_dir, f))
+    for i, data in enumerate(exact_bytes):
+        with open(os.path.join(output_dir, exact_filename(i)), "wb") as h:
+            h.write(data)
+    for sid, data in fuzzy_bytes.items():
+        with open(os.path.join(output_dir, fuzzy_filename(sid)), "wb") as h:
+            h.write(data)
