@@ -40,6 +40,10 @@ def evaluate(points: list[bytes], key_version: int) -> list[bytes]:
         raise ValueError("unknown key version")
     return [oprf.eval_s(secret, point) for point in points]
 
+def remaining_daily(user: str) -> int:
+    key = (user or "anonymous", _clock().date().isoformat())
+    return max(0, DAILY_MAX_POINTS - _usage_counters.get(key, 0))
+
 def consume_quota(user: str, count: int) -> bool:
     now = _clock()
     day = now.date().isoformat()

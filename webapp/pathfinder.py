@@ -2061,7 +2061,24 @@ def _narrative_cache_key(path_steps):
     return "|".join(parts)
 
 
+_PRIVATE_STEP_RELATIONS = {"MY_LINK", "TEAM_CONTACT"}
+
+
+def _path_has_private_step(path_steps):
+    """True if any step is a user's private link or a team workspace contact."""
+    for s in path_steps or []:
+        if not isinstance(s, dict):
+            continue
+        cats = s.get("cats") or []
+        if s.get("private") or s.get("relation") in _PRIVATE_STEP_RELATIONS or s.get("team_members") \
+                or any(c in _PRIVATE_STEP_RELATIONS for c in cats if isinstance(c, str)):
+            return True
+    return False
+
+
 def _get_cached_narrative(path_obj):
+    if _path_has_private_step(path_obj.get("path")):
+        return None
     return _narrative_cache.get(_narrative_cache_key(path_obj["path"]))
 
 
@@ -2069,6 +2086,11 @@ def _generate_and_cache_narrative(path_obj):
     """Blocking (Gemini call) -- callers must run this off the event loop
     thread (see /api/narrative's run_in_executor) so a slow or hung Gemini
     request can't stall every other request on this worker."""
+    if _path_has_private_step(path_obj["path"]):
+        # A path through someone's private or team link is never cached: the
+        # cache is shared by all users, and a cached answer (or how fast it
+        # comes back) would tell another user that the private link exists.
+        return _generate_path_narrative(path_obj)
     key = _narrative_cache_key(path_obj["path"])
     cached = _narrative_cache.get(key)
     if cached is not None:
@@ -2197,6 +2219,87 @@ class OPRFEvalResponse(BaseModel):
     key_version: int
     points: list[str]
 
+# The daily quota (contact_psi.app.DAILY_MAX_POINTS, ~1,000 contacts at 5
+# points each) stops anyone dumping the network through the OPRF. A team
+# member's first upload is often bigger, so each logged-in user also gets ONE
+# bulk allowance of 10,000 contacts: it starts with the first request the
+# daily quota can't cover and closes 24 hours later. Kept in the app DB so a
+# deploy doesn't reset it; a site admin can grant another.
+PSI_POINTS_PER_CONTACT = 5          # exact + phonetic + 3 LSH bands (contact_psi.keys.BANDS)
+PSI_BULK_CONTACTS = 10_000
+PSI_BULK_MAX_POINTS = PSI_BULK_CONTACTS * PSI_POINTS_PER_CONTACT
+PSI_BULK_WINDOW_S = 24 * 3600
+
+
+def _psi_bulk_row(conn, email):
+    r = conn.execute("SELECT points_used, started_at FROM psi_bulk WHERE email = ?", (email,)).fetchone()
+    return dict(r) if r else None
+
+
+def _psi_bulk_left(email):
+    """Points left in this user's bulk allowance (0 if used up or expired)."""
+    if not email or email == "anonymous":
+        return 0
+    conn = db.connect(_ml_db())
+    try:
+        r = _psi_bulk_row(conn, email)
+    finally:
+        conn.close()
+    if r is None:
+        return PSI_BULK_MAX_POINTS
+    started = datetime.fromisoformat(r["started_at"])
+    if (datetime.now(timezone.utc) - started).total_seconds() > PSI_BULK_WINDOW_S:
+        return 0
+    return max(0, PSI_BULK_MAX_POINTS - r["points_used"])
+
+
+def _psi_bulk_take(email, n):
+    if n > _psi_bulk_left(email):
+        return False
+    conn = db.connect(_ml_db())
+    try:
+        if _psi_bulk_row(conn, email) is None:
+            conn.execute("INSERT INTO psi_bulk (email, points_used, started_at) VALUES (?, ?, ?)",
+                         (email, n, datetime.now(timezone.utc).isoformat()))
+        else:
+            conn.execute("UPDATE psi_bulk SET points_used = points_used + ? WHERE email = ?", (n, email))
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
+@app.get("/api/contacts/quota")
+async def contacts_quota(request: Request):
+    """How many contacts this user can check right now (daily + bulk)."""
+    user = _request_user_email(request) or "anonymous"
+    daily = contact_psi_app.remaining_daily(user)
+    bulk = _psi_bulk_left(user)
+    return {"points_per_contact": PSI_POINTS_PER_CONTACT, "daily_points": daily, "bulk_points": bulk,
+            "contacts_now": (daily + bulk) // PSI_POINTS_PER_CONTACT,
+            "daily_contacts": contact_psi_app.DAILY_MAX_POINTS // PSI_POINTS_PER_CONTACT,
+            "bulk_contacts": PSI_BULK_CONTACTS}
+
+
+class PsiBulkReset(BaseModel):
+    email: str = Field(..., max_length=200)
+
+
+@app.post("/api/admin/psi-bulk-reset")
+async def psi_bulk_reset(req: PsiBulkReset, request: Request):
+    """Site admin: give a user another one-time bulk allowance."""
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    conn = db.connect(_ml_db())
+    try:
+        conn.execute("DELETE FROM psi_bulk WHERE email = ?", (req.email.strip().lower(),))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True}
+
+
 @app.post("/api/contacts/oprf-eval", response_model=OPRFEvalResponse)
 async def contacts_oprf_eval(body: OPRFEvalRequest, request: Request):
     """Evaluate blinded Ristretto points without receiving contact names."""
@@ -2208,7 +2311,7 @@ async def contacts_oprf_eval(body: OPRFEvalRequest, request: Request):
     if len(body.points) > contact_psi_app.REQUEST_MAX_POINTS:
         return JSONResponse(status_code=400, content={"detail": "too many points in one request"})
     user = _request_user_email(request) or "anonymous"
-    if not contact_psi_app.consume_quota(user, len(body.points)):
+    if not contact_psi_app.consume_quota(user, len(body.points)) and not _psi_bulk_take(user, len(body.points)):
         return JSONResponse(status_code=429, headers={"Retry-After": "86400"}, content={"detail": "daily OPRF point quota exceeded"})
     points = []
     try:
@@ -4644,6 +4747,299 @@ async def ws_reach(ws_id: int, request: Request, target: str = Query(..., max_le
             first["cats"] = ["TEAM_CONTACT"]
     res["contacts_considered"] = len(known_by)
     return _drop_removed_link_paths(res)
+
+
+# --- Contact lookup through the subscriber's own provider key (2026-11-15) -------
+# Logic, rules and the never-store guarantee are in contact_lookup.py. Beta flag
+# CONTACT_LOOKUP_BETA: unset/"admins" -> site admins only (default), "all" ->
+# every logged-in user. Personal-detail lookups are refused for protected
+# roles (_lookup_protected) and for people who blocked them.
+try:
+    import contact_lookup as _cl
+except ImportError:
+    from webapp import contact_lookup as _cl
+
+# Organizations whose people many laws shield from home-address disclosure:
+# courts (judges, and conservatively court staff), law enforcement,
+# prosecutors and election administrators. Deliberately broad -- a false
+# "protected" only hides the personal-lookup button.
+_PROTECTED_ORG_RE = re.compile(
+    r"\b(courts?|judiciary|judicial|tribunal|police|sheriff'?s?|marshals?|constabulary|state patrol|highway patrol|"
+    r"state troopers?|nypd|lapd|fbi|federal bureau of investigation|drug enforcement|bureau of alcohol|"
+    r"secret service|homeland security|immigration and customs|border patrol|corrections|correctional|"
+    r"district attorney|prosecutors?|prosecuting attorney|attorney'?s office|state'?s attorney|"
+    r"board of elections?|elections? (?:board|commission|office|division|department)|registrar of voters|"
+    r"supervisor of elections|county clerk)\b", re.I)
+_PROTECTED_LABEL_RE = re.compile(r"\b(judge|justice|magistrate|sheriff|police|prosecutor|district attorney)\b", re.I)
+
+
+def _lookup_enabled(email):
+    if not email:
+        return False
+    mode = (os.environ.get("CONTACT_LOOKUP_BETA") or "admins").strip().lower()
+    return mode == "all" or email in _ADMIN_EMAILS
+
+
+def _cl_guard(request, need_agreement=True):
+    email = _request_user_email(request)
+    if not email:
+        return None, JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
+    if not _lookup_enabled(email):
+        return None, JSONResponse(status_code=404, content={"detail": "Not Found"})
+    if need_agreement and not _ml.agreement_accepted(_ml_db(), email):
+        return None, JSONResponse(status_code=428, content={"success": False, "error": "agreement_required",
+                                                           "agreement_url": "/terms"})
+    return email.lower(), None
+
+
+def _cl_error(e):
+    if e.status == 404:
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return JSONResponse(status_code=e.status, content={"success": False, "error": str(e), "code": e.code})
+
+
+def _lookup_neighbors(node):
+    """[(neighbour label, [categories])] for one node (igraph backend)."""
+    if _PATHFINDER_BACKEND != "igraph":
+        return []
+    _load_igraph()
+    if _igraph_graph is None:
+        return []
+    idx = _igraph_name_to_idx.get(node)
+    if idx is None:
+        return []
+    out = []
+    for eid in _igraph_graph.incident(idx):
+        e = _igraph_graph.es[eid]
+        other = e.target if e.source == idx else e.source
+        if other == idx:
+            continue
+        mask = int(_igraph_cats_mask[eid])
+        cats = [_igraph_cats_vocab[b] for b in range(len(_igraph_cats_vocab)) if mask & (1 << b)]
+        out.append((_get_label(_igraph_nodes[other]), cats))
+    return out
+
+
+def _lookup_protected(node, neighbors=None):
+    """Why `node` is a protected person (judge, law enforcement, prosecutor,
+    election official), or None."""
+    m = re.search(r"\(([^)]*)\)\s*$", node or "")
+    if m and (_PROTECTED_ORG_RE.search(m.group(1)) or _PROTECTED_LABEL_RE.search(m.group(1))):
+        return f"listed with {m.group(1)}"
+    for label, cats in (neighbors if neighbors is not None else _lookup_neighbors(node)):
+        if "FELLOW_OFFICEHOLDER" in cats:
+            return "serves or served as a judge or in a similar office"
+        if set(cats) - {"DONATION"} and _PROTECTED_ORG_RE.search(label or ""):
+            return f"connected to {label} (courts, law enforcement, prosecutors and election offices are protected)"
+    return None
+
+
+def _lookup_person(name):
+    """(node, label) for a graph person, or (None, None)."""
+    node = _resolve_name((name or "").strip()) if name else None
+    if not node:
+        return None, None
+    label = _get_label(node)
+    if _ORG_WORDS.search(_cl.base_name(label)) or not _cl.split_name(label)[1]:
+        return None, None
+    return node, label
+
+
+class LookupKeyRequest(BaseModel):
+    provider: str = Field(..., max_length=30)
+    key: str = Field(..., max_length=400)
+    ws_id: Optional[int] = None
+
+
+class LookupCertifyRequest(BaseModel):
+    purpose: str = Field(..., max_length=100)
+    accept: bool = False
+
+
+class LookupRunRequest(BaseModel):
+    name: str = Field(..., max_length=300)
+    provider: str = Field(..., max_length=30)
+    mode: str = Field("work", max_length=10)
+    company: Optional[str] = Field(None, max_length=200)
+    domain: Optional[str] = Field(None, max_length=200)
+    linkedin: Optional[str] = Field(None, max_length=300)
+    location: Optional[str] = Field(None, max_length=120)
+    ws_id: Optional[int] = None
+
+
+class LookupBlockRequest(BaseModel):
+    name: str = Field(..., max_length=300)
+    scope: str = Field("personal", max_length=10)
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+class LookupDecideRequest(BaseModel):
+    approve: bool
+
+
+@app.get("/contact-lookup", response_class=HTMLResponse)
+async def contact_lookup_page(request: Request):
+    email, err = _cl_guard(request, need_agreement=False)
+    if err:
+        return err
+    return HTMLResponse(Path(__file__).with_name("contact_lookup.html").read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/lookup/status")
+async def lookup_status(request: Request):
+    email, err = _cl_guard(request, need_agreement=False)
+    if err:
+        return err
+    wss = _ws.my_workspaces(_ml_db(), email) if _workspaces_enabled(email) else []
+    try:
+        s = _cl.status(_ml_db(), email, [{"id": w["id"], "name": w["name"], "role": w["role"]} for w in wss])
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    s["agreement_accepted"] = _ml.agreement_accepted(_ml_db(), email)
+    s["site_admin"] = email in _ADMIN_EMAILS
+    s["account_name"] = _display_name_for_email(email)
+    s["my_blocks"] = _cl.my_blocks(_ml_db(), email)
+    if email in _ADMIN_EMAILS:
+        s["pending_blocks"] = _cl.pending_blocks(_ml_db())
+    return s
+
+
+@app.post("/api/lookup/certify")
+async def lookup_certify(req: LookupCertifyRequest, request: Request):
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    try:
+        _cl.certify(_ml_db(), email, req.purpose, req.accept)
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    return {"success": True}
+
+
+@app.put("/api/lookup/keys")
+async def lookup_key_save(req: LookupKeyRequest, request: Request):
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    try:
+        _cl.save_key(_ml_db(), email, req.provider, req.key, req.ws_id)
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    return {"success": True}
+
+
+@app.delete("/api/lookup/keys/{provider}")
+async def lookup_key_delete(provider: str, request: Request, ws_id: Optional[int] = Query(default=None)):
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    try:
+        _cl.delete_key(_ml_db(), email, provider, ws_id)
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    return {"success": True}
+
+
+@app.get("/api/lookup/person")
+async def lookup_person(request: Request, name: str = Query(..., max_length=300)):
+    """What the lookup form needs for one person: whether personal lookups are
+    allowed (protected role / blocked), suggested employers, and links."""
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    node, label = _lookup_person(name)
+    if not node:
+        return JSONResponse(status_code=404, content={"success": False, "error": "not a person in the network"})
+    neighbors = await asyncio.get_event_loop().run_in_executor(None, _lookup_neighbors, node)
+    protected = _lookup_protected(node, neighbors)
+    block = _cl.blocked(_ml_db(), node)
+    employers = []
+    m = re.search(r"\(([^)]*)\)\s*$", label)
+    if m:
+        employers.append(m.group(1))
+    for olabel, cats in neighbors:
+        if {"EMPLOYMENT", "CO_EXECUTIVE", "CO_DIRECTOR", "SEC_INSIDER", "FOUNDER"} & set(cats) \
+                and not _looks_like_person(olabel) and olabel not in employers:
+            employers.append(olabel)
+    return {"node": node, "name": _cl.base_name(label), "label": label,
+            "protected": protected, "block": block,
+            "work_blocked": _cl.block_reason(block, _cl.WORK),
+            "personal_blocked": protected or _cl.block_reason(block, _cl.PERSONAL),
+            "employers": employers[:12],
+            "links": _cl.links(node, employers[0] if employers else "", "", protected, block),
+            "is_you": _cl._norm_name(_cl.base_name(label)) == _cl._norm_name(_display_name_for_email(email) or "")}
+
+
+@app.post("/api/lookup/run")
+async def lookup_run(req: LookupRunRequest, request: Request):
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    node, label = _lookup_person(req.name)
+    if not node:
+        return JSONResponse(status_code=404, content={"success": False, "error": "not a person in the network"})
+    loop = asyncio.get_event_loop()
+    protected = await loop.run_in_executor(None, _lookup_protected, node)
+    try:
+        res = await loop.run_in_executor(None, lambda: _cl.run_lookup(
+            _ml_db(), email, node, req.provider, req.mode,
+            {"company": req.company, "domain": req.domain, "linkedin": req.linkedin, "location": req.location},
+            protected, req.ws_id))
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    return {"success": True, "person": _cl.base_name(label), **res}
+
+
+@app.get("/api/lookup/history")
+async def lookup_history(request: Request):
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    return {"lookups": _cl.history(_ml_db(), email)}
+
+
+@app.post("/api/lookup/block")
+async def lookup_block(req: LookupBlockRequest, request: Request):
+    """A person switches lookups about themselves off (see contact_lookup.py)."""
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    node, label = _lookup_person(req.name)
+    if not node:
+        return JSONResponse(status_code=404, content={"success": False, "error": "not a person in the network"})
+    try:
+        st = _cl.request_block(_ml_db(), email, node, "personal" if req.scope == "personal" else req.scope,
+                               _display_name_for_email(email), req.note or "")
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    return {"success": True, "status": st}
+
+
+@app.delete("/api/lookup/block/{block_id}")
+async def lookup_unblock(block_id: int, request: Request):
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    try:
+        _cl.remove_block(_ml_db(), email, block_id, email in _ADMIN_EMAILS)
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    return {"success": True}
+
+
+@app.post("/api/lookup/block/{block_id}/decide")
+async def lookup_block_decide(block_id: int, req: LookupDecideRequest, request: Request):
+    email, err = _cl_guard(request)
+    if err:
+        return err
+    if email not in _ADMIN_EMAILS:
+        return JSONResponse(status_code=403, content={"success": False, "error": "site admins only"})
+    try:
+        _cl.decide_block(_ml_db(), email, block_id, req.approve)
+    except _cl.LookupError_ as e:
+        return _cl_error(e)
+    return {"success": True}
 
 
 # --- Detail tables (private-service spec Phase 2, 2026-10-19) -------------------
@@ -7134,6 +7530,15 @@ function namesakeHint(p, data) {
   return lines.length ? '<div class="namesake-hint">' + lines.join('<br>') + '</div>' : '';
 }
 
+let _lookupOk = null;
+async function lookupAvailable() {
+  // contact lookup (beta, /contact-lookup): shown only to users it's open to
+  if (_lookupOk === null) {
+    _lookupOk = fetch('/api/lookup/status').then(r => r.ok).catch(() => false);
+  }
+  return _lookupOk;
+}
+
 async function openWhoisModal(name, pickFor) {
   const body = document.getElementById('whois-body');
   document.getElementById('modal-overlay').classList.add('show');
@@ -7182,7 +7587,10 @@ async function openWhoisModal(name, pickFor) {
     const encName = encodeURIComponent(d.name).replace(/'/g, '%27');
     html += '<button class="secondary-btn wi-news-btn" onclick="loadWhoisNews(this, \'' + encName + '\')">📰 Show recent news headlines</button>';
     html += '<div class="wi-news" id="wi-news"></div>';
+    html += '<a id="wi-lookup" class="secondary-btn wi-news-btn" style="display:none;text-decoration:none;text-align:center;" '
+      + 'href="/contact-lookup?name=' + encName + '" target="_blank" rel="noopener">📇 Find contact info</a>';
     body.innerHTML = html;
+    lookupAvailable().then(ok => { const b = document.getElementById('wi-lookup'); if (ok && b) b.style.display = 'block'; });
   } catch (e) {
     body.innerHTML = '<div class="wi-hdr">' + escHtml(name) + '</div><div class="wi-meta">Could not load identity info.</div>';
   }
@@ -8243,6 +8651,22 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
       const phonetic = contactPsiPhoneticKey(name);
       if (phonetic) queries.push({ name, tier: 'phonetic', item: phonetic });
       for (const token of contactPsiLshBandTokens(name)) queries.push({ name, tier: 'possible', item: token });
+    }
+
+    // Refuse up front, before any quota is spent, if the file is bigger than
+    // what this account can check right now (daily quota + one-time bulk).
+    try {
+      const qr = await fetch('/api/contacts/quota');
+      if (qr.ok) {
+        const quota = await qr.json();
+        if (queries.length > quota.daily_points + quota.bulk_points) {
+          throw new Error(`This file has ${names.length.toLocaleString()} contacts. You can check about `
+            + `${quota.contacts_now.toLocaleString()} right now (${quota.daily_contacts.toLocaleString()} a day, plus a one-time `
+            + `allowance of ${quota.bulk_contacts.toLocaleString()} for your first big upload). Split the file, or try again tomorrow.`);
+        }
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('This file has')) throw e;
     }
 
     for (const q of queries) {
