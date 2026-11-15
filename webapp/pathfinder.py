@@ -4839,6 +4839,8 @@ _PROTECTED_ORG_RE = re.compile(
 # Only a job-type link to such a body counts: a LittleSis "professional" or
 # "other" tie to the FBI (Peter Thiel, as an informant) is not a role there.
 _PROTECTED_ROLE_CATS = {"PUBLIC_OFFICE", "EMPLOYMENT", "CO_EXECUTIVE", "STAFF_AIDE", "FELLOW_OFFICEHOLDER"}
+_NOT_EMPLOYER_RE = re.compile(r"\b(universit|college|school|institute|academy|foundation|chamber of commerce|"
+                              r"council|association|society|club|fund\b|museum|trust)", re.I)
 _EMPLOYER_CAT_RANK = {"CO_EXECUTIVE": 0, "SEC_INSIDER": 1, "EMPLOYMENT": 2, "CO_DIRECTOR": 3, "FOUNDER": 4}
 _PROTECTED_LABEL_RE = re.compile(r"\b(judge|justice|magistrate|sheriff|police|prosecutor|district attorney)\b", re.I)
 
@@ -4886,7 +4888,7 @@ def _lookup_neighbors(node):
             continue
         mask = int(_igraph_cats_mask[eid])
         cats = [_igraph_cats_vocab[b] for b in range(len(_igraph_cats_vocab)) if mask & (1 << b)]
-        out.append((_get_label(_igraph_nodes[other]), cats))
+        out.append((_get_label(_igraph_nodes[other]), cats, float(_igraph_prob[eid])))
     return out
 
 
@@ -4896,7 +4898,7 @@ def _lookup_protected(node, neighbors=None):
     m = re.search(r"\(([^)]*)\)\s*$", node or "")
     if m and (_PROTECTED_ORG_RE.search(m.group(1)) or _PROTECTED_LABEL_RE.search(m.group(1))):
         return f"listed with {m.group(1)}"
-    for label, cats in (neighbors if neighbors is not None else _lookup_neighbors(node)):
+    for label, cats, *_ in (neighbors if neighbors is not None else _lookup_neighbors(node)):
         if "FELLOW_OFFICEHOLDER" in cats:
             return "serves or served as a judge or in a similar office"
         if set(cats) & _PROTECTED_ROLE_CATS and _PROTECTED_ORG_RE.search(label or ""):
@@ -5029,11 +5031,14 @@ async def lookup_person(request: Request, name: str = Query(..., max_length=300)
     if m:
         employers.append(m.group(1))
     ranked = []
-    for olabel, cats in neighbors:
+    for olabel, cats, *rest in neighbors:
         r = min((_EMPLOYER_CAT_RANK[c] for c in cats if c in _EMPLOYER_CAT_RANK), default=None)
         if r is None or _looks_like_person(olabel) or ("EDUCATION" in cats and r > 1):
             continue   # schools someone attended aren't employers
-        ranked.append((r, olabel))
+        # trustee / advisory seats and schools, chambers and councils rank
+        # below the company someone actually runs or works for
+        side = "ADVISORY" in cats or bool(_NOT_EMPLOYER_RE.search(olabel))
+        ranked.append(((side, r, -(rest[0] if rest else 0)), olabel))
     for _r, olabel in sorted(ranked, key=lambda x: x[0]):
         if olabel not in employers:
             employers.append(olabel)
