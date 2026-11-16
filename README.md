@@ -20,6 +20,8 @@ cd webapp && uvicorn pathfinder:app --host 0.0.0.0 --port 8000
 
 ## Architecture
 
+Detailed flowcharts (system overview → subsystems → step-by-step logic) are in [`docs/flowcharts/`](docs/flowcharts/README.md).
+
 ```
 User → Cloudflare (auth, rate-limit, SSL)
          → DigitalOcean App Platform (FastAPI)

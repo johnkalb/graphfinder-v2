@@ -1,0 +1,41 @@
+// LEVEL 2b — Build pipeline: turning the raw DB into the files the web app serves.
+digraph build {
+  graph [fontname="Helvetica", rankdir=TB, nodesep=0.4, ranksep=0.45, pad=0.3, bgcolor="white",
+         label="Level 2b · Build pipeline (run after any ingest; outputs are committed under webapp/data/)", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+
+  db [label="data/pipeline_cache.db\n(relationships)", shape=cylinder, fillcolor="#dcfce7"];
+  ov [label="qid_overlap_edges.jsonl", shape=note, fillcolor="#dcfce7"];
+
+  bse [label="build_scored_edges.py\n1. clean-up rules (drop cliques / conflated rows)\n2. group ALL relation types per undirected pair\n3. merge Wikidata overlap edges (existing nodes only)\n4. categorize → dedup → noisy-OR score\n\nsee Level 3a + 3b"];
+  rc [label="webapp/relation_categories.py\ncategorize(raw relation) → ~25 categories", fillcolor="#ede9fe"];
+  ls [label="webapp/link_scoring.py\nscore_pair() · CATEGORY_PROB", fillcolor="#ede9fe"];
+
+  gs [label="webapp/data/graph_scored.json.gz\n{nodes:[names], edges:[[u, v, prob, [cats]], …]}", shape=note, fillcolor="#dcfce7"];
+
+  bss [label="build_search_from_scored.py\n• degree per node\n• weighted PageRank → percentile = SCI (1-100)"];
+  bcn [label="build_compact_names_scored.py\nlowercase → display name map"];
+
+  si [label="webapp/data/search_index.json\n{canonical, normalized, degree, sci, aliases}", shape=note, fillcolor="#dcfce7"];
+  cn [label="webapp/data/compact_names.json.gz\n(downloaded by browser for\nprivate contact matching)", shape=note, fillcolor="#dcfce7"];
+
+  other [label="Loaded independently (no rebuild needed):\nevidence.json.gz (builder not in repo)\ndeceased.json (Level 3f) · user_submissions.db", shape=note, fillcolor="#f0fdf4", color="#999999"];
+
+  db -> bse; ov -> bse [style=dashed, label="if present"];
+  rc -> bse [style=dotted, arrowhead=none]; ls -> bse [style=dotted, arrowhead=none];
+  bse -> gs;
+  gs -> bss -> si;
+  gs -> bcn -> cn;
+  {rank=same; bss; bcn;}
+
+  commit [label="git commit + push → DigitalOcean redeploys", shape=box, style="rounded,filled", fillcolor="#f3f4f6"];
+  {si cn} -> commit;
+
+  subgraph cluster_legacy { label="Legacy / alternate builders (pre-scoring; still in repo)"; style="rounded,dashed"; color="#9ca3af"; fontcolor="#6b7280";
+    bi [label="build_index.py\npickle graph + fuzzy name dedup\n→ search_index, canonical_map, labels", fillcolor="#f3f4f6"];
+    ric [label="rebuild_index_clean.py\nsearch index straight from DB", fillcolor="#f3f4f6"];
+    gc [label="src/graph/graph_compiler.py\n+ gephi_exporter.py (DiGraph → Gephi)", fillcolor="#f3f4f6"];
+  }
+  db -> {bi ric gc} [style=dashed, color="#9ca3af"];
+}

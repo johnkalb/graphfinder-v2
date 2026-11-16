@@ -1,0 +1,29 @@
+// LEVEL 3d — GET /api/search autocomplete ranking.
+digraph search {
+  graph [fontname="Helvetica", rankdir=TB, nodesep=0.35, ranksep=0.35, pad=0.3, bgcolor="white",
+         label="Level 3d · Name search: GET /api/search?q=…  →  _find_entry()  (pathfinder.py)", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  q [label="User types ≥ 2 characters", fillcolor="#f3f4f6"];
+  norm [label="Normalize query\nlower-case · strip , ; · junior→jr · senior→sr · collapse spaces"];
+  loop [label="For each entry in search_index.json", fillcolor="#ede9fe"];
+  t1 [label="q == full name", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];  s100 [label="score 100"];
+  t2 [label="name starts\nwith q", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];  s92 [label="score 92"];
+  t3 [label="any name word\nstarts with q", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];  s90 [label="score 90"];
+  t4 [label="q anywhere\nin name", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];  s50 [label="score 50"];
+  t5 [label="q in an alias", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];  s40 [label="score 40"];
+  t6 [label="some query word\nprefixes a name word", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];  s20 [label="score 20 + 5 × matches"];
+  none [label="no match", fillcolor="#f3f4f6"];
+  hub [label="Hub boost: + min(15, 4 × log10(degree + 1))\n(real, well-connected person outranks a same-name trust/committee;\nexact match still always wins)"];
+  sort [label="Sort by score ↓, degree ↓, name\nreturn top 50 entries {canonical, degree, sci, aliases}"];
+  ui [label="Dropdown in UI (renderDropdown)", fillcolor="#f3f4f6"];
+
+  q -> norm -> loop -> t1;
+  t1 -> s100 [label="yes"]; t1 -> t2 [label="no"];
+  t2 -> s92 [label="yes"]; t2 -> t3 [label="no"];
+  t3 -> s90 [label="yes"]; t3 -> t4 [label="no"];
+  t4 -> s50 [label="yes"]; t4 -> t5 [label="no"];
+  t5 -> s40 [label="yes"]; t5 -> t6 [label="no"];
+  t6 -> s20 [label="yes"]; t6 -> none [label="no"];
+  {s100 s92 s90 s50 s40 s20} -> hub -> sort -> ui;
+}

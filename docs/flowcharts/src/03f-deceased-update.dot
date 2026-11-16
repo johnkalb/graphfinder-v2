@@ -1,0 +1,26 @@
+// LEVEL 3f — update_deceased_daily.py (unattended cron).
+digraph deceased {
+  graph [fontname="Helvetica", rankdir=TB, nodesep=0.35, ranksep=0.35, pad=0.3, bgcolor="white",
+         label="Level 3f · Daily deceased-status update (update_deceased_daily.py; one-off version: fetch_death_dates.py)", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  cron [label="Daily cron on the dev machine\n(paths resolved from $HOME; repo = ~/graphfinder-clean)", fillcolor="#f3f4f6"];
+  d0 [label="qid_map.jsonl\nexists?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  e0 [label="exit 1 (error)", fillcolor="#fee2e2"];
+  q [label="Batch 60 QIDs per SPARQL query → Wikidata P570 (date of death)\nretry on 429 / errors, 1 s pause between batches"];
+  f [label="Keep deaths ≥ 1900\n(older = wrong namesake QID)"];
+  d1 [label="query returned\nanything?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  e1 [label="exit 1: refuse to overwrite list", fillcolor="#fee2e2"];
+  diff [label="newly_dead = names not already in deceased.json\nmerged = old ∪ new   (never \"resurrects\" anyone)"];
+  d2 [label="newly_dead\nempty?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  silent [label="exit silently\n(no output → no notification)", fillcolor="#f3f4f6"];
+  write [label="Write merged list to 3 places:\n~/webapp/data · repo/webapp/data · repo/data"];
+  git [label="git checkout scoring-model\ncommit only deceased.json files\npush to remote 'fresh'"];
+  rep [label="Print report: who died + push OK/FAILED\n(the only non-silent outcome)"];
+  app [label="DigitalOcean redeploys → pathfinder loads new deceased.json\n→ living-only path search excludes them as intermediaries (Level 3c)", fillcolor="#ede9fe"];
+
+  cron -> d0; d0 -> e0 [label="no"]; d0 -> q [label="yes"];
+  q -> f -> d1; d1 -> e1 [label="no"]; d1 -> diff [label="yes"];
+  diff -> d2; d2 -> silent [label="yes"]; d2 -> write [label="no"];
+  write -> git -> rep -> app;
+}

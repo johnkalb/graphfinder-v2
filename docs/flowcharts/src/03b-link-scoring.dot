@@ -1,0 +1,35 @@
+// LEVEL 3b — How a relationship becomes a probability, and a path becomes a viability score.
+digraph scoring {
+  graph [fontname="Helvetica", rankdir=TB, nodesep=0.35, ranksep=0.4, pad=0.3, bgcolor="white",
+         label="Level 3b · Link & path scoring (relation_categories.py + link_scoring.py)\nQuestion every number answers: \"would this person take the other's phone call?\"", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  subgraph cluster_pair { label="Per pair of people (build time)"; style="rounded"; color="#f59e0b";
+    raw [label="Raw relation strings for the pair\ne.g. DIRECTOR(CFO), MENTIONED_WITH, SPOUSE", fillcolor="#dcfce7", shape=note];
+    cat [label="categorize(): map ~hundreds of raw strings → ~25 categories\nDIRECTOR* → CO_DIRECTOR · CEO/PRESIDENT/… → CO_EXECUTIVE\nSPOUSE → FAMILY · MENTIONED_WITH → NEWS_COMENTION\nTRANSACTED_WITH → CO_OCCURS_DOC · ALIAS → SAME_ENTITY"];
+    d1 [label="any category other\nthan SAME_ENTITY?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+    none [label="not a relationship →\nno edge", fillcolor="#f3f4f6"];
+    dedup [label="dedup_categories():\nco-employment group {CO_OFFICER, CO_DIRECTOR, CO_EXECUTIVE,\nEMPLOYMENT, SEC_INSIDER, SAME_ORG_OVERLAP} → keep only the strongest one\n(they usually come from the same shared company)\nall other categories kept as independent evidence"];
+    table [label="CATEGORY_PROB (editorial)\nFAMILY .92 · FRIEND .90 · CO_OFFICER .90 · STAFF_AIDE .90\nCO_DIRECTOR .87 · CO_EXECUTIVE .87 · COMMUNICATED .80 · LOBBYING .80\nFELLOW_OFFICEHOLDER .75 · EMPLOYMENT / TRAVEL_MET / ADVISORY .70\nCO_INVENTOR .68 · FINANCIAL / PUBLIC_OFFICE .60 · PATENT_ASSIGNED_TO .55\nMEMBERSHIP / EDUCATION / SEC_INSIDER .50 · WEAK_SOCIAL .20\nSAME_ORG_OVERLAP .18 · SAME_SCHOOL_OVERLAP .12\nDONATION / NEWS_COMENTION .10 · CO_OCCURS_DOC / OTHER .05", shape=note, fillcolor="#fffbeb", fontsize=9];
+    nor [label="noisy-OR:  P(pair) = 1 − Π (1 − p_c)\n(at least one tie is strong enough; more evidence only raises P)"];
+    raw -> cat -> d1; d1 -> none [label="no"]; d1 -> dedup [label="yes"]; dedup -> nor; table -> nor [style=dotted];
+  }
+
+  subgraph cluster_edge { label="Edge weight (load time, pathfinder._load_graph)"; style="rounded"; color="#8b5cf6";
+    w [label="weight = −ln(P(pair)) + −ln(FORWARD_PROB = 0.37)\n→ the shortest weighted path == the most probable path", fillcolor="#ede9fe"];
+  }
+  nor -> w;
+
+  subgraph cluster_path { label="Per path (query time, for each of the k best paths)"; style="rounded"; color="#16a34a";
+    link [label="link strength = Π P(edge) over all hops"];
+    relays [label="relays = hops − 1  (intermediaries who must pass you on)"];
+    passive [label="Passive viability\n= link × 0.37^relays\n(Milgram / Dodds et al. forwarding rate)"];
+    guided [label="Guided (\"Build My Path\")\n= link × 0.85 (1st relay: your own contact)\n× 0.60^(relays−1) (later warm intros)"];
+    band [label="Band:  ≥ 0.5 Strong · ≥ 0.1 Plausible · ≥ 0.01 Weak · else Tenuous\nlabel shown as \"≈ 1 in N\"", fillcolor="#ede9fe"];
+    link -> relays; relays -> passive; relays -> guided; {passive guided} -> band;
+  }
+  w -> link [label="edges on the chosen path"];
+
+  sci [label="Separately: Social Capital Index (SCI)\nweighted PageRank over P(pair) → percentile 1-100\n(build_search_from_scored.py)", shape=note, fillcolor="#f9fafb"];
+  nor -> sci [style=dashed];
+}

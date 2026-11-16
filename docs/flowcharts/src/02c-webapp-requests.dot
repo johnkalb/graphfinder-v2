@@ -1,0 +1,45 @@
+// LEVEL 2c — Web app: every HTTP endpoint and what it reads.
+digraph webapp {
+  graph [fontname="Helvetica", rankdir=LR, nodesep=0.22, ranksep=0.8, pad=0.3, bgcolor="white",
+         label="Level 2c · Web app request map (webapp/pathfinder.py)", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#ede9fe", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+
+  subgraph cluster_ui { label="Browser UI (HTML_TEMPLATE inside pathfinder.py)"; style="rounded"; color="#9ca3af";
+    ui_search [label="Type a name\n(autocomplete)", fillcolor="#f3f4f6"];
+    ui_path [label="Find Path\nsource → target\n(+ include-deceased toggle)", fillcolor="#f3f4f6"];
+    ui_tip [label="Hover / click a link\n(why + evidence)", fillcolor="#f3f4f6"];
+    ui_meth [label="Methodology / FAQ", fillcolor="#f3f4f6"];
+    ui_sug [label="Suggest a link /\nDispute a link", fillcolor="#f3f4f6"];
+    ui_psi [label="Upload contacts (.vcf)\n“who do I know here?”", fillcolor="#f3f4f6"];
+  }
+
+  e_search [label="GET /api/search?q=\n_find_entry()  (Level 3d)"];
+  e_path [label="GET /api/path\n_find_path()  (Level 3c)\n+ _generate_path_narrative()"];
+  e_cat [label="GET /api/category-info\nGET /api/relation-info"];
+  e_ev [label="GET /api/evidence"];
+  e_meth [label="GET /api/methodology\nGET /faq"];
+  e_ext [label="POST /api/extract-proof\n(Gemini parses pasted text)"];
+  e_sug [label="POST /api/suggest-link\nPOST /api/dispute-link"];
+  e_names [label="GET /api/names\n(+ unused POST /api/psi)"];
+  e_ops [label="Ops: /health · /debug\n/meminfo · /loadgraph", fillcolor="#f3f4f6"];
+
+  ui_search -> e_search; ui_path -> e_path; ui_tip -> e_cat; ui_tip -> e_ev;
+  ui_meth -> e_meth; ui_sug -> e_ext; ui_sug -> e_sug; ui_psi -> e_names;
+
+  si [label="search_index.json\n(+ canonical_map / labels\nif present)\nloaded at startup", shape=note, fillcolor="#dcfce7"];
+  g  [label="graph_scored.json.gz\n→ NetworkX graph\nloaded lazily on 1st path", shape=note, fillcolor="#dcfce7"];
+  dec [label="deceased.json", shape=note, fillcolor="#dcfce7"];
+  ev [label="evidence.json.gz", shape=note, fillcolor="#dcfce7"];
+  lsm [label="link_scoring.py\nCATEGORY_PROB / DESC\nMETHODOLOGY", fillcolor="#fef3c7"];
+  ri [label="RELATION_INFO /\n_REL_SOURCE (in code)", fillcolor="#fef3c7"];
+  sub [label="user_submissions.db\nclaims · disputes\n(status = pending)", shape=cylinder, fillcolor="#dcfce7"];
+  cn [label="compact_names.json.gz", shape=note, fillcolor="#dcfce7"];
+  gem [label="Google Gemini\n2.5 Flash", fillcolor="#dbeafe"];
+
+  e_search -> si;
+  e_path -> {g dec si lsm}; e_path -> ev [label="snippets"]; e_path -> gem [style=dashed, label="narrative"];
+  e_cat -> {lsm ri}; e_ev -> {ev ri};
+  e_meth -> lsm; e_ext -> gem [style=dashed];
+  e_sug -> sub; e_names -> cn;
+}
