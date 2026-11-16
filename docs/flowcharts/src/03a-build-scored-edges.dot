@@ -1,0 +1,34 @@
+// LEVEL 3a — build_scored_edges.py step by step.
+digraph bse {
+  graph [fontname="Helvetica", rankdir=TB, nodesep=0.35, ranksep=0.35, pad=0.3, bgcolor="white",
+         label="Level 3a · build_scored_edges.py — row-by-row clean-up and pair scoring", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  start [label="Open data/pipeline_cache.db", fillcolor="#dcfce7", shape=cylinder];
+  persons [label="Collect every name ever typed PERSON\n(source_type / target_type = 'PERSON') → persons set"];
+  loop [label="For each row (source, target, relation_type)", fillcolor="#ede9fe"];
+  d1 [label="blank name\nor source == target?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  d2 [label="relation in DROP_RELATIONS?\nFELLOW_REPRESENTATIVE\nFELLOW_SENATOR · OWNERSHIP", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  d3 [label="relation is a position type\n(DIRECTOR, CEO, MEMBER, LOBBYIST…)\nAND both ends look like people?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  note3 [label="looks like a person =\nin persons set, OR 2-3 words with\nno digits and no org word\n(Inc, Foundation, University, …)", shape=note, fillcolor="#f9fafb", fontsize=9];
+  skip [label="skip row\n(count as dropped)", fillcolor="#f3f4f6"];
+  keep [label="pair_rels[sorted(lower(a), lower(b))] += relation\nremember first-seen display name"];
+  ov [label="qid_overlap_edges.jsonl exists?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  ovmerge [label="Add SAME_ORG_OVERLAP / SAME_SCHOOL_OVERLAP\nonly when BOTH people already are graph nodes"];
+  score [label="For each pair:\ncats = [categorize(r) for r in relations]   (relation_categories.py)\nprob, used = score_pair(cats)   (link_scoring.py → Level 3b)"];
+  d4 [label="prob is None?\n(only ALIAS / FORMER_NAME)", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  emit [label="edges.append([node_id(a), node_id(b), round(prob, 4), used])"];
+  out [label="write webapp/data/graph_scored.json.gz\n{nodes, edges}", shape=note, fillcolor="#dcfce7"];
+  next [label="→ build_search_from_scored.py / build_compact_names_scored.py (Level 2b)", shape=plaintext, style="", fontcolor="#1d4ed8"];
+
+  start -> persons -> loop -> d1;
+  d1 -> skip [label="yes"]; d1 -> d2 [label="no"];
+  d2 -> skip [label="yes"]; d2 -> d3 [label="no"];
+  d3 -> skip [label="yes (conflated\nperson-as-org)"]; d3 -> keep [label="no"];
+  d3 -> note3 [style=dotted, arrowhead=none];
+  skip -> loop [style=dashed, label="next row"]; keep -> loop [style=dashed, label="next row"];
+  keep -> ov [label="all rows done"];
+  ov -> ovmerge [label="yes"]; ov -> score [label="no"]; ovmerge -> score;
+  score -> d4; d4 -> score [label="yes: drop pair", style=dashed]; d4 -> emit [label="no"];
+  emit -> out -> next;
+}

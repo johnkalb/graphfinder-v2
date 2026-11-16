@@ -1,0 +1,29 @@
+// LEVEL 3c — GET /api/path end to end.
+digraph pathq {
+  graph [fontname="Helvetica", rankdir=TB, nodesep=0.35, ranksep=0.35, pad=0.3, bgcolor="white",
+         label="Level 3c · Path query: GET /api/path?src_name=…&tgt_name=…&include_deceased=…  (pathfinder.py)", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  req [label="Browser: findPath()", fillcolor="#f3f4f6"];
+  d0 [label="both names\nsupplied?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  err0 [label="{error: 'Both … required'}", fillcolor="#fee2e2"];
+  lg [label="_load_graph() (first call only)\nread graph_scored.json.gz → NetworkX Graph\nedge attrs: prob, weight, cats\n(fallback: legacy graph_edges.json.gz, prob 0.5)", fillcolor="#ede9fe"];
+  res [label="_resolve_name() for source and target\ncanonical_map (canonical, then alias) → exact node → case-insensitive node"];
+  d1 [label="both\nresolved?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  err1 [label="{error: \"Source/Target '…' not found\"}", fillcolor="#fee2e2"];
+  d2 [label="include_deceased?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  sub [label="Living-only subgraph:\nremove every person in deceased.json\nEXCEPT the source and target themselves\n(dead people can't make introductions)"];
+  full [label="use full graph"];
+  ksp [label="nx.shortest_simple_paths(weight = −ln p + forwarding penalty)\ntake the first k = 5  → most probable paths first"];
+  d3 [label="any path?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+  nopath [label="{paths: [], deceased_excluded: N}", fillcolor="#f3f4f6"];
+  build [label="build(path) for each:\n• per node: label, SCI, death date\n• per edge: prob, cats, primary relation = strongest category\n• path_probability() and path_probability_guided()  (Level 3b)\n• bands + \"≈ 1 in N\" labels"];
+  narr [label="_generate_path_narrative(best path)\nchain + evidence.json.gz snippets → prompt\n→ Gemini 2.5 Flash (GOOGLE_API_KEY from .env or env var)\nreturns 1-paragraph briefing, or None on any failure"];
+  out [label="JSON → UI renders path cards, playbook,\nlink tooltips (/api/category-info, /api/evidence)", fillcolor="#f3f4f6"];
+
+  req -> d0; d0 -> err0 [label="no"]; d0 -> lg [label="yes"];
+  lg -> res -> d1; d1 -> err1 [label="no"]; d1 -> d2 [label="yes"];
+  d2 -> full [label="yes"]; d2 -> sub [label="no (default)"];
+  {full sub} -> ksp -> d3; d3 -> nopath [label="no"]; d3 -> build [label="yes"];
+  build -> narr -> out;
+}

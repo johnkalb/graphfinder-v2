@@ -1,0 +1,51 @@
+// LEVEL 1 — System overview: how data gets from public sources to a user's screen.
+digraph overview {
+  graph [fontname="Helvetica", fontsize=12, rankdir=LR, nodesep=0.4, ranksep=0.6, pad=0.3, bgcolor="white",
+         label="Level 1 · GraphFinder system overview\n(how public data becomes a searchable \"who can introduce me to whom\" graph)", labelloc=t, labeljust=l, fontsize=16];
+  node  [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#ffffff", color="#555555", margin="0.18,0.08"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+
+  sources [label="Public data sources\n\nSEC (Form 4, IAPD) · IRS 990\nWikidata / Wikipedia · GDELT news\nEpstein Committee docs · USPTO\nPension LP reports (CalPERS, CalSTRS, NYSCRF…)", fillcolor="#dbeafe"];
+
+  harvest [label="① Harvest & ingest scripts\n(harvest_*.py, ingest_*.py, add_*.py,\nsec_bulk_harvest_fast.py, gdelt_gkg_harvester.py)\n\nsee Level 2a", fillcolor="#fef3c7"];
+
+  db [label="data/pipeline_cache.db\n(SQLite · table: relationships)\nsource → relation_type → target", shape=cylinder, fillcolor="#dcfce7"];
+
+  qid [label="② Wikidata identity side-pipeline\n(qid_resolver, qid_overlap_engine,\nfetch_death_dates, update_deceased_daily)\n\nsee Level 2a / 3f", fillcolor="#fef3c7"];
+  side [label="qid_map.jsonl\nqid_overlap_edges.jsonl\ndeceased.json", shape=note, fillcolor="#dcfce7"];
+
+  build [label="③ Build pipeline\nbuild_scored_edges.py\nbuild_search_from_scored.py\nbuild_compact_names_scored.py\n\nsee Level 2b", fillcolor="#fef3c7"];
+
+  artifacts [label="webapp/data/ (committed to git)\n\ngraph_scored.json.gz · search_index.json\ncompact_names.json.gz · evidence.json.gz\ndeceased.json · user_submissions.db", shape=folder, fillcolor="#dcfce7"];
+
+  app [label="④ FastAPI web app\nwebapp/pathfinder.py\n(search, path-finding, scoring,\nevidence, AI narrative, submissions)\n\nsee Level 2c", fillcolor="#ede9fe"];
+
+  gemini [label="Google Gemini API\n(path narrative,\nproof extraction)", fillcolor="#dbeafe"];
+
+  user [label="User's browser\n(single-page UI embedded\nin pathfinder.py)", fillcolor="#f3f4f6"];
+
+  subgraph cluster_deploy {
+    label="Hosting (README / app.yaml / Dockerfile)"; style="dashed"; color="#999999"; fontsize=10;
+    cf  [label="Cloudflare\nZero-Trust auth · WAF rate-limit · SSL", fillcolor="#f3f4f6"];
+    do  [label="DigitalOcean App Platform\n(Docker: uvicorn webapp.pathfinder:app)", fillcolor="#f3f4f6"];
+  }
+
+  sources -> harvest -> db -> build -> artifacts;
+  sources -> qid [style=dashed];
+  qid -> side -> build [style=dashed];
+  side -> artifacts [style=dashed, label="deceased.json\ncopied"];
+  artifacts -> app [label="loaded at\nstartup / lazily"];
+  app -> gemini [dir=both, style=dashed];
+  user -> cf -> do -> app [label=" HTTPS request /\n JSON + HTML reply", dir=both];
+  do -> artifacts [style=invis];
+
+  subgraph cluster_legend {
+    label="Legend"; fontsize=10; style="solid"; color="#cccccc";
+    l1 [label="External source", fillcolor="#dbeafe"];
+    l2 [label="Script / process", fillcolor="#fef3c7"];
+    l3 [label="Data store", shape=cylinder, fillcolor="#dcfce7"];
+    l4 [label="Web app / API", fillcolor="#ede9fe"];
+    l5 [label="Decision", shape=diamond, style="filled", fillcolor="#fee2e2"];
+    l1 -> l2 -> l3 -> l4 -> l5 [style=invis];
+  }
+}

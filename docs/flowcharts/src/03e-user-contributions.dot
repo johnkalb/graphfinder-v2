@@ -1,0 +1,35 @@
+// LEVEL 3e — Suggest / dispute links, and private contact matching.
+digraph contrib {
+  graph [fontname="Helvetica", rankdir=TB, nodesep=0.4, ranksep=0.4, pad=0.3, bgcolor="white",
+         label="Level 3e · User contributions & contact matching", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  subgraph cluster_sug { label="Suggest a new link"; style="rounded"; color="#8b5cf6";
+    tab [label="Suggest modal: which tab?", shape=diamond, style="filled", fillcolor="#fee2e2", fontsize=9, margin="0.05,0.03"];
+    paste [label="AI tab: paste chat transcript /\narticle text (10-15,000 chars)", fillcolor="#f3f4f6"];
+    ext [label="POST /api/extract-proof\nGemini 2.5 Flash → JSON claim\n{subject, predicate (controlled list),\nobject, source_name, source_url, snippet}", fillcolor="#ede9fe"];
+    review [label="User reviews / edits\nthe extracted claim", fillcolor="#f3f4f6"];
+    manual [label="Manual tab: fill in the\nsame fields by hand", fillcolor="#f3f4f6"];
+    sug [label="POST /api/suggest-link\n(pydantic length checks)\nemail = Cloudflare Access header\nor form field", fillcolor="#ede9fe"];
+    tab -> paste [label="AI"]; paste -> ext -> review -> sug;
+    tab -> manual [label="manual"]; manual -> sug;
+  }
+  subgraph cluster_dis { label="Dispute an existing link"; style="rounded"; color="#8b5cf6";
+    dbtn [label="Dispute button on a path link\nedge_key = \"a|b|RELATION\"", fillcolor="#f3f4f6"];
+    dis [label="POST /api/dispute-link\nreason + optional source URL", fillcolor="#ede9fe"];
+    dbtn -> dis;
+  }
+  db [label="webapp/data/user_submissions.db\nclaims (status: pending/approved/rejected)\ndisputes (status: pending/reviewed/resolved/ignored)\nschema: webapp/database.py", shape=cylinder, fillcolor="#dcfce7"];
+  sug -> db; dis -> db;
+  gap [label="No review tool or graph merge step in the repo yet:\napproved claims are not automatically added to pipeline_cache.db", shape=note, fillcolor="#fef2f2", color="#dc2626", fontcolor="#991b1b"];
+  db -> gap [style=dashed];
+
+  subgraph cluster_psi { label="\"Who do I know here?\" (contacts stay in the browser)"; style="rounded"; color="#16a34a";
+    up [label="Upload .vcf / contact list\n(doPSI)", fillcolor="#f3f4f6"];
+    names [label="GET /api/names → compact_names.json.gz\n(gunzipped in the browser, cached)", fillcolor="#ede9fe"];
+    parse [label="Parse FN: / N: lines → contact names"];
+    match [label="Match contacts against graph names locally\n→ show which contacts are in the network"];
+    unused [label="POST /api/psi (salted-hash match)\nexists server-side but the UI doesn't call it", fillcolor="#f3f4f6", style="rounded,dashed"];
+    up -> names -> parse -> match;
+  }
+}

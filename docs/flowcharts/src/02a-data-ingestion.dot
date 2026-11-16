@@ -1,0 +1,71 @@
+// LEVEL 2a — Data ingestion: which script pulls which source into which store.
+digraph ingestion {
+  graph [fontname="Helvetica", rankdir=LR, nodesep=0.25, ranksep=0.7, pad=0.3, bgcolor="white",
+         label="Level 2a · Data ingestion (harvesters → pipeline_cache.db, plus the Wikidata identity side-pipeline)\nEvery script writes rows of (source_name, source_type, target_name, target_type, relation_type, source_data)", labelloc=t, labeljust=l, fontsize=15];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#fef3c7", color="#555555", margin="0.14,0.06"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+
+  subgraph cluster_sec { label="Corporate / SEC"; style="rounded"; color="#93c5fd";
+    s_sec [label="SEC EDGAR\nForm 4 / Form D / ADV", fillcolor="#dbeafe"];
+    sec_bulk [label="sec_bulk_harvest_fast.py\n(Form 4 insiders, 10K+ cos.)"];
+    llc [label="add_llc_officers.py\n(SEC IAPD officers)"];
+    s_sec -> sec_bulk; s_sec -> llc;
+  }
+  subgraph cluster_irs { label="Foundations / IRS 990"; style="rounded"; color="#93c5fd";
+    s_irs [label="IRS 990 filings\n(ProPublica Nonprofit Explorer)", fillcolor="#dbeafe"];
+    irs_bulk [label="harvest_irs_bulk.py <query>"];
+    lvl_a [label="harvest_level_a.py\n(boards of all foundations)"];
+    grantee [label="harvest_grantee_boards.py\n(Overbrook grantee boards)"];
+    ford [label="add_ford_board.py\n(Ford / MacArthur boards)"];
+    s_irs -> {irs_bulk lvl_a grantee ford};
+  }
+  subgraph cluster_wd { label="Wikidata / Wikipedia"; style="rounded"; color="#93c5fd";
+    s_wd [label="Wikidata SPARQL\n+ Wikipedia", fillcolor="#dbeafe"];
+    wd_enrich [label="batch_wikidata_enrich.py\n(employment)"];
+    cab [label="add_cabinets_and_judges.py\nadd_cabinet_via_wikidata.py"];
+    elite [label="harvest_elite_300.py\nharvest_money_managers.py\n(investment firms)"];
+    s_wd -> {wd_enrich cab elite};
+  }
+  subgraph cluster_news { label="News & documents"; style="rounded"; color="#93c5fd";
+    s_gdelt [label="GDELT GKG files", fillcolor="#dbeafe"];
+    gdelt [label="gdelt_gkg_harvester.py\n(MENTIONED_WITH co-mentions)\n→ also re-runs build_index.py"];
+    s_ep [label="Epstein Committee docs\n(epstein_data/graph_canonical.db)", fillcolor="#dbeafe"];
+    addev [label="add_evidence.py\n(adds evidence column\n+ doc snippets)"];
+    s_gdelt -> gdelt; s_ep -> addev;
+  }
+  subgraph cluster_lp { label="Pension LP commitments"; style="rounded"; color="#93c5fd";
+    s_lp [label="Pension reports\n(data/lp_sources_registry.csv)", fillcolor="#dbeafe"];
+    lp [label="ingest_pension_seed_commitments.py\ningest_calpers_annual_report_private_equity.py\ningest_calstrs_private_equity_report.py\ningest_nyscrf_monthly_transactions_2026.py\n(curated fund lists hard-coded in each script)"];
+    s_lp -> lp;
+  }
+  subgraph cluster_pat { label="Patents"; style="rounded"; color="#93c5fd";
+    s_pto [label="USPTO", fillcolor="#dbeafe"];
+    pto [label="ingest_uspto_safe_subset.py\n(CO_INVENTOR, PATENT_ASSIGNED_TO)"];
+    ptorep [label="uspto_prelim_report.py\nuspto_high_confidence_report.py\n(read-only analysis)", fillcolor="#f3f4f6"];
+    s_pto -> pto; s_pto -> ptorep [style=dashed];
+  }
+
+  db [label="data/pipeline_cache.db\nrelationships table\nUNIQUE(source, target, relation)", shape=cylinder, fillcolor="#dcfce7", fontsize=11];
+  dbm [label="src/data/db_manager.py\nDBManager.add_relationship()\n(INSERT OR IGNORE)", fillcolor="#ede9fe"];
+
+  {sec_bulk llc irs_bulk lvl_a grantee ford wd_enrich cab gdelt} -> dbm -> db;
+  {elite lp pto} -> db [label="direct SQL\nINSERT"];
+  addev -> db [label="UPDATE evidence"];
+
+  subgraph cluster_qid { label="Wikidata identity side-pipeline (only for verified, high-degree people)"; style="rounded,dashed"; color="#16a34a";
+    qres [label="qid_resolver.py\nqid_batch_verify.py\n(match graph names → Wikidata QIDs,\nverified only)"];
+    qmap [label="qid_map.jsonl", shape=note, fillcolor="#dcfce7"];
+    qov [label="qid_overlap_engine.py\n(P108 employer / P69 school\nwith overlapping dates)"];
+    qedges [label="qid_overlap_edges.jsonl\nSAME_ORG_OVERLAP\nSAME_SCHOOL_OVERLAP", shape=note, fillcolor="#dcfce7"];
+    death [label="fetch_death_dates.py\nupdate_deceased_daily.py\n(P570 date of death)"];
+    dec [label="deceased.json", shape=note, fillcolor="#dcfce7"];
+    qres -> qmap -> qov -> qedges;
+    qmap -> death -> dec;
+  }
+  s_wd -> qres [style=dashed];
+  scored [label="graph_scored.json.gz\n(node names)", shape=note, fillcolor="#dcfce7"];
+  scored -> qres [label="names to resolve"];
+
+  next [label="→ Level 2b build pipeline", shape=plaintext, style="", fontcolor="#1d4ed8"];
+  db -> next; qedges -> next [style=dashed];
+}
