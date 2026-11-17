@@ -34,6 +34,9 @@
   ol.chain li { padding:.15rem 0; } ol.chain li.rel { color:var(--muted); font-size:.85rem; padding-left:1rem; }
   .path { border-top:1px solid var(--border); padding:.6rem 0; }
   .hidden { display:none; }
+  .psi-spinner { display:inline-block; width:.8em; height:.8em; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; vertical-align:-.1em; margin-right:.3em; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #review-list { max-height:28rem; overflow:auto; }
 </style>
 </head>
 <body><main>
@@ -74,10 +77,21 @@
   </div>
 
   <div class="panel">
-    <h2>Upload contacts</h2>
-    <p class="muted small">LinkedIn Connections.csv, Google or Outlook contacts (CSV), or vCard. Only names, companies and titles are kept; emails and phone numbers are dropped. Uploading a file with the same name again replaces your earlier copy.</p>
-    <div class="row"><input type="file" id="file" accept=".csv,.vcf,.vcard,text/csv,text/vcard"><button class="primary" onclick="upload()">Upload</button></div>
+    <h2>Add contacts</h2>
+    <p class="muted small">LinkedIn Connections.csv, Google or Outlook contacts (CSV), any spreadsheet saved as CSV with name columns (First Name / Last Name or Name, plus Company and Title if you have them), or vCard.
+      Your file is read and matched privately <b>in your browser</b>; it is never uploaded. You then confirm who to add, and only those people (name, company, title and who they are in the network) are saved to the workspace.
+      Adding from a file with the same name again replaces your earlier copy.</p>
+    <div class="row"><input type="file" id="file" accept=".csv,.txt,.vcf,.vcard,text/csv,text/vcard"><button class="primary" id="check-btn" onclick="upload()">Check file</button></div>
     <div id="upload-msg" class="msg small"></div>
+    <div id="review" class="hidden" style="margin-top:.8rem">
+      <div class="row" style="justify-content:space-between">
+        <span id="review-head" class="small"></span>
+        <span class="row"><button onclick="reviewAll(true)">Tick all</button><button onclick="reviewAll(false)">Untick all</button>
+          <button class="primary" id="save-btn" onclick="saveReview()">Add ticked</button><button onclick="cancelReview()">Cancel</button></span>
+      </div>
+      <p class="muted small">Ticked: clear matches. Unticked: someone shares the name, so pick the right person first. Only ticked people are sent.</p>
+      <div class="tbl" id="review-list"><table><thead><tr><th></th><th>In your file</th><th>Who they are in the network</th><th>Match</th></tr></thead><tbody id="review-rows"></tbody></table></div>
+    </div>
   </div>
 
   <div class="panel">
@@ -112,8 +126,9 @@
   </div>
 </div>
 
+<script src="/contact-psi.js"></script>
 <script>
-let state = { ws: null, info: null };
+let state = { ws: null, info: null, review: null };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(path, opts = {}) {
@@ -168,17 +183,83 @@ async function openWs(id) {
   loadContacts(); loadSources(); loadMembers(); if (admin) loadAudit();
 }
 
+// The file is read and matched here in the browser (contact_psi.js: only
+// blinded points go to the server). The member confirms each match; only
+// confirmed people are sent, with the network node chosen.
+function setMsg(text, cls = '') { $('upload-msg').className = 'msg small ' + cls; $('upload-msg').textContent = text; }
+
 async function upload() {
   const f = $('file').files[0]; if (!f) return;
-  const fd = new FormData(); fd.append('file', f);
-  $('upload-msg').className = 'msg small'; $('upload-msg').textContent = 'Uploading and matching…';
+  if (f.size > 20 * 1024 * 1024) { setMsg('That file is larger than 20 MB.', 'err'); return; }
+  cancelReview();
+  const { contacts } = contactPsiParseFile(await f.text());
+  if (!contacts.length) { setMsg('No contacts with a first and last name were found in that file.', 'err'); return; }
+  const info = {};
+  for (const c of contacts) if (!(c.name in info) || (!info[c.name].company && c.company)) info[c.name] = { company: c.company, position: c.title };
+  const names = Object.keys(info);
+  $('check-btn').disabled = true;
+  $('upload-msg').className = 'msg small';
+  $('upload-msg').innerHTML = `<span class="psi-spinner"></span> Checking ${names.length.toLocaleString()} contacts privately…`;
   try {
-    const d = await api(`/api/ws/${state.ws}/contacts`, { method: 'POST', body: fd });
-    $('upload-msg').className = 'msg small ok';
-    $('upload-msg').textContent = `${d.rows} contacts: ${d.matched} matched, ${d.ambiguous} need a pick, ${d.unmatched} not in the network.`
-      + (d.replaced_previous ? ' Replaced your earlier copy of this file.' : '');
+    const res = await contactPsiMatch(names, info, html => { $('upload-msg').innerHTML = html; });
+    const rows = names.filter(n => res.candidates[n]).map(n => ({ name: n, company: info[n].company, title: info[n].position,
+                                                                  cands: res.candidates[n], confident: contactPsiConfident(res.candidates[n]) }));
+    state.review = { filename: f.name, rows };
+    const missing = res.gaveUp ? ` ${res.gaveUp} lookup pieces couldn’t be reached, so a few matches may be missing; try again for a complete check.` : '';
+    if (!rows.length) { setMsg(`Checked ${names.length.toLocaleString()} contacts privately: none are in the network.` + missing); state.review = null; return; }
+    setMsg(`Checked ${names.length.toLocaleString()} contacts privately: ${rows.length.toLocaleString()} found in the network. `
+      + `The other ${(names.length - rows.length).toLocaleString()} stay on your computer.` + missing, 'ok');
+    renderReview();
+  } catch (e) { setMsg(e.message, 'err'); }
+  finally { $('check-btn').disabled = false; }
+}
+
+const TIER = { exact: 'Definite', phonetic: 'Likely', possible: 'Possible' };
+function renderReview() {
+  const rows = state.review.rows;
+  $('review-rows').innerHTML = rows.map((r, i) => {
+    const pick = r.cands.length === 1 ? esc(r.cands[0].name)
+      : `<select data-i="${i}" onchange="reviewPick(${i}, this.value)">` + r.cands.map((c, j) =>
+          `<option value="${j}">${esc(c.name)}${c.org >= 0.5 ? ' ★' : ''}</option>`).join('') + '</select>'
+        + `<div class="muted small">${r.cands.length} people share this name${r.company ? '' : '; pick the right one'}</div>`;
+    return `<tr><td><input type="checkbox" data-i="${i}" ${r.confident ? 'checked' : ''} onchange="reviewCount()" aria-label="Add ${esc(r.name)}"></td>`
+      + `<td>${esc(r.name)}<div class="muted small">${esc([r.company, r.title].filter(Boolean).join(' · '))}</div></td>`
+      + `<td>${pick}</td><td class="small muted" id="tier-${i}">${TIER[r.cands[0].tier] || ''}</td></tr>`;
+  }).join('');
+  show('review', true);
+  reviewCount();
+}
+function reviewPick(i, j) {
+  $('tier-' + i).textContent = TIER[state.review.rows[i].cands[+j].tier] || '';
+  const box = document.querySelector(`#review-rows input[data-i="${i}"]`); if (box) box.checked = true;
+  reviewCount();
+}
+function reviewAll(on) { document.querySelectorAll('#review-rows input[type=checkbox]').forEach(b => { b.checked = on; }); reviewCount(); }
+function reviewCount() {
+  const n = document.querySelectorAll('#review-rows input[type=checkbox]:checked').length;
+  $('review-head').textContent = `${n.toLocaleString()} of ${state.review.rows.length.toLocaleString()} ticked`;
+  $('save-btn').disabled = !n;
+  $('save-btn').textContent = `Add ${n.toLocaleString()} to the workspace`;
+}
+function cancelReview() { state.review = null; show('review', false); $('review-rows').innerHTML = ''; }
+
+async function saveReview() {
+  const r = state.review; if (!r) return;
+  const contacts = [...document.querySelectorAll('#review-rows input[type=checkbox]:checked')].map(b => {
+    const i = +b.dataset.i, row = r.rows[i];
+    const sel = document.querySelector(`#review-rows select[data-i="${i}"]`);
+    return { name: row.name, company: row.company || null, title: row.title || null, node: row.cands[sel ? +sel.value : 0].name };
+  });
+  $('save-btn').disabled = true;
+  try {
+    const d = await api(`/api/ws/${state.ws}/contacts`, { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename: r.filename, contacts }) });
+    cancelReview();
+    setMsg(`Added ${d.matched.toLocaleString()} contacts to the workspace.` + (d.replaced_previous ? ' Replaced your earlier copy of this file.' : '')
+      + (d.rejected ? ` ${d.rejected} could not be added (no longer in the network).` : ''), 'ok');
+    $('file').value = '';
     openWs(state.ws);
-  } catch (e) { $('upload-msg').className = 'msg small err'; $('upload-msg').textContent = e.message; }
+  } catch (e) { $('save-btn').disabled = false; setMsg(e.message, 'err'); }
 }
 
 async function loadContacts() {
