@@ -4513,54 +4513,6 @@ def _ws_error(e):
                         if e.status != 404 else {"detail": "Not Found"})
 
 
-_namesake_index = None
-
-
-def _ws_namesakes():
-    """{lowercased base name: [split namesake nodes]} -- "Mark Greene (Ibm)"
-    under "mark greene". Built once from the node list."""
-    global _namesake_index
-    if _namesake_index is None:
-        idx = {}
-        for low, node in _load_node_lookup().items():
-            i = low.find(" (")
-            if i > 0 and low.endswith(")"):
-                idx.setdefault(low[:i], []).append(node)
-        _namesake_index = idx
-    return _namesake_index
-
-
-_ORG_STOP = {"inc", "llc", "llp", "lp", "ltd", "limited", "co", "corp", "corporation", "company", "the", "group",
-             "plc", "holdings", "sa", "ag", "gmbh", "of", "and", "us", "usa"}
-
-
-def _org_tokens(s):
-    return {t for t in re.sub(r"[^a-z0-9 ]", " ", (s or "").lower().replace("&", " and ")).split()
-            if t and t not in _ORG_STOP}
-
-
-def _ws_resolve(contact):
-    """(status, node, candidates) for one uploaded contact. A namesake whose
-    employer matches the contact's company wins; a single exact node with no
-    namesakes is a match; anything with several possibilities waits for the
-    member to pick ("which one?"); no node at all stays unmatched."""
-    name = contact["name"].strip()
-    low = name.lower()
-    exact = _load_node_lookup().get(low)
-    splits = _ws_namesakes().get(low, [])
-    company = _org_tokens(contact.get("company"))
-    if company and splits:
-        hits = [n for n in splits if _org_tokens(n[n.find(" (") + 2:-1]) & company]
-        if len(hits) == 1:
-            return _ws.MATCHED, hits[0], []
-    if exact and not splits:
-        return _ws.MATCHED, exact, []
-    cands = ([exact] if exact else []) + splits
-    if cands:
-        return _ws.AMBIGUOUS, None, cands
-    return _ws.UNMATCHED, None, []
-
-
 class WorkspaceCreate(BaseModel):
     name: str = Field(..., max_length=120)
     admin_email: str = Field(..., max_length=200)
@@ -4574,6 +4526,18 @@ class WorkspaceMemberAdd(BaseModel):
 
 class WorkspaceResolve(BaseModel):
     node: Optional[str] = Field(None, max_length=300)
+
+
+class WorkspaceContact(BaseModel):
+    name: str = Field(..., max_length=200)
+    company: Optional[str] = Field(None, max_length=200)
+    title: Optional[str] = Field(None, max_length=200)
+    node: str = Field(..., max_length=300)
+
+
+class WorkspaceContactsUpload(BaseModel):
+    filename: str = Field(..., max_length=200)
+    contacts: List[WorkspaceContact] = Field(..., max_length=_ws.MAX_CONTACT_ROWS)
 
 
 def _ws_allow_through_access(email):
@@ -4680,24 +4644,31 @@ async def ws_remove_member(ws_id: int, member_email: str, request: Request):
 
 
 @app.post("/api/ws/{ws_id}/contacts")
-async def ws_upload_contacts(ws_id: int, request: Request, file: UploadFile = File(...)):
+async def ws_upload_contacts(ws_id: int, req: WorkspaceContactsUpload, request: Request):
+    """The member's browser reads the file and matches it privately
+    (contact_psi.js); only the people the member confirmed arrive here, each
+    with the network node they chose. The file itself never reaches us."""
     email, err = _ws_guard(request)
     if err:
         return err
-    data = await file.read(_ws.MAX_UPLOAD_BYTES + 1)
-    filename = (file.filename or "contacts.csv")[:200]
-    loop = asyncio.get_event_loop()
+    nodes = _load_node_lookup()
+    contacts, rejected = [], 0
+    for c in req.contacts:
+        if nodes.get(c.node.lower()) != c.node:
+            rejected += 1
+            continue
+        contacts.append({"name": c.name.strip(), "company": (c.company or "").strip(),
+                         "title": (c.title or "").strip(), "node": c.node})
     try:
-        _ws.get_workspace(_ml_db(), ws_id, email)          # membership before any parsing
-        contacts = _ws.parse_contacts(data, filename)
+        _ws.get_workspace(_ml_db(), ws_id, email)          # membership first
         if not contacts:
-            return JSONResponse(status_code=400, content={"success": False, "error":
-                                "no contacts with a first and last name were found in that file"})
-        res = await loop.run_in_executor(None, _ws.import_contacts, _ml_db(), ws_id, email, filename,
-                                         contacts, _ws_resolve)
+            return JSONResponse(status_code=400, content={"success": False, "error": "no confirmed contacts to save"})
+        res = await asyncio.get_event_loop().run_in_executor(
+            None, _ws.import_contacts, _ml_db(), ws_id, email, req.filename.strip() or "contacts",
+            contacts, lambda c: (_ws.MATCHED, c["node"], []))
     except _ws.WorkspaceError as e:
         return _ws_error(e)
-    return {"success": True, **res}
+    return {"success": True, **res, "rejected": rejected}
 
 
 @app.get("/api/ws/{ws_id}/contacts")
@@ -4947,6 +4918,14 @@ class LookupBlockRequest(BaseModel):
 
 class LookupDecideRequest(BaseModel):
     approve: bool
+
+
+@app.get("/contact-psi.js")
+async def contact_psi_js():
+    """The in-browser contact matching (file parser + private matching), shared
+    by the main page and the Team workspace page."""
+    return Response(Path(__file__).with_name("contact_psi.js").read_bytes(), media_type="text/javascript",
+                    headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/contact-lookup", response_class=HTMLResponse)
@@ -6940,6 +6919,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<script src="/contact-psi.js"></script>
 <script>
 // via: the one connection that says WHICH person a shared name means
 // ("Mark Peters" at NYC Dept of Investigation, not the union officer) --
@@ -8000,214 +7980,6 @@ function updateAddMeSummary() {
   summary.textContent = `${addMeSubmittedCount} connection${addMeSubmittedCount === 1 ? '' : 's'} submitted for review. You're done -- no further action needed.`;
 }
 
-/* The contact file is parsed locally.  The only values sent below are
-   blinded Ristretto points; plaintext names never enter a fetch body.
-   Tier derivation (normalizeExact/phoneticKey/lshBandTokens) is a
-   byte-for-byte port of webapp/contact_psi/keys.py -- verified against
-   the real Python module and the pinned test vectors before landing here
-   (see specifications/contact-check-psi-test-vectors.json). */
-
-const CONTACT_PSI_SUFFIXES = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v']);
-const CONTACT_PSI_SOUNDEX = {};
-for (const c of 'bfpv') CONTACT_PSI_SOUNDEX[c] = '1';
-for (const c of 'cgjkqsxz') CONTACT_PSI_SOUNDEX[c] = '2';
-for (const c of 'dt') CONTACT_PSI_SOUNDEX[c] = '3';
-CONTACT_PSI_SOUNDEX['l'] = '4';
-for (const c of 'mn') CONTACT_PSI_SOUNDEX[c] = '5';
-CONTACT_PSI_SOUNDEX['r'] = '6';
-for (const c of 'aeiouy') CONTACT_PSI_SOUNDEX[c] = '0';
-
-// --- Compact contact-matching manifest (format 2, contact_psi/manifest.py) ---
-// The exact-name tier is downloaded WHOLE (and cached in the browser), so
-// the download says nothing about which contacts are being checked. The
-// sound-alike tier comes in 256 small shards; we ask for the ones we need
-// plus random others, in random order.
-async function contactPsiFetchCached(url, onChunk) {
-  const abs = new URL(url, location.href).href;
-  let cache = null;
-  try { cache = await caches.open('contact-psi-v2'); } catch (e) {}
-  if (cache) {
-    try { const hit = await cache.match(abs); if (hit) return new Uint8Array(await hit.arrayBuffer()); } catch (e) {}
-  }
-  const res = await fetch(abs);
-  if (!res.ok) throw new Error('Could not download the private matching file (HTTP ' + res.status + ') -- try again.');
-  const reader = res.body.getReader();
-  const chunks = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value); got += value.length;
-    if (onChunk) onChunk(value.length);
-  }
-  const buf = new Uint8Array(got);
-  let o = 0;
-  for (const c of chunks) { buf.set(c, o); o += c.length; }
-  if (cache) {
-    try {
-      const base = abs.split('?')[0];
-      for (const k of await cache.keys()) if (k.url.split('?')[0] === base && k.url !== abs) await cache.delete(k);
-      await cache.put(abs, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }));
-    } catch (e) {}
-  }
-  return buf;
-}
-
-function contactPsiParseCompact(buf, prefixBytes) {
-  if (buf[0] !== 0x50 || buf[1] !== 0x53 || buf[2] !== 0x49 || buf[3] !== 0x58) throw new Error('The matching file is damaged -- try again.');
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  const n = dv.getUint32(9, true);
-  const p0 = 13, o0 = p0 + n * prefixBytes;
-  return { buf, dv, n, p0, o0, b0: o0 + (n + 1) * 4, pb: prefixBytes };
-}
-
-function contactPsiCompactFind(f, key) {
-  const cmp = i => { const base = f.p0 + i * f.pb; for (let j = 0; j < f.pb; j++) { const d = f.buf[base + j] - key[j]; if (d) return d; } return 0; };
-  let lo = 0, hi = f.n;
-  while (lo < hi) { const mid = (lo + hi) >>> 1; if (cmp(mid) < 0) lo = mid + 1; else hi = mid; }
-  const out = [];
-  for (let i = lo; i < f.n && cmp(i) === 0; i++) {
-    const a = f.dv.getUint32(f.o0 + i * 4, true), b = f.dv.getUint32(f.o0 + (i + 1) * 4, true);
-    out.push(f.buf.subarray(f.b0 + a, f.b0 + b));
-  }
-  return out;
-}
-
-async function contactPsiCompactLookup(queries, meta, loading, sha256, textBytes, concatBytes) {
-  const pb = meta.exact_prefix_bytes || 6, tagBits = (meta.tag_bytes || 12) * 8;
-  const decryptAll = async (q, cts) => {
-    if (!cts.length) return;
-    const k = await crypto.subtle.importKey('raw', q.aesKeyBytes, 'AES-GCM', false, ['decrypt']);
-    const iv = (await sha256(concatBytes(textBytes('contact-psi-nonce-v1'), q.aesKeyBytes))).slice(0, 12);
-    for (const ct of cts) {
-      try {
-        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, tagLength: tagBits }, k, ct);
-        const found = new TextDecoder().decode(pt).split('\n').filter(Boolean);
-        (q.payloads || (q.payloads = [])).push({ matches: found.map(n => ({ id: n, name: n })) });
-      } catch (e) { /* another key with the same prefix -- expected */ }
-    }
-  };
-  // 1. exact names: every part, always
-  const totalMB = Math.max(1, Math.round((meta.exact_bytes || 0) / 1e6));
-  let got = 0;
-  const show = () => {
-    loading.innerHTML = `<span class="psi-spinner"></span> Downloading the private matching file `
-      + `(${Math.round(got / 1e6)} of ~${totalMB} MB; your browser keeps it for next time)…`;
-  };
-  const parts = [];
-  for (const url of meta.exact_urls) parts.push(contactPsiParseCompact(await contactPsiFetchCached(url, n => { got += n; show(); }), pb));
-  loading.innerHTML = '<span class="psi-spinner"></span> Matching…';
-  for (const q of queries) {
-    if (q.tier !== 'exact') continue;
-    await decryptAll(q, contactPsiCompactFind(parts[Math.floor(q.aesKeyBytes[0] * parts.length / 256)], q.aesKeyBytes));
-  }
-  // 2. sound-alike names: needed shards + random padding, shuffled
-  const fq = queries.filter(q => q.tier === 'phonetic');
-  if (!fq.length) return { gaveUp: 0, fuzzyShards: 0 };
-  const hex = b => b.toString(16).padStart(2, '0');
-  const want = new Set(fq.map(q => hex(q.aesKeyBytes[0])));
-  const minShards = Math.min(256, meta.fuzzy_min_shards || 32);
-  while (want.size < minShards) want.add(hex(crypto.getRandomValues(new Uint8Array(1))[0]));
-  const ids = [...want];
-  for (let i = ids.length - 1; i > 0; i--) {
-    const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-  }
-  const shards = {};
-  let gaveUp = 0;
-  const max = meta.fuzzy_batch_max || 64;
-  for (let i = 0; i < ids.length; i += max) {
-    const batch = ids.slice(i, i + max);
-    let res = null;
-    for (let attempt = 0; attempt < 4 && !(res && res.ok); attempt++) {
-      if (attempt) await new Promise(r => setTimeout(r, 500 * attempt));
-      try {
-        res = await fetch(meta.fuzzy_batch_url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                                  body: JSON.stringify({ shards: batch }) });
-      } catch (e) { res = null; }
-    }
-    if (!(res && res.ok)) { gaveUp += batch.length; continue; }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    const dv = new DataView(buf.buffer);
-    for (let o = 0; o + 5 <= buf.length; ) {
-      const id = hex(buf[o]), len = dv.getUint32(o + 1, true);
-      o += 5;
-      if (len) shards[id] = contactPsiParseCompact(buf.subarray(o, o + len), pb);
-      o += len;
-    }
-  }
-  for (const q of fq) {
-    const f = shards[hex(q.aesKeyBytes[0])];
-    if (f) await decryptAll(q, contactPsiCompactFind(f, q.aesKeyBytes));
-  }
-  return { gaveUp, fuzzyShards: ids.length };
-}
-
-function contactPsiNormalizeExact(name) {
-  let text = String(name).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  text = text.replace(/[-'.,]/g, ' ').replace(/[^a-z0-9\s]/g, '');
-  const tokens = text.split(/\s+/).filter(Boolean);
-  if (tokens.length && CONTACT_PSI_SUFFIXES.has(tokens[tokens.length - 1])) tokens.pop();
-  return tokens.sort().join(' ');
-}
-
-function contactPsiSoundexToken(token) {
-  const letters = [...token].filter(c => c >= 'a' && c <= 'z');
-  if (!letters.length) return '0000';
-  const digits = [];
-  let last = null;
-  for (const c of letters) {
-    if (c === 'h' || c === 'w') continue;
-    const cls = CONTACT_PSI_SOUNDEX[c];
-    if (cls !== last) {
-      digits.push(cls);
-      if (digits.length === 4) break;
-    }
-    last = cls;
-  }
-  while (digits.length < 4) digits.push('0');
-  return digits.join('');
-}
-
-function contactPsiPhoneticKey(name) {
-  const normalized = contactPsiNormalizeExact(name);
-  if (!normalized) return '';
-  return normalized.split(' ').map(contactPsiSoundexToken).sort().join('|');
-}
-
-// "Mark Greene (Ibm)" -> "Mark Greene": split namesakes carry their employer
-// in parentheses (webapp/disambiguation.py, contact_psi.manifest.base_name).
-function contactPsiBaseName(name) {
-  const i = name.indexOf(' (');
-  return name.endsWith(')') && i > 0 ? name.slice(0, i) : name;
-}
-
-function contactPsiNodeOrg(name) {
-  const i = name.indexOf(' (');
-  return name.endsWith(')') && i > 0 ? name.slice(i + 2, -1) : '';
-}
-
-const PSI_ORG_STOP = new Set(['inc', 'llc', 'llp', 'lp', 'ltd', 'limited', 'co', 'corp', 'corporation', 'company',
-  'the', 'group', 'plc', 'holdings', 'sa', 'ag', 'gmbh', 'of', 'and', 'us', 'usa']);
-function contactPsiOrgTokens(org) {
-  return (org || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-    .filter(t => t && !PSI_ORG_STOP.has(t));
-}
-
-// 0..1: how well a LinkedIn company names a candidate's employer.
-// "IBM" ~ "International Business Machines Corporation" via initials.
-function contactPsiOrgScore(company, nodeOrg) {
-  const a = contactPsiOrgTokens(company), b = contactPsiOrgTokens(nodeOrg);
-  if (!a.length || !b.length) return 0;
-  const A = new Set(a), B = new Set(b);
-  if (a.join(' ') === b.join(' ')) return 1;
-  const initials = t => t.map(w => w[0]).join('');
-  if ((a.length === 1 && a[0].length > 1 && a[0] === initials(b))
-      || (b.length === 1 && b[0].length > 1 && b[0] === initials(a))) return 0.9;
-  const shared = [...A].filter(t => B.has(t)).length;
-  if (shared && (shared === A.size || shared === B.size)) return 0.8;
-  return shared / new Set([...A, ...B]).size;
-}
 
 let psiCandidates = {};
 
@@ -8253,69 +8025,6 @@ async function psiNoneOfThese(btn) {
   }
 }
 
-function contactPsiTrigrams(name) {
-  const padded = ' ' + contactPsiNormalizeExact(name) + ' ';
-  const set = new Set();
-  for (let i = 0; i <= padded.length - 3; i++) set.add(padded.slice(i, i + 3));
-  return set;
-}
-
-function contactPsiJaccard(a, b) {
-  if (!a.size && !b.size) return 1;
-  let intersection = 0;
-  for (const g of a) if (b.has(g)) intersection++;
-  const union = a.size + b.size - intersection;
-  return union ? intersection / union : 0;
-}
-
-function contactPsiFnv1a32(value) {
-  let h = 0x811C9DC5;
-  for (const byte of new TextEncoder().encode(value)) {
-    h ^= byte;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
-
-const CONTACT_PSI_MERSENNE_PRIME = (1n << 61n) - 1n;
-// Pinned coefficient table (first 24 of the 32 in
-// specifications/contact-check-psi-test-vectors.json) -- must never be
-// regenerated, only copied verbatim, or phonetic/possible-tier matches
-// silently stop working against the manifest built with the Python table.
-const CONTACT_PSI_MINHASH_COEFFICIENTS = [
-  [1979489632114620755n, 1509789760387149117n], [1918805637228309363n, 833186062390129979n],
-  [495730073182853211n, 595723440359463397n], [90324890263903832n, 445813994702288431n],
-  [2257285402276830348n, 1119254023105354110n], [1021786013160126921n, 1265193707630753218n],
-  [212068324108876953n, 504007361524737770n], [414280352786679535n, 803222919456732142n],
-  [1768409434185088727n, 1986075548297811767n], [1742620678125402464n, 2257046664463391349n],
-  [1415753637546083748n, 593533786031525589n], [1196761435141869264n, 2265235534276433043n],
-  [395539926857611198n, 457238027093643287n], [1503513604051188411n, 1643417863877736261n],
-  [1816084546320001784n, 1408403254850552953n], [1707502431300134009n, 1007438581320924473n],
-  [2225548798102152013n, 1814493586781104521n], [567344556111402844n, 1649644300899723705n],
-  [463722948478937003n, 762157748086021223n], [1390024454749409324n, 597300290928022787n],
-  [535273311151590049n, 445969734299799432n], [1794290647980509285n, 1609987668421870033n],
-  [1379461383878485334n, 176252640438661704n], [1433166327964526570n, 1929046851930636275n],
-];
-
-function contactPsiMinhashSignature(trigramSet) {
-  if (!trigramSet.size) return new Array(24).fill(0n);
-  const hashes = [...trigramSet].map(g => BigInt(contactPsiFnv1a32(g)));
-  return CONTACT_PSI_MINHASH_COEFFICIENTS.map(([a, b]) => {
-    let m = null;
-    for (const x of hashes) {
-      const v = (a * x + b) % CONTACT_PSI_MERSENNE_PRIME;
-      if (m === null || v < m) m = v;
-    }
-    return m;
-  });
-}
-
-function contactPsiLshBandTokens(name) {
-  const signature = contactPsiMinhashSignature(contactPsiTrigrams(name));
-  const tokens = [];
-  for (let i = 0; i < 3; i++) tokens.push(`${i}:` + signature.slice(i * 8, (i + 1) * 8).join(','));
-  return tokens;
-}
 
 // Two independent input paths under the same "Check My Contacts" section,
 // chosen once at page load by initContactCheckUI():
@@ -8372,37 +8081,26 @@ function initContactCheckUI() {
   }
 }
 
+// A contacts file: vCard, any CSV with name columns (First/Last Name or
+// Name, plus Company and Title if present), or one name per line. Parsed
+// here in the browser (contact_psi.js); company and title only rank
+// same-named people and are shown next to each match.
 async function doOPRF(input) {
   const file = input.files[0];
   if (!file) return;
-  const names = (await file.text()).split(/\r?\n/).map(line => line.trim())
-    .filter(line => line && !/^(BEGIN|END|VERSION|EMAIL|TEL):/.test(line))
-    .map(line => line.includes(':') ? line.slice(line.indexOf(':') + 1).trim() : line)
-    .filter(name => name.length > 3);
-  await checkContacts(names, 'No contacts found in file');
+  input.value = '';
+  const { names, info } = contactPsiNamesAndInfo(contactPsiParseFile(await file.text()).contacts);
+  await checkContacts(names, 'No contacts found in file', 'contacts', info);
 }
 
-// Minimal RFC 4180 CSV line splitter (handles quoted fields, including
-// commas and escaped "" inside a quoted field) -- LinkedIn's export quotes
-// company/position names that routinely contain commas ("Acme, Inc."), so a
-// plain line.split(',') would misalign columns on exactly the rows that
-// matter most.
-function csvSplitLine(line) {
-  const fields = [];
-  let cur = '', inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQuotes) {
-      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-      else if (c === '"') inQuotes = false;
-      else cur += c;
-    } else if (c === '"') inQuotes = true;
-    else if (c === ',') { fields.push(cur); cur = ''; }
-    else cur += c;
+function contactPsiNamesAndInfo(contacts) {
+  const info = {};
+  for (const c of contacts) {
+    if (!(c.name in info) || (!info[c.name].company && c.company)) info[c.name] = { company: c.company, position: c.title };
   }
-  fields.push(cur);
-  return fields;
+  return { names: Object.keys(info), info };
 }
+
 
 // --- My links (private-service beta) ---------------------------------------
 let myLinksEnabled = false;   // set once /api/my/links answers (user is in the beta)
@@ -8726,25 +8424,9 @@ async function doLinkedInImport(input) {
     result.textContent = "Error: this doesn't look like a LinkedIn Connections.csv export (no First Name/Last Name header found).";
     return;
   }
-  const header = csvSplitLine(lines[headerIdx]).map(h => h.trim().toLowerCase());
-  const firstIdx = header.findIndex(h => h.includes('first'));
-  const lastIdx = header.findIndex(h => h.includes('last'));
-  const companyIdx = header.findIndex(h => h === 'company');
-  const positionIdx = header.findIndex(h => h === 'position');
-  // company/position never leave the browser: they only rank same-named
-  // candidates locally (contactPsiOrgScore) and are shown next to each match
-  const meta = {};
-  const names = lines.slice(headerIdx + 1)
-    .map(line => {
-      const cols = csvSplitLine(line);
-      const name = `${(cols[firstIdx] || '').trim()} ${(cols[lastIdx] || '').trim()}`.trim();
-      const company = companyIdx >= 0 ? (cols[companyIdx] || '').trim() : '';
-      const position = positionIdx >= 0 ? (cols[positionIdx] || '').trim() : '';
-      if (name && (company || position)) meta[name] = { company, position };
-      return name;
-    })
-    .filter(name => name.length > 3);
-  await checkContacts(names, 'No connections found in file', 'linkedin', meta);
+  const { names, info } = contactPsiNamesAndInfo(contactPsiParseFile(lines.slice(headerIdx).join('\n')).contacts);
+  input.value = '';
+  await checkContacts(names, 'No connections found in file', 'linkedin', info);
 }
 
 async function pickContactsNative() {
@@ -8801,7 +8483,7 @@ function psiRowAnswered(row) {
   }
 }
 
-async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}) {
+async function checkContacts(names, emptyMessage, source = 'contacts', contactInfo = {}) {
   const btn = document.getElementById('psi-btn');
   const result = document.getElementById('psi-result');
   const loading = document.getElementById('psi-loading');
@@ -8820,220 +8502,16 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
   loading.style.display = 'inline-block';
   loading.innerHTML = `<span class="psi-spinner"></span> Checking ${names.length} contact${names.length === 1 ? '' : 's'}…`;
   try {
-    let RistrettoPoint;
-    try {
-      ({ RistrettoPoint } = await import('https://cdn.jsdelivr.net/npm/@noble/curves@1.9.7/esm/ed25519.js/+esm'));
-    } catch (e) {
-      throw new Error('Could not load the crypto library (cdn.jsdelivr.net) needed for contact matching -- check your network connection, or that your browser/DNS isn’t blocking that domain, and try again.');
-    }
-    let metaResponse;
-    try {
-      metaResponse = await fetch('/api/contacts/manifest-meta');
-    } catch (e) {
-      throw new Error('Could not reach the server (manifest-meta) -- check your network connection and try again.');
-    }
-    if (!metaResponse.ok) throw new Error('Contact matching is temporarily unavailable');
-    const meta = await metaResponse.json();
-
     if (!names.length) throw new Error(emptyMessage);
-
-    const sha512 = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-512', bytes));
-    const sha256 = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-    const textBytes = (s) => new TextEncoder().encode(s);
-    const concatBytes = (...arrs) => { const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0)); let o = 0; for (const a of arrs) { out.set(a, o); o += a.length; } return out; };
-    const toB64 = bytes => btoa(String.fromCharCode(...bytes));
-    const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-    const bytesToHexPrefix = (bytes, n) => Array.from(bytes.slice(0, n)).map(b => b.toString(16).padStart(2, '0')).join('');
-    const leBytesToBigInt = (bytes) => { let x = 0n; for (let i = bytes.length - 1; i >= 0; i--) x = (x << 8n) | BigInt(bytes[i]); return x; };
-    const randomScalar = () => RistrettoPoint.Fn.create(leBytesToBigInt(crypto.getRandomValues(new Uint8Array(32))));
-    const pointFor = async (namespace, item) => RistrettoPoint.hashToCurve(await sha512(concatBytes(textBytes(namespace), new Uint8Array([0]), textBytes(item))));
-
-    // Build every (contact, tier, item) query, keeping a back-reference to
-    // the contact for possible-tier re-verification.
-    // Compact manifest (format 2): exact always, sound-alike only for files of
-    // up to meta.fuzzy_max_contacts, no LSH "possible" tier.
-    const compact = meta.format === 2;
-    const fuzzyOn = !compact || names.length <= (meta.fuzzy_max_contacts || 1000);
-    const queries = [];
-    for (const name of names) {
-      const exact = contactPsiNormalizeExact(name);
-      if (exact) queries.push({ name, tier: 'exact', item: exact });
-      const phonetic = fuzzyOn ? contactPsiPhoneticKey(name) : null;
-      if (phonetic) queries.push({ name, tier: 'phonetic', item: phonetic });
-      if (!compact) for (const token of contactPsiLshBandTokens(name)) queries.push({ name, tier: 'possible', item: token });
-    }
-
-    // Refuse up front, before any quota is spent, if the file is bigger than
-    // what this account can check right now (daily quota + one-time bulk).
-    try {
-      const qr = await fetch('/api/contacts/quota');
-      if (qr.ok) {
-        const quota = await qr.json();
-        if (queries.length > quota.daily_points + quota.bulk_points) {
-          throw new Error(`This file has ${names.length.toLocaleString()} contacts. You can check about `
-            + `${quota.contacts_now.toLocaleString()} right now (${quota.daily_contacts.toLocaleString()} a day, plus a one-time `
-            + `allowance of ${quota.bulk_contacts.toLocaleString()} for your first big upload). Split the file, or try again tomorrow.`);
-        }
-      }
-    } catch (e) {
-      if (e instanceof Error && e.message.startsWith('This file has')) throw e;
-    }
-
-    for (const q of queries) {
-      q.blindScalar = randomScalar();
-      q.blindedPoint = (await pointFor(q.tier, q.item)).multiply(q.blindScalar);
-    }
-
-    const evaluatedPoints = [];
-    for (let offset = 0; offset < queries.length; offset += 3000) {
-      const chunk = queries.slice(offset, offset + 3000);
-      let response;
-      try {
-        response = await fetch('/api/contacts/oprf-eval', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key_version: meta.key_version, points: chunk.map(q => toB64(q.blindedPoint.toRawBytes())) }),
-        });
-      } catch (e) {
-        throw new Error(`Could not reach the server (oprf-eval, batch at offset ${offset}) -- check your network connection and try again.`);
-      }
-      if (!response.ok) throw new Error((await response.json()).detail || 'OPRF evaluation failed');
-      evaluatedPoints.push(...(await response.json()).points);
-    }
-
-    // Unblind and derive the AES key for every query first, so the set of
-    // manifest shards actually needed is known before fetching anything.
-    const kvBytes = new Uint8Array(4);
-    new DataView(kvBytes.buffer).setUint32(0, meta.key_version, false);
-    for (let i = 0; i < queries.length; i++) {
-      const q = queries[i];
-      const responsePoint = RistrettoPoint.fromHex(fromB64(evaluatedPoints[i]));
-      const rInv = RistrettoPoint.Fn.inv(q.blindScalar);
-      const unblinded = responsePoint.multiply(rInv);
-      q.aesKeyBytes = await sha256(concatBytes(textBytes('contact-psi-v1'), kvBytes, unblinded.toRawBytes()));
-      q.prefix = bytesToHexPrefix(q.aesKeyBytes, 4);
-      q.shardId = q.prefix.slice(0, meta.shard_hex_chars || 2);
-    }
-
-    // Fetch only the manifest shard(s) that cover the prefixes actually
-    // derived above -- not the whole corpus. The server never learns
-    // which shard(s) are requested correspond to which contact; it only
-    // sees the same blinded-point traffic from the OPRF step, plus which
-    // (of up to 256) shard files were requested, which reveals at most a
-    // few bits of a derived key's hash prefix -- not the item itself.
-    //
-    // One GET per shard reliably tripped Cloudflare's edge rate limiting: a
-    // contact list of a few hundred people commonly needs 150+ of the 256
-    // shards (the corpus has grown enough that queries spread across nearly
-    // the whole shard space), so this was firing 150-250 requests. The 429s
-    // were being treated identically to "shard has no entries" and silently
-    // swallowed, silently dropping real matches with no indication to the
-    // user. Batch many shard IDs into few POST requests instead -- total
-    // data transferred is unchanged, but request COUNT (what the rate limit
-    // actually counts) drops by ~20x.
-    const neededShardIds = compact ? [] : [...new Set(queries.map(q => q.shardId))];
-    const batchUrl = meta.manifest_shards_batch_url || '/api/contacts/manifest-shards';
-    const batchMax = meta.manifest_shards_batch_max || 25;
-    const buckets = {};
-    let shardsGaveUp = 0;
-    let shardsTotal = neededShardIds.length;
-    if (compact) {
-      const r = await contactPsiCompactLookup(queries, meta, loading, sha256, textBytes, concatBytes);
-      shardsGaveUp = r.gaveUp;
-      shardsTotal = r.fuzzyShards;
-    }
-    async function fetchBatch(shardIds) {
-      for (let attempt = 0; ; attempt++) {
-        let response;
-        try {
-          response = await fetch(batchUrl, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shards: shardIds }),
-          });
-        } catch (e) {
-          if (attempt < 2) { await new Promise(r => setTimeout(r, 300 * (attempt + 1))); continue; }
-          shardsGaveUp += shardIds.length;
-          return;
-        }
-        if (response.status === 429 && attempt < 4) {
-          const retryAfter = Math.min(Number(response.headers.get('Retry-After')) || 1, 3);
-          await new Promise(r => setTimeout(r, retryAfter * 1000));
-          continue;
-        }
-        if (!response.ok) { shardsGaveUp += shardIds.length; return; }
-        const data = await response.json();
-        Object.assign(buckets, data.buckets || {});
-        return;
-      }
-    }
-    const batches = [];
-    for (let i = 0; i < neededShardIds.length; i += batchMax) batches.push(neededShardIds.slice(i, i + batchMax));
-    const batchQueue = [...batches];
-    async function batchWorker() {
-      while (batchQueue.length) {
-        await fetchBatch(batchQueue.shift());
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(4, batches.length) }, batchWorker));
-
-    const tierRank = { exact: 0, phonetic: 1, possible: 2 };
-    // Every plausible graph node per contact, not just the top one: a common
-    // name has namesakes ("Mark Greene", "Michael Smith (Goldman Sachs)", ...)
-    // and the server-side order is by degree, not by who the contact is.
-    const candsByContact = {};
-    for (const q of queries) {
-      let payloads = q.payloads;   // compact format: already looked up
-      if (!payloads) {
-        payloads = [];
-        const entries = buckets[q.prefix] || [];
-        if (!entries.length) continue;
-        const cryptoKey = await crypto.subtle.importKey('raw', q.aesKeyBytes, 'AES-GCM', false, ['decrypt']);
-        for (const entry of entries) {
-          try {
-            const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(entry.nonce) }, cryptoKey, fromB64(entry.ct));
-            payloads.push(JSON.parse(new TextDecoder().decode(pt)));
-          } catch (e) {
-            // wrong key for this bucket (prefix collision) -- expected, not an error
-          }
-        }
-      }
-      for (const payload of payloads) {
-        for (const m of payload.matches || []) {
-          // Both phonetic and possible tiers are many-to-one (many
-          // distinct real names can share one Soundex code or LSH band --
-          // e.g. "Katharine Lee" and "Jude Law" both soundex to
-          // "2030|4000", confirmed against the real ~1.46M-person corpus,
-          // not a hypothetical edge case). A bundle is server-ranked by
-          // degree/notability, not by resemblance to this query, so the
-          // top-ranked entry in a bucket can be a totally unrelated,
-          // high-degree name. Re-verify string similarity locally for
-          // both tiers before ever displaying a match; exact tier needs
-          // no such check since its OPRF item IS the normalized string.
-          let similarity = 1;
-          if (q.tier !== 'exact') {
-            similarity = contactPsiJaccard(contactPsiTrigrams(q.name), contactPsiTrigrams(contactPsiBaseName(m.name)));
-            if (similarity < 0.5) continue; // phonetic/band collision, not a real resemblance
-          }
-          const rank = tierRank[q.tier];
-          const cands = candsByContact[q.name] || (candsByContact[q.name] = {});
-          const current = cands[m.id];
-          if (!current || rank < current.rank || (rank === current.rank && similarity > current.similarity)) {
-            cands[m.id] = { rank, similarity, tier: q.tier, name: m.name, id: m.id,
-                            order: current ? current.order : Object.keys(cands).length };
-          }
-        }
-      }
-    }
-
+    // contactInfo (company/position from the file) never leaves the browser:
+    // it only ranks same-named people. (Until 2026-11-17 it was shadowed by
+    // the manifest metadata here and silently ignored.)
+    const { candidates, gaveUp: shardsGaveUp, shardsTotal } =
+      await contactPsiMatch(names, contactInfo, html => { loading.innerHTML = html; });
     const tierLabel = { exact: 'Definite', phonetic: 'Likely', possible: 'Possible' };
-    const matchedContacts = Object.keys(candsByContact);
-    const rankedFor = contact => {
-      const company = (meta[contact] || {}).company || '';
-      return Object.values(candsByContact[contact])
-        .map(c => Object.assign(c, { org: contactPsiOrgScore(company, contactPsiNodeOrg(c.name)) }))
-        .sort((a, b) => (b.org >= 0.5) - (a.org >= 0.5) || a.rank - b.rank || b.org - a.org
-                        || b.similarity - a.similarity || a.order - b.order)
-        .slice(0, 12);
-    };
+    const matchedContacts = Object.keys(candidates);
+    const rankedFor = contact => candidates[contact];
+    const fromLabel = source === 'linkedin' ? 'LinkedIn' : 'Your file';
     psiCandidates = {};
     const warningHtml = shardsGaveUp > 0
       ? `<div style="color:#d29922;margin-top:6px;">Note: ${shardsGaveUp} of ${shardsTotal} lookup shard${shardsGaveUp === 1 ? '' : 's'} `
@@ -9047,9 +8525,9 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
         const cands = rankedFor(contact);
         psiCandidates[rowIdx] = cands;
         const top = cands[0];
-        const info = meta[contact] || {};
+        const info = contactInfo[contact] || {};
         // "Add all" only takes rows where the pick isn't a guess between namesakes
-        const confident = top.tier !== 'possible' && (cands.length === 1 || top.org >= 0.5);
+        const confident = contactPsiConfident(cands);
         if (confident) addableCount++;
         const pick = cands.length === 1
           ? `<strong>${escHtml(top.name)}</strong>`
@@ -9064,7 +8542,7 @@ async function checkContacts(names, emptyMessage, source = 'contacts', meta = {}
         const whois = ` <button class="whois-btn" title="Who is this?" aria-label="Who is this?" onclick="psiWhois(this)">ⓘ</button>`;
         let note = '';
         if (info.company || info.position) {
-          note = `LinkedIn: ${escHtml([info.company, info.position].filter(Boolean).join(' — '))}`;
+          note = `${fromLabel}: ${escHtml([info.company, info.position].filter(Boolean).join(' — '))}`;
           if (info.company && top.org < 0.5)
             note += cands.length > 1 ? ' · none of these names mention that company — check ⓘ before adding'
                                      : ' · check ⓘ that this is the same person';

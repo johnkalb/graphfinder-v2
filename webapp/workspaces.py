@@ -31,7 +31,6 @@ except ImportError:  # imported as webapp.workspaces
 ROLES = ("admin", "member")
 DEFAULT_SEAT_LIMIT = 10
 MAX_CONTACT_ROWS = 50_000
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MATCHED, AMBIGUOUS, UNMATCHED = "matched", "ambiguous", "unmatched"
 
 
@@ -212,59 +211,15 @@ def audit_log(db_path, ws_id, email, limit=200):
         conn.close()
 
 
-# --- contact files -------------------------------------------------------------
-
-def _clean(s, n=200):
-    return re.sub(r"\s+", " ", (s or "")).strip()[:n]
-
-
-def _pick(row, *names):
-    low = {(k or "").strip().lower(): v for k, v in row.items()}
-    for n in names:
-        if low.get(n):
-            return low[n]
-    return ""
-
-
-def parse_contacts(data: bytes, filename: str):
-    """LinkedIn Connections.csv, Google / Outlook contact CSVs, or vCard ->
-    [{"name", "company", "title"}]. Emails and phone numbers are not kept."""
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise WorkspaceError(f"file is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB", 413)
-    text = data.decode("utf-8-sig", errors="replace")
-    out = []
-    if filename.lower().endswith((".vcf", ".vcard")) or text.lstrip().upper().startswith("BEGIN:VCARD"):
-        for card in re.split(r"(?im)^BEGIN:VCARD\s*$", text)[1:]:
-            fields = {}
-            for line in re.sub(r"\r?\n[ \t]", "", card).splitlines():   # unfold continuation lines
-                key, _, val = line.partition(":")
-                fields.setdefault(key.split(";")[0].upper(), val)
-            name = fields.get("FN") or " ".join(reversed([p for p in fields.get("N", "").split(";")[:2] if p]))
-            out.append({"name": _clean(name), "company": _clean(fields.get("ORG", "").split(";")[0]),
-                        "title": _clean(fields.get("TITLE", ""))})
-    else:
-        lines = text.splitlines()
-        # LinkedIn puts a few "Notes:" lines above the header row
-        start = next((i for i, l in enumerate(lines[:20])
-                      if re.search(r"(?i)\b(first name|name|given name)\b", l) and "," in l), 0)
-        for row in csv.DictReader(io.StringIO("\n".join(lines[start:]))):
-            first = _pick(row, "first name", "given name")
-            last = _pick(row, "last name", "family name", "surname")
-            name = f"{first} {last}".strip() or _pick(row, "name", "full name", "display name")
-            out.append({"name": _clean(name),
-                        "company": _clean(_pick(row, "company", "organization 1 - name", "organization name",
-                                                "organization")),
-                        "title": _clean(_pick(row, "position", "title", "job title", "organization 1 - title"))})
-    out = [c for c in out if len(c["name"].split()) >= 2]
-    if len(out) > MAX_CONTACT_ROWS:
-        raise WorkspaceError(f"more than {MAX_CONTACT_ROWS:,} contacts in one file", 413)
-    return out
-
+# --- contacts -------------------------------------------------------------------
+# Contact files are read and matched in the member's browser (contact_psi.js,
+# private matching); only the contacts the member confirms are sent, each with
+# the network node chosen. 2026-11-17: this used to parse uploaded files here.
 
 def import_contacts(db_path, ws_id, email, filename, contacts, resolve):
-    """Store uploaded contacts as workspace entities known by `email`.
-    resolve(contact) -> (status, node or None, candidates list). Re-uploading
-    a file with the same name replaces that member's previous upload of it."""
+    """Store confirmed contacts as workspace entities known by `email`.
+    resolve(contact) -> (status, node or None, candidates list). Saving from
+    a file with the same name again replaces that member's earlier copy."""
     conn = db.connect(db_path)
     try:
         _member(conn, ws_id, email)
