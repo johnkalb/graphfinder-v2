@@ -198,3 +198,21 @@ def test_team_keys_follow_membership_and_daily_cap(client, setup, monkeypatch):
     monkeypatch.setitem(cl.DAILY_CAP, "work", 1)
     r = client.post("/api/lookup/run", json=body, headers=JUDY)
     assert r.status_code == 429 and r.json()["code"] == "cap"
+
+
+def test_employer_ranking_prefers_the_firm_over_memberships():
+    """Peter Thiel (2026-11-17): LittleSis files Bilderberg, the transition team
+    and an FBI informant tie as positions; Founders Fund (with many Form D fund
+    vehicles) and Palantir are what he runs."""
+    E = ["CO_EXECUTIVE"]
+    nb = [("Bilderberg Group", E + ["MEMBERSHIP"], 0.94, 40),
+          ("Trump Transition Team Executive Committee", E + ["MEMBERSHIP"], 0.94, 30),
+          ("Federal Bureau of Investigation", E + ["OTHER"], 0.88, 5),
+          ("Thiel Fellowship Program Inc.", E, 0.87, 3),
+          ("Palantir Technologies Inc.", E + ["DONATION"], 0.88, 9), ("Palantir Technologies", E, 0.87, 9),
+          ("Founders Fund", E, 0.87, 20), ("AutoNation, Inc.", E, 0.87, 1)]
+    nb += [(f"Founders Fund {v}, LP", ["CO_DIRECTOR"], 0.87, 2) for v in ("V", "VI", "VII", "Growth")]
+    got = pf._rank_employers("Peter Thiel", nb)
+    # the firm, then other companies, then side seats, then LittleSis memberships
+    assert got == ["Founders Fund", "Palantir Technologies", "AutoNation, Inc.", "Thiel Fellowship Program Inc.",
+                   "Bilderberg Group", "Trump Transition Team Executive Committee", "Federal Bureau of Investigation"]

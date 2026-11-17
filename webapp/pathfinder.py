@@ -1,6 +1,6 @@
 """Network Pathfinder — FastAPI backend.
 Serves full-name search and shortest-path queries against the deduplicated social network."""
-import os, pickle, json, sqlite3, hashlib, re, html, bisect, array, heapq
+import os, pickle, json, sqlite3, hashlib, re, html, bisect, array, heapq, math
 import asyncio
 import concurrent.futures
 import functools
@@ -4810,9 +4810,73 @@ _PROTECTED_ORG_RE = re.compile(
 # Only a job-type link to such a body counts: a LittleSis "professional" or
 # "other" tie to the FBI (Peter Thiel, as an informant) is not a role there.
 _PROTECTED_ROLE_CATS = {"PUBLIC_OFFICE", "EMPLOYMENT", "CO_EXECUTIVE", "STAFF_AIDE", "FELLOW_OFFICEHOLDER"}
-_NOT_EMPLOYER_RE = re.compile(r"\b(universit|college|school|institute|academy|foundation|chamber of commerce|"
-                              r"council|association|society|club|fund\b|museum|trust)", re.I)
+# Side seats rather than someone's job: schools, charities, clubs, and
+# government or advisory bodies. ("Fund" is not here: Founders Fund is a firm.)
+_NOT_EMPLOYER_RE = re.compile(r"\b(universit|college|school|institut|academy|foundation|chamber of commerce|"
+                              r"council|association|society|club|museum|trust\b|fellowship|"
+                              r"department|bureau|agency|commission|committee|board\b|caucus|transition|"
+                              r"administration|government|ted\b|partnership for|roundtable|forum\b|fund for|"
+                              r"philanthrop|campaign\b)", re.I)
 _EMPLOYER_CAT_RANK = {"CO_EXECUTIVE": 0, "SEC_INSIDER": 1, "EMPLOYMENT": 2, "CO_DIRECTOR": 3, "FOUNDER": 4}
+# LittleSis files memberships (Bilderberg), informant ties (the FBI) and
+# donor seats as "positions"; one that also carries these is a weak job signal
+_SOFT_EMPLOYER_CATS = {"MEMBERSHIP", "OTHER", "DONATION", "SCHOOL_AFFILIATION", "ADVISORY", "FINANCIAL"}
+_ORG_NOISE_RE = re.compile(r"\b(the|inc|llc|l\s?l\s?c|corp|corporation|co|company|ltd|lp|l\s?p|plc|holdings?|"
+                           r"management|[ivx]+|\d+)\b")
+# first words too common to identify an employer on their own
+_GENERIC_ORG_WORDS = {"american", "national", "united", "first", "global", "international", "general",
+                      "federal", "state", "world", "pacific", "atlantic", "northern", "southern", "eastern",
+                      "western", "central", "capital", "partners", "group", "friends", "royal", "china", "japan",
+                      "british", "canadian", "texas", "california", "florida", "washington", "virginia", "union",
+                      "metropolitan", "citizens", "peoples", "community", "founders", "advanced", "applied",
+                      "digital", "standard", "allied", "continental", "liberty", "pioneer", "summit", "alliance",
+                      "president", "presidents", "center", "institute", "foundation", "council", "health"}
+
+
+def _org_family(label):
+    """'Founders Fund VII, LP' and 'Founders Fund' -> 'founders fund';
+    'BlackRock Advisors, LLC' and 'BlackRock, Inc.' -> 'blackrock'."""
+    words = _ORG_NOISE_RE.sub(" ", re.sub(r"[^a-z0-9 ]+", " ", (label or "").lower())).split()
+    if words and len(words[0]) >= 5 and words[0] not in _GENERIC_ORG_WORDS:
+        return words[0]
+    return " ".join(words[:2])
+
+
+def _rank_employers(label, neighbors):
+    """Suggested employers for a person, best first: the employer in their
+    label, then companies they run or work for (a firm with many linked fund
+    vehicles in Form D filings counts for more), then side seats."""
+    employers = []
+    m = re.search(r"\(([^)]*)\)\s*$", label or "")
+    if m:
+        employers.append(m.group(1))
+    families = {}
+    for olabel, cats, *rest in neighbors:
+        r = min((_EMPLOYER_CAT_RANK[c] for c in cats if c in _EMPLOYER_CAT_RANK), default=None)
+        if r is None or _looks_like_person(olabel) or ("EDUCATION" in cats and r > 1):
+            continue   # schools someone attended aren't employers
+        side = bool(_NOT_EMPLOYER_RE.search(olabel))
+        soft = bool(set(cats) & _SOFT_EMPLOYER_CATS)
+        # colleagues: how many of this person's links also link to the org
+        shared = rest[1] if len(rest) > 1 else 0
+        key = (soft, side, -shared, r, -(rest[0] if rest else 0), len(olabel))
+        fam = families.setdefault(_org_family(olabel) or olabel.lower(),
+                                  {"n": 0, "shared": 0, "best": None, "labels": []})
+        fam["n"] += 1
+        fam["shared"] += shared
+        fam["labels"].append((side, soft, len(olabel), olabel))
+        if fam["best"] is None or key < fam["best"][0]:
+            fam["best"] = (key, olabel)
+    ranked = sorted(families.items(), key=lambda kv: (kv[1]["best"][0][:2], -int(math.log2(kv[1]["shared"] + 1)),
+                                                      kv[1]["best"][0][3], -min(kv[1]["n"], 5), kv[1]["best"][0][4:]))
+    seen = {_org_family(e) for e in employers}
+    for fam_key, f in ranked:
+        if fam_key not in seen:
+            seen.add(fam_key)
+            employers.append(min(f["labels"])[3])   # the plainest name: 'BlackRock, Inc.'
+    return employers
+
+
 _PROTECTED_LABEL_RE = re.compile(r"\b(judge|justice|magistrate|sheriff|police|prosecutor|district attorney)\b", re.I)
 
 
@@ -4852,6 +4916,7 @@ def _lookup_neighbors(node):
     if idx is None:
         return []
     out = []
+    mine = set(_igraph_graph.neighbors(idx))
     for eid in _igraph_graph.incident(idx):
         e = _igraph_graph.es[eid]
         other = e.target if e.source == idx else e.source
@@ -4859,7 +4924,10 @@ def _lookup_neighbors(node):
             continue
         mask = int(_igraph_cats_mask[eid])
         cats = [_igraph_cats_vocab[b] for b in range(len(_igraph_cats_vocab)) if mask & (1 << b)]
-        out.append((_get_label(_igraph_nodes[other]), cats, float(_igraph_prob[eid])))
+        # for possible employers: how many of this person's links also link there (colleagues)
+        shared = (len(mine.intersection(_igraph_graph.neighbors(other)))
+                  if any(c in _EMPLOYER_CAT_RANK for c in cats) else 0)
+        out.append((_get_label(_igraph_nodes[other]), cats, float(_igraph_prob[eid]), shared))
     return out
 
 
@@ -5005,22 +5073,7 @@ async def lookup_person(request: Request, name: str = Query(..., max_length=300)
     neighbors = await asyncio.get_event_loop().run_in_executor(None, _lookup_neighbors, node)
     protected = _lookup_protected(node, neighbors)
     block = _cl.blocked(_ml_db(), node)
-    employers = []
-    m = re.search(r"\(([^)]*)\)\s*$", label)
-    if m:
-        employers.append(m.group(1))
-    ranked = []
-    for olabel, cats, *rest in neighbors:
-        r = min((_EMPLOYER_CAT_RANK[c] for c in cats if c in _EMPLOYER_CAT_RANK), default=None)
-        if r is None or _looks_like_person(olabel) or ("EDUCATION" in cats and r > 1):
-            continue   # schools someone attended aren't employers
-        # trustee / advisory seats and schools, chambers and councils rank
-        # below the company someone actually runs or works for
-        side = "ADVISORY" in cats or bool(_NOT_EMPLOYER_RE.search(olabel))
-        ranked.append(((side, r, -(rest[0] if rest else 0)), olabel))
-    for _r, olabel in sorted(ranked, key=lambda x: x[0]):
-        if olabel not in employers:
-            employers.append(olabel)
+    employers = _rank_employers(label, neighbors)
     return {"node": node, "name": _cl.base_name(label), "label": label,
             "protected": protected, "block": block,
             "work_blocked": _cl.block_reason(block, _cl.WORK),
