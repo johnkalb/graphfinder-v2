@@ -40,6 +40,10 @@ CATEGORY_PROB = {
     "STAFF_AIDE": 0.90,
     "PUBLIC_OFFICE": 0.60,
     "FELLOW_OFFICEHOLDER": 0.75,
+    # Defaults only: each Congress pair carries its own fitted probability
+    # (congress_ties.py), which build_scored_edges.py uses instead.
+    "CONGRESS_COLLEAGUE": 0.60,
+    "CONGRESS_WEAK_TIE": 0.30,
     "SEC_INSIDER": 0.50,
     "NEWS_COMENTION": 0.10,
     "CO_OCCURS_DOC": 0.05,
@@ -95,6 +99,8 @@ CATEGORY_DESC = {
     "STAFF_AIDE": ("Staff / Aide", "A staff or aide relationship (works directly for). Close working proximity strongly implies call acceptance."),
     "PUBLIC_OFFICE": ("Public Office", "Both connected through holding public office. A moderate signal depending on overlap."),
     "FELLOW_OFFICEHOLDER": ("Fellow Officeholder", "Served in the same body (e.g. governors, judges, justices). Peers in the same institution generally know each other."),
+    "CONGRESS_COLLEAGUE": ("Congressional Colleagues", "Served in Congress together and shared committees, subcommittees, caucuses, a state delegation or bills; strength fitted from documented ties between members (congress_ties.py)."),
+    "CONGRESS_WEAK_TIE": ("Congressional Colleagues (weak tie)", "Served in Congress together with some shared context, but less than for a strong tie; a weak signal on its own."),
     "SEC_INSIDER": ("SEC Insider", "Insider, 10%-owner, or filer relationship at the same company. A moderate corporate signal."),
     "NEWS_COMENTION": ("News Co-mention", "Both named in the same news article (GDELT). A weak signal — co-mention in news does not imply acquaintance."),
     "CO_OCCURS_DOC": ("Document Co-occurrence", "Both names appear in the same Epstein estate document. The weakest signal — co-occurrence is not evidence of a real relationship."),

@@ -168,6 +168,10 @@ def categorize(rt):
     # Served in same body (governors/judges/justices — current officeholders)
     if r in ("FELLOW_GOVERNOR", "FELLOW_JUDGE", "FELLOW_JUSTICE"):
         return "FELLOW_OFFICEHOLDER"
+    # Members of Congress scored by shared committees, party, bills etc.
+    # (congress_ties.py, 2026-11-18); the pair's own probability is used
+    if r in ("CONGRESS_COLLEAGUE", "CONGRESS_WEAK_TIE"):
+        return r
     # Held a public office (connects person to office/role)
     if r in ("MEMBER_OF_CONGRESS", "SENATOR", "GOVERNOR", "REPRESENTATIVE",
              "STATE_SENATOR", "STATE_REPRESENTATIVE", "MAYOR", "ATTORNEY_GENERAL",
