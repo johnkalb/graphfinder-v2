@@ -50,3 +50,8 @@ data/enrichment_snapshot.csv
 data/fec_pac_rows.jsonl.gz
 data/fec_indiv_*.jsonl.gz
 data/fec_spend_rows.jsonl.gz
+
+# Congress tie-strength pilot (congress_ties.py): raw downloads and the model cache
+data/raw/congress/
+data/congress_model.pkl.gz
+data/congress_ties_candidate.pkl.gz

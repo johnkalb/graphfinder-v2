@@ -472,6 +472,38 @@ if os.path.exists(OVERLAP_FILE):
     print(f"Wikidata overlap edges: {n_ov} read, {n_ov_kept} connect existing nodes")
     print(f"Unique scorable pairs after overlap merge: {len(pair_rels)}")
 
+# --- Congress ties (congress_ties.py, 2026-11-18) ---
+# Members of Congress since 1993, scored by the committees, subcommittees,
+# caucuses, delegation, class, party and bills they shared (calibrated against
+# documented ties; spec docs/specs/congress_tie_strength.md). Each pair keeps
+# its own probability, combined by noisy-OR with any other links it has; the
+# explanation shown on the path step is written next to the graph.
+congress_p, congress_expl = {}, {}
+try:
+    _cg = psycopg2.connect(DATABASE_URL)
+    _cc = _cg.cursor()
+    _cc.execute("SELECT to_regclass('cg_tie')")
+    if _cc.fetchone()[0]:
+        _cc.execute("SELECT a_node, b_node, p, strength, explanation FROM cg_tie")
+        for a_lab, b_lab, p_tie, strength, expl in _cc.fetchall():
+            ak, bk = canon_key(a_lab), canon_key(b_lab)
+            if not ak or not bk or ak == bk:
+                continue
+            key = tuple(sorted([ak, bk]))
+            rel = "CONGRESS_COLLEAGUE" if strength == "strong" else "CONGRESS_WEAK_TIE"
+            if key in congress_p and congress_p[key][0] >= p_tie:
+                continue
+            congress_p[key] = (float(p_tie), rel)
+            congress_expl[key] = expl
+            pair_rels[key].add(rel)
+            display_votes[ak][a_lab] += 1
+            display_votes[bk][b_lab] += 1
+    _cg.close()
+except psycopg2.Error as e:
+    print(f"Congress ties: not read ({e})")
+print(f"Congress ties: {len(congress_p):,} pairs "
+      f"({sum(r == 'CONGRESS_COLLEAGUE' for _, r in congress_p.values()):,} strong)")
+
 # --- nickname merge (2026-10-01) ---
 # "Larry Summers" and "Lawrence Summers" were two nodes, splitting his edges
 # (and his rank) in half. A nickname-variant pair is merged only when the two
@@ -517,6 +549,12 @@ if nick_map:
     pair_rels = merged_rels
     for k, fk in nick_map.items():
         display_votes[fk].update(display_votes.pop(k, Counter()))
+if nick_map and congress_p:
+    def _nk(k):
+        x, y = nick_map.get(k[0], k[0]), nick_map.get(k[1], k[1])
+        return tuple(sorted([x, y]))
+    congress_p = {_nk(k): v for k, v in congress_p.items() if _nk(k)[0] != _nk(k)[1]}
+    congress_expl = {_nk(k): v for k, v in congress_expl.items() if _nk(k)[0] != _nk(k)[1]}
 print(f"Nickname merges: {len(nick_map)} (e.g. {', '.join(f'{k} -> {v}' for k, v in list(nick_map.items())[:5])})")
 print(f"Unique scorable pairs after nickname merge: {len(pair_rels)}")
 
@@ -533,7 +571,14 @@ edges = []
 multi = 0
 for (a, b), rels in pair_rels.items():
     cats = [categorize(r) for r in rels]
-    prob, used = score_pair(cats)
+    cg = congress_p.get((a, b))
+    if cg:
+        others = [c for c in cats if c not in ("CONGRESS_COLLEAGUE", "CONGRESS_WEAK_TIE")]
+        p_other, used = score_pair(others) if others else (None, [])
+        prob = 1.0 - (1.0 - (p_other or 0.0)) * (1.0 - cg[0])
+        used = list(used) + [cg[1]]
+    else:
+        prob, used = score_pair(cats)
     if prob is None:
         continue  # only SAME_ENTITY / non-relations
     if len(set(cats)) > 1:
@@ -561,3 +606,15 @@ with gzip.open(OUT, "wt", encoding="utf-8") as f:
     splits = {node_ids[k]: best_display(b) for k, b in split_base.items() if k in node_ids}
     json.dump({"nodes": nodes, "edges": edges, "aliases": aliases, "splits": splits}, f, separators=(",", ":"))
 print(f"Saved {OUT}: {os.path.getsize(OUT)/1024/1024:.1f} MB, {len(nodes)} nodes")
+
+# Explanations for Congress links, keyed like /api/evidence ("a|b", final
+# display names, lower case, sorted) -- read by the app for path steps.
+CONGRESS_OUT = os.path.join(os.path.dirname(OUT), "congress_ties.json.gz")
+_cexp = {}
+for (a, b), expl in congress_expl.items():
+    if a in node_ids and b in node_ids:
+        la, lb = sorted([nodes[node_ids[a]].lower(), nodes[node_ids[b]].lower()])
+        _cexp[f"{la}|{lb}"] = [expl, round(congress_p[(a, b)][0], 3)]
+with gzip.open(CONGRESS_OUT, "wt", encoding="utf-8") as f:
+    json.dump(_cexp, f, separators=(",", ":"))
+print(f"Saved {CONGRESS_OUT}: {len(_cexp):,} explanations")

@@ -2030,9 +2030,35 @@ _REL_SOURCE = {
     "FELLOW_SENATOR": ("State Legislature records", ""),
 }
 
+_congress_ties = None
+
+
+def _load_congress_ties():
+    """{"a|b" (display names, lower case, sorted): [explanation, probability]}
+    written by build_scored_edges.py from congress_ties.py (2026-11-18)."""
+    global _congress_ties
+    if _congress_ties is None:
+        p = DATA_DIR / "congress_ties.json.gz"
+        try:
+            with gzip.open(p, "rt", encoding="utf-8") as f:
+                _congress_ties = json.load(f)
+        except (OSError, ValueError):
+            _congress_ties = {}
+    return _congress_ties
+
+
 @app.get("/api/evidence")
 async def get_evidence(src: str = Query(...), tgt: str = Query(...), rel: str = Query(...)):
     """Return evidence (snippets + sources) for a specific relationship edge."""
+    if rel in ("CONGRESS_COLLEAGUE", "CONGRESS_WEAK_TIE"):
+        a, b = sorted([src.lower(), tgt.lower()])
+        hit = _load_congress_ties().get(f"{a}|{b}")
+        if hit:
+            expl, p = hit
+            return {"evidence": [{"source": "Congressional records: committee rosters (Stewart & Woon; "
+                                            "unitedstates/congress-legislators), bills (GovInfo), caucuses (Wikipedia)",
+                                  "snippet": f"{expl}. Estimated strength of this tie: {round(p * 100)}%.",
+                                  "doc": "", "page": "", "url": "https://www.congress.gov/"}]}
     ev_idx = _load_evidence()
     key = f"{src.lower()}|{tgt.lower()}|{rel}"
     items = ev_idx.get(key, [])
