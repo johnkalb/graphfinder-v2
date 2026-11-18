@@ -898,9 +898,6 @@ def publish():
     conn.commit()
     conn.close()
     log(f"published: cg_tie now has {n:,} pairs ({strong:,} strong); the next graph rebuild uses them")
-    with open(REPORT, "w", encoding="utf-8") as f:
-        f.write("\n".join(report) + "\n")
-    log(f"report: {REPORT}")
 
 
 def main():
