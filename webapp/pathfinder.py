@@ -750,6 +750,9 @@ def _request_user_email(request: Optional[Request]) -> Optional[str]:
 # approve/reject arbitrary claims -- including ones made about themselves --
 # would defeat the point of having a review step at all.
 _ADMIN_EMAILS = {"john.kalb@gmail.com", "kureious09@gmail.com"}
+# Beta testers: every feature, including the admin-only betas (Teams, contact
+# lookup) and the paid features on hooconnex, but no admin rights.
+_BETA_EMAILS = {"alexkalb@gmail.com"}
 
 # --- hooconnex (2026-10-28) ----------------------------------------------------
 # A second address on this same app: the free site -- search, paths and My links,
@@ -766,7 +769,7 @@ def _is_hooconnex(request: Optional[Request]) -> bool:
 
 
 def _paid_feature_blocked(request: Request, email: Optional[str]) -> bool:
-    return _is_hooconnex(request) and email not in _ADMIN_EMAILS
+    return _is_hooconnex(request) and email not in _ADMIN_EMAILS and email not in _BETA_EMAILS
 
 
 def _require_admin(request: Request) -> Optional[JSONResponse]:
@@ -4518,7 +4521,7 @@ def _workspaces_enabled(email):
     if not email:
         return False
     mode = (os.environ.get("WORKSPACES_BETA") or "admins").strip().lower()
-    return mode == "all" or email in _ADMIN_EMAILS
+    return mode == "all" or email in _ADMIN_EMAILS or email in _BETA_EMAILS
 
 
 def _ws_guard(request, need_agreement=True):
@@ -4910,7 +4913,7 @@ def _lookup_enabled(email):
     if not email:
         return False
     mode = (os.environ.get("CONTACT_LOOKUP_BETA") or "admins").strip().lower()
-    return mode == "all" or email in _ADMIN_EMAILS
+    return mode == "all" or email in _ADMIN_EMAILS or email in _BETA_EMAILS
 
 
 def _cl_guard(request, need_agreement=True):
