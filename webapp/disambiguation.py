@@ -124,6 +124,10 @@ _JUNK = re.compile(
     r"[\W_]*"
     r"|(?:none|null|nil|vacant|unknown|tbd|n/?a|various|anonymous|not applicable|name withheld"
     r"|information requested|same as above)(?: (?:none|vacant|various))?"
+    # court-record placeholders, not employers: "Pro Se" linked 4,029
+    # self-represented parties as if colleagues (2026-11-19)
+    r"|pro se(?: (?:litigant|party|plaintiff|defendant|petitioner|appellant))?|self[- ]represented|self"
+    r"|attorney at law|law office"
     r"|none \d+%"
     r"|see (?:sch|schedule|supplemental|attached|statement|part)\b.*",
     re.I)
