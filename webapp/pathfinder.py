@@ -1022,6 +1022,18 @@ def _looks_like_person(name):
     return 2 <= len(name.split()) <= 3
 
 
+# Path steps carry "org" so the Build My Path plan doesn't tell people to
+# "reach out to State of Wisconsin and ask them to connect you" (2026-11-19).
+# Wider than _looks_like_person: "State of Wisconsin" and "Pro Se" are two-
+# or three-word names with no org keyword.
+_ORG_JOINERS = re.compile(r"\b(of|and|the|for)\b|&", re.I)
+
+
+def _label_is_org(label):
+    label = label or ""
+    return (not _looks_like_person(label)) or bool(_ORG_JOINERS.search(label))
+
+
 def _find_entry(query):
     _load_search()
     q = query.lower().strip()
@@ -1300,7 +1312,7 @@ def _find_path(src_name, tgt_name, max_depth=6, k=3, include_deceased=False):
                 lbl = _get_label(path[j])
                 step_objects.append({"node": path[j], "label": lbl,
                                      "relation": None, "prob": None, "cats": None,
-                                     "deceased": _dd, "sci": _get_node_sci(lbl)})
+                                     "deceased": _dd, "sci": _get_node_sci(lbl), "org": _label_is_org(lbl)})
             for j in range(len(path) - 1):
                 ed = _graph.get_edge_data(path[j], path[j + 1]) or {}
                 p = ed.get("prob", 0.5)
@@ -1449,7 +1461,7 @@ def _find_path_pg(src_name, tgt_name, k=3, include_deceased=False):
                 dd = deceased.get(name.lower()) if deceased else None
                 lbl = _get_label(name)
                 step_objects.append({"node": name, "label": lbl, "relation": None, "prob": None,
-                                      "cats": None, "deceased": dd, "sci": _get_node_sci(lbl)})
+                                      "cats": None, "deceased": dd, "sci": _get_node_sci(lbl), "org": _label_is_org(lbl)})
             for j in range(len(node_names) - 1):
                 p = edge_probs[j]
                 cats = edge_cats[j] or []
@@ -1868,7 +1880,7 @@ def _find_path_igraph(src_name, tgt_name, k=3, include_deceased=False, src_via=N
             dd = deceased.get(name.lower()) if deceased else None
             lbl = _get_label(name)
             step_objects.append({"node": name, "label": lbl, "relation": None, "prob": None,
-                                  "cats": None, "deceased": dd, "sci": _get_node_sci(lbl)})
+                                  "cats": None, "deceased": dd, "sci": _get_node_sci(lbl), "org": _label_is_org(lbl)})
         edge_probs = []
         for j, eid in enumerate(edge_ids):
             p = float(_igraph_prob[eid])
@@ -2619,9 +2631,9 @@ async def path_fallback(src_name: str = Query(default=""), tgt_name: str = Query
         "band": _viability_band(path_prob),
         "path": [
             {"node": src_node, "label": src_label, "relation": category, "prob": round(prob, 4),
-             "cats": [category], "deceased": None, "sci": _get_node_sci(src_label)},
+             "cats": [category], "deceased": None, "sci": _get_node_sci(src_label), "org": _label_is_org(src_label)},
             {"node": tgt_node, "label": tgt_label, "relation": None, "prob": None,
-             "cats": None, "deceased": None, "sci": _get_node_sci(tgt_label)},
+             "cats": None, "deceased": None, "sci": _get_node_sci(tgt_label), "org": _label_is_org(tgt_label)},
         ],
         "fallback": True,
         "fallback_evidence": {
@@ -7485,22 +7497,48 @@ function renderPlaybook(p, containerId) {
   const nodes = p.path;
   let html = '<div class="pb-title">Your introduction plan</div>';
   html += '<div class="pb-intro">Work the chain one step at a time. After each person agrees, <strong>you</strong> personally contact the next \u2014 carrying the introduction forward. Tell each person you\u2019ll let them know once the intro is made (that accountability is what makes this work).</div>';
-  for (let i = 0; i < nodes.length - 1; i++) {
-    const from = nodes[i].label, to = nodes[i+1].label;
-    const rel = nodes[i].relation;
-    const stepNum = i + 1;
-    const isFirst = (i === 0);
+  // Only people make introductions. An organization on the route is what two
+  // people share (a board, an employer), so it is folded into the step between
+  // the people on either side of it, never "reach out to <organization>" (2026-11-19).
+  const relText = i => {
+    const r = nodes[i].relation;
+    if (!r) return '';
+    return escHtml(r.replace(/_/g,' ').toLowerCase()) + (nodes[i].prob != null ? ' \u2248' + Math.round(nodes[i].prob*100) + '%' : '');
+  };
+  const last = nodes.length - 1;
+  const people = [];
+  nodes.forEach((n, i) => { if (!n.org || i === 0 || i === last) people.push(i); });
+  let stepNum = 0;
+  for (let k = 0; k < people.length - 1; k++) {
+    const a = people[k], b = people[k+1];
+    const A = nodes[a], B = nodes[b];
+    const orgs = nodes.slice(a + 1, b);
+    stepNum++;
     html += '<div class="pb-step">';
     html += '<div class="pb-step-h"><span class="pb-num">' + stepNum + '</span> ';
-    if (isFirst) {
-      html += 'Contact <strong>' + escHtml(from) + '</strong> (your connection) and ask for an introduction to <strong>' + escHtml(to) + '</strong>.</div>';
+    const who = (k === 0)
+      ? (A.org ? 'Start with your contact at <strong>' + escHtml(A.label) + '</strong> and ask them'
+               : 'Contact <strong>' + escHtml(A.label) + '</strong> (your connection) and ask')
+      : 'Once you\u2019re introduced, ask <strong>' + escHtml(A.label) + '</strong>';
+    if (B.org) {
+      html += who + ' who they know at <strong>' + escHtml(B.label) + '</strong> who could introduce you.</div>';
     } else {
-      html += 'Once introduced, reach out to <strong>' + escHtml(from) + '</strong> directly and ask them to connect you with <strong>' + escHtml(to) + '</strong>.</div>';
+      html += who + ' for an introduction to <strong>' + escHtml(B.label) + '</strong>.</div>';
     }
-    if (rel) html += '<div class="pb-rel">Their connection: ' + escHtml(rel.replace(/_/g,' ').toLowerCase()) + (nodes[i].prob!=null ? ' (\u2248' + Math.round(nodes[i].prob*100) + '% likely to take the call)' : '') + '</div>';
+    if (!orgs.length) {
+      if (nodes[a].relation) html += '<div class="pb-rel">Their connection: ' + relText(a) + ' likely to take the call</div>';
+    } else {
+      const via = orgs.map(o => '<strong>' + escHtml(o.label) + '</strong>').join(' \u2192 ');
+      html += '<div class="pb-rel">How they\u2019re connected: ' + (orgs.length === 1 ? 'both linked to ' : 'linked through ') + via
+            + ' (' + escHtml(A.label) + ': ' + relText(a) + '; ' + escHtml(B.label) + ': ' + relText(b - 1) + ').';
+      if (orgs.length > 1) {
+        html += ' This step runs through ' + orgs.length + ' organizations with no named person between them, so it is a weak lead: ask who they know at each one.';
+      }
+      html += '</div>';
+    }
     html += '</div>';
   }
-  html += '<div class="pb-target">\ud83c\udfaf Goal reached: <strong>' + escHtml(nodes[nodes.length-1].label) + '</strong></div>';
+  html += '<div class="pb-target">\ud83c\udfaf Goal reached: <strong>' + escHtml(nodes[last].label) + '</strong></div>';
   html += '<div class="pb-note">Estimated success staying involved at each step: <strong style="color:#3fb950;">' + (p.guided_probability*100).toFixed(p.guided_probability*100>=1?0:1) + '%</strong> (vs ~' + (p.probability*100).toFixed(p.probability*100>=1?0:1) + '% if you just passed a message along and hoped). These are estimates \u2014 your own knowledge of these people matters most.</div>';
   el.innerHTML = html;
 }
