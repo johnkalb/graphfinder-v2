@@ -498,6 +498,7 @@ async def _warm_up_graph():
     try:
         if _PATHFINDER_BACKEND == "igraph":
             await loop.run_in_executor(None, _load_igraph)
+            _freeze_loaded_data()   # before the fork, so workers share the pages too
             _create_path_process_pool()
         elif _PATHFINDER_BACKEND == "pgrouting":
             pass  # graph lives in Postgres; nothing to warm up in-process
@@ -509,6 +510,18 @@ async def _warm_up_graph():
     # detail tables after the graph (and after the path pool has forked, so
     # the workers never inherit a half-written SQLite connection)
     await loop.run_in_executor(None, _load_detail_tables)
+    _freeze_loaded_data()
+
+
+def _freeze_loaded_data():
+    """Move everything loaded so far (search index, graph: millions of
+    long-lived dicts and lists) out of the garbage collector's view. Without
+    this, each full collection walked all of it -- measured at 5.9 s on the
+    search index alone (2026-11-21), a pause that froze every request,
+    autocomplete included. The data is never freed while the app runs, so
+    nothing is lost."""
+    import gc
+    gc.freeze()
 
 
 @app.on_event("startup")
@@ -521,6 +534,7 @@ async def startup():
     init_legal_compliance_db(str(DATA_DIR / "legal_compliance.db"))
     init_mentioned_with_cache_db(str(DATA_DIR / "mentioned_with_cache.db"))
     _load_search()
+    _freeze_loaded_data()
     import asyncio
     asyncio.create_task(_warm_up_graph())
     asyncio.create_task(_qa_worker_loop())
@@ -2497,14 +2511,45 @@ async def crawlie():
     user_facts = [f["sentence"] for f in _load_user_submitted_facts()]
     return {"facts": data.get("facts", []) + user_facts}
 
+# Typing in a search box fires one query per pause. Each runs in its own
+# worker thread, and short prefixes ("al", "ma") take 0.3-2 s of pure-Python
+# work, so a fast typist used to pile up a queue of stale queries that all
+# fought over the GIL -- autocomplete stalled until the queue drained (beta
+# tester report, 2026-11-21). Now each search box sends an id (sid) and a
+# counter (seq); queries from the same box run one at a time, and one that a
+# newer keystroke has already replaced returns at once without being computed.
+_search_box_latest = {}          # sid -> highest seq seen
+_search_box_locks = {}           # sid -> threading.Lock
+_search_box_guard = threading.Lock()
+
+
+def _search_box_lock(sid, seq):
+    with _search_box_guard:
+        if len(_search_box_locks) > 5000:        # boxes from old page loads
+            for k in list(_search_box_locks)[:2500]:
+                if not _search_box_locks[k].locked():
+                    _search_box_locks.pop(k, None)
+                    _search_box_latest.pop(k, None)
+        if seq > _search_box_latest.get(sid, -1):
+            _search_box_latest[sid] = seq
+        return _search_box_locks.setdefault(sid, threading.Lock())
+
+
 @app.get("/api/search")
-def search(request: Request, q: str = Query(default="")):
+def search(request: Request, q: str = Query(default=""),
+           sid: str = Query(default="", max_length=64), seq: int = Query(default=-1)):
     # plain def: FastAPI runs it in a worker thread, so a slow search can't
     # stall every other request on the event loop the way async def did
     if not q or len(q.strip()) < 2:
         return []
-    _log_tester_usage(request, "search", {"query": q.strip()})
-    return _find_entry(q.strip())
+    if not sid or seq < 0:                       # older pages, other callers
+        _log_tester_usage(request, "search", {"query": q.strip()})
+        return _find_entry(q.strip())
+    with _search_box_lock(sid, seq):
+        if seq < _search_box_latest.get(sid, -1):
+            return []                            # superseded; the page ignores it
+        _log_tester_usage(request, "search", {"query": q.strip()})
+        return _find_entry(q.strip())
 
 @app.get("/api/path")
 async def path(request: Request, src_name: str = Query(default=""), tgt_name: str = Query(default=""),
@@ -7034,6 +7079,23 @@ function excludedNote() {
 let _pathGen = 0;  // guards against a slow narrative fetch from a stale search landing after a newer one
 let searchTimeout = null;
 
+// The server picks the 50 best matches; the dropdown shows an exact match of
+// what was typed first, then the rest A-Z, so someone unsure of a spelling
+// can scan for the name (beta tester request, 2026-11-21).
+function sortForScanning(items, typed) {
+  if (!Array.isArray(items)) return [];
+  const norm = s => (s || '').toLowerCase().replace(/[.,;]/g, ' ').replace(/\s+/g, ' ').trim();
+  const t = norm(typed);
+  const name = it => it.name || it.canonical || '';
+  const exact = it => norm(name(it)) === t || norm(it.canonical) === t;
+  return items.map((it, i) => [it, i]).sort((a, b) => {
+    const ea = exact(a[0]), eb = exact(b[0]);
+    if (ea !== eb) return ea ? -1 : 1;
+    if (ea) return a[1] - b[1];           // several exact matches keep the server's order
+    return name(a[0]).localeCompare(name(b[0]), undefined, { sensitivity: 'base' }) || a[1] - b[1];
+  }).map(x => x[0]);
+}
+
 ['src', 'tgt'].forEach(prefix => {
   const input = document.getElementById(prefix + '-input');
   const dropdown = document.getElementById(prefix + '-dropdown');
@@ -7041,6 +7103,7 @@ let searchTimeout = null;
   let highlightedIdx = -1;
   let currentResults = [];
   let searchGen = 0;  // guards against an earlier, slower query's response landing after a later one's and clobbering the dropdown with stale results
+  const searchSid = prefix + Math.random().toString(36).slice(2, 12);
 
   input.addEventListener('input', function() {
     const val = this.value.trim();
@@ -7057,18 +7120,19 @@ let searchTimeout = null;
       // waiting on the server.
       spinner.style.display = 'inline-block';
       try {
-        const res = await fetch('/api/search?q=' + encodeURIComponent(val));
+        // sid + seq let the server skip queries a newer keystroke replaced
+        const res = await fetch('/api/search?q=' + encodeURIComponent(val) + '&sid=' + searchSid + '&seq=' + myGen);
         const data = await res.json();
         if (myGen !== searchGen) return;  // a newer keystroke already started a different query
         spinner.style.display = 'none';
-        currentResults = data;
+        currentResults = sortForScanning(data, val);
         highlightedIdx = -1;
-        renderDropdown(prefix, data);
+        renderDropdown(prefix, currentResults);
       } catch(e) {
         if (myGen === searchGen) spinner.style.display = 'none';
         console.error('Search failed:', e);
       }
-    }, 150);
+    }, 250);
   });
 
   input.addEventListener('keydown', function(e) {
@@ -7083,9 +7147,9 @@ let searchTimeout = null;
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (highlightedIdx >= 0 && highlightedIdx < currentResults.length)
-        selectItem(prefix, currentResults[highlightedIdx]);
+        selectItem(prefix, highlightedIdx);
       else if (currentResults.length === 1)
-        selectItem(prefix, currentResults[0]);
+        selectItem(prefix, 0);
     } else if (e.key === 'Escape') {
       dropdown.classList.remove('show');
     }
