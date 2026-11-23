@@ -15,10 +15,11 @@ Pipeline:
   4. Categorize -> dedup -> noisy-OR score
   5. Emit scored edge list
 """
-import json, gzip, os, re, sys, unicodedata
+import datetime, json, gzip, os, re, sys, unicodedata
 from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "webapp"))
+from affiliation_years import DATED_SOURCES, era_buckets, era_label, years_for
 from relation_categories import categorize
 from link_scoring import score_pair
 from nicknames import formal_forms
@@ -303,6 +304,26 @@ except Exception as e:   # table not built yet: every school link is weak
 print(f"Education links with a graduation year: {len(edu_years):,}")
 n_edu_dated = n_edu_undated = 0
 
+# --- Jobs and board seats by era (user decision 2026-11-22) ---
+# Same idea as class years, for organizations: a person -> organization seat,
+# job or membership whose evidence gives years (affiliation_years.years_for)
+# joins 4-year era nodes "<Org> (in 2016–2019)" for the years it covers, so two
+# people meet there at full strength only if their years overlap. Their link
+# to the organization itself becomes ORG_AFFILIATION, which is weak, so people
+# there decades apart (or with no known years) still connect, faintly. Only
+# organizations with ERA_MIN_PEOPLE or more dated people are split: at a
+# 5-person company everyone overlapped anyway, and splitting every small
+# Form D issuer would add millions of edges for nothing.
+ERA_CATS = {"CO_DIRECTOR", "CO_OFFICER", "CO_EXECUTIVE", "EMPLOYMENT", "MEMBERSHIP", "ADVISORY",
+            "SEC_INSIDER", "LOBBYING", "STAFF_AIDE", "PUBLIC_OFFICE", "FELLOW_OFFICEHOLDER",
+            "PATENT_ASSIGNED_TO"}
+ERA_MIN_PEOPLE = 10
+# On by default (approved 2026-11-23); ERA_NODES=0 turns it off for a rebuild.
+ERA_ENABLED = os.environ.get("ERA_NODES", "1") != "0"
+NOW_YEAR = datetime.date.today().year
+dated_links = defaultdict(list)     # (person key, org key) -> [(relation, first, last)]
+n_era_undated = 0
+
 # Gather relations per undirected pair (preserving ALL types).
 # Pair keys are canon_key()'d so punctuation/diacritic variants of one person
 # land on ONE node. display_votes[key] tallies the raw display forms seen for
@@ -329,12 +350,16 @@ def _stream(cur, n=250_000):
 # exactly like it did against SQLite.
 stream_cur = conn.cursor(name="build_scored_edges_stream")
 stream_cur.itersize = 250_000
+_dated_sql = ", ".join(f"'{x}'" for x in DATED_SOURCES)
 stream_cur.execute("SELECT source_name, target_name, relation_type, source_data, "
                    "CASE WHEN source_data IN ('FEC', 'FEC_INDIV', 'PATENT_COINVENTOR') "
-                   "OR (source_data = 'LITTLESIS' AND relation_type = 'DONATION') THEN evidence END FROM relationships")
+                   "OR (source_data = 'LITTLESIS' AND relation_type = 'DONATION') "
+                   f"OR source_data IN ({_dated_sql}) THEN evidence END, "
+                   f"CASE WHEN source_data IN ({_dated_sql}) THEN upper(source_type) || '|' || upper(target_type) END "
+                   "FROM relationships")
 c = stream_cur
 n_raw = n_drop = n_selfmerge = 0
-for s, t, r, src, ev in _stream(c):
+for s, t, r, src, ev, types in _stream(c):
     n_raw += 1
     if not s or not t or s == t:
         continue
@@ -420,6 +445,13 @@ for s, t, r, src, ev in _stream(c):
             pair_rels[tuple(sorted([pk, ck]))].add(r)
             display_votes[ck][label] += 1
         continue
+    if ERA_ENABLED and types and src in DATED_SOURCES and types.split("|")[0] == "PERSON" \
+            and types.split("|")[1] != "PERSON" and categorize(r) in ERA_CATS:
+        yrs = years_for(src, ev, NOW_YEAR)
+        if yrs:                         # placed on era nodes (or not) below, once org sizes are known
+            dated_links[(sk, tk)].append((r, yrs[0], yrs[1]))
+            continue
+        n_era_undated += 1
     pair_rels[tuple(sorted([sk, tk]))].add(r)
 conn.close()
 print(f"Education links: {n_edu_dated:,} joined class-year nodes, {n_edu_undated:,} undated (weak school link only)")
@@ -448,6 +480,43 @@ def best_display(key):
     def case_rank(d):
         return 2 if d != d.lower() and d != d.upper() else (1 if d != d.lower() else 0)
     return max(votes, key=lambda d: (case_rank(d), votes[d], sum(not ch.isalnum() and not ch.isspace() for ch in d), len(d)))
+
+# --- era nodes for dated seats and jobs (see ERA_CATS above) ---
+_org_people = defaultdict(set)
+for (pk_, ok_) in dated_links:
+    _org_people[ok_].add(pk_)
+era_orgs = {ok_ for ok_, ps_ in _org_people.items() if len(ps_) >= ERA_MIN_PEOPLE}
+del _org_people
+n_era_links = n_era_small = n_era_edges = 0
+era_nodes = set()
+era_pairs = set()                   # person-org pairs whose direct link becomes ORG_AFFILIATION
+for (pk_, ok_), recs in dated_links.items():
+    if ok_ not in era_orgs:
+        n_era_small += len(recs)
+        pair_rels[tuple(sorted([pk_, ok_]))].update(r_ for r_, _a, _b in recs)
+        continue
+    n_era_links += len(recs)
+    org_disp = best_display(ok_)
+    for r_, a_, b_ in recs:
+        for start in era_buckets(a_, b_):
+            label = era_label(org_disp, start)
+            ck = canon_key(label)
+            era_nodes.add(ck)
+            key = tuple(sorted([pk_, ck]))
+            if key not in pair_rels:
+                n_era_edges += 1
+            pair_rels[key].add(r_)
+            display_votes[ck][label] += 1
+    era_pairs.add(tuple(sorted([pk_, ok_])))
+for key in era_pairs:
+    # an undated seat at the same organization from another source is the
+    # same seat; it is weak too now that its years are known
+    pair_rels[key] = {x for x in pair_rels.get(key, ()) if categorize(x) not in ERA_CATS} | {"ORG_AFFILIATION"}
+del dated_links
+print(f"Dated seats/jobs: {n_era_links:,} joined era nodes at {len(era_orgs):,} organizations "
+      f"({len(era_nodes):,} era nodes, {n_era_edges:,} person-era edges); "
+      f"{n_era_small:,} at organizations under {ERA_MIN_PEOPLE} dated people kept as before; "
+      f"{n_era_undated:,} without a usable date")
 
 # --- Merge Wikidata time-overlap edges (if harvested) ---
 # Only connect people who ALREADY exist as graph nodes, so we densify the

@@ -997,6 +997,7 @@ _PLACEHOLDER_ENTITY_PATTERNS = [
     re.compile(r"^A\d{8,}$"),                            # unresolved SEC/IARD-style ID
     re.compile(r".* \(classes of \d{4}–\d{4}\)$"),        # class-year node (build_scored_edges.py):
                                                           # appears inside paths, never searched for
+    re.compile(r".* \(in \d{4}–\d{4}\)$"),                # era node, "Acme Corp (in 2016–2019)": same
 ]
 
 
@@ -4906,7 +4907,7 @@ _NOT_EMPLOYER_RE = re.compile(r"\b(universit|college|school|institut|academy|fou
 _EMPLOYER_CAT_RANK = {"CO_EXECUTIVE": 0, "SEC_INSIDER": 1, "EMPLOYMENT": 2, "CO_DIRECTOR": 3, "FOUNDER": 4}
 # LittleSis files memberships (Bilderberg), informant ties (the FBI) and
 # donor seats as "positions"; one that also carries these is a weak job signal
-_SOFT_EMPLOYER_CATS = {"MEMBERSHIP", "OTHER", "DONATION", "SCHOOL_AFFILIATION", "ADVISORY", "FINANCIAL"}
+_SOFT_EMPLOYER_CATS = {"MEMBERSHIP", "OTHER", "DONATION", "SCHOOL_AFFILIATION", "ORG_AFFILIATION", "ADVISORY", "FINANCIAL"}
 _ORG_NOISE_RE = re.compile(r"\b(the|inc|llc|l\s?l\s?c|corp|corporation|co|company|ltd|lp|l\s?p|plc|holdings?|"
                            r"management|[ivx]+|\d+)\b")
 # first words too common to identify an employer on their own

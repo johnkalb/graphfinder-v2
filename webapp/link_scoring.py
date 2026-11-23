@@ -55,6 +55,11 @@ CATEGORY_PROB = {
     # years within 3); through the school itself -- decades apart, or no year
     # known -- two hops give 0.15^2 ~ 0.02 (user decision 2026-10-08).
     "SCHOOL_AFFILIATION": 0.15,
+    # The same rule for jobs and board seats with known years (2026-11-22):
+    # people whose years at an organization overlap meet at full strength
+    # through a shared 4-year era node; through the organization itself --
+    # years apart, or one side's years unknown -- they connect only faintly.
+    "ORG_AFFILIATION": 0.15,
     "CO_INVENTOR": 0.68,
     "PATENT_ASSIGNED_TO": 0.55,
     # Credited on the same film/show/book -- casts and crews work together
@@ -107,6 +112,7 @@ CATEGORY_DESC = {
     "WEAK_SOCIAL": ("Weak Social Tie", "Mentor, neighbor, acquaintance, or roommate. A weak-to-moderate informal tie."),
     "SAME_ORG_OVERLAP": ("Same Workplace (overlapping years)", "Both worked at the same organization during overlapping years (Wikidata employment dates). A weak-to-moderate signal — colleagues at a large employer may never have met, but overlapping tenure raises the odds."),
     "SCHOOL_AFFILIATION": ("School", "Attended or is tied to this school, but not within 3 years of the other person (or the year isn't known) -- a weak signal. Classmates within 3 years connect through a class-years node at full Shared Education strength."),
+    "ORG_AFFILIATION": ("Organization (different years)", "Held a seat, job or membership at this organization, but not in the same years as the other person (or one of their years isn't known) -- a weak signal. People there at the same time connect through a dated node such as \"Acme Corp (in 2016–2019)\" at full strength."),
     "SAME_SCHOOL_OVERLAP": ("Same School (overlapping years)", "Both attended the same institution during overlapping years (Wikidata education dates). A weak signal — large schools dilute the chance of acquaintance, but contemporaneous enrollment is suggestive."),
     "CO_INVENTOR": ("Co-Inventor", "Both people are named as inventors on the same patent. This is usually a meaningful professional collaboration and stronger than a generic co-mention."),
     "PATENT_ASSIGNED_TO": ("Patent Assigned To", "An inventor is listed on a patent assigned to the organization. This often indicates a real professional or institutional relationship, but does not necessarily prove ordinary employment."),
