@@ -1,0 +1,68 @@
+{
+ "files": {
+  "webapp/data/centrality_extras.json.gz": {
+   "sha256": "a5f019a963f7afdc15d426f3a90c37962d3997f529671b52c380911e92a39749",
+   "size": 400
+  },
+  "webapp/data/compact_names.json.gz": {
+   "sha256": "31146c38696b0969763c4a123d676ea727e3d01b864c5d630191dfc12b2226d3",
+   "size": 63170596
+  },
+  "webapp/data/congress_ties.json.gz": {
+   "sha256": "9d817c66003cd2bddf1b1e9ee527fc054cbaa005bbcd78d586777eb5f1753f44",
+   "size": 551572
+  },
+  "webapp/data/crawlie_facts.json.gz": {
+   "sha256": "5bae3dcb55459ff0d6298293a3217b05928105be9b6779c4a7798f6be200eb3a",
+   "size": 8687
+  },
+  "webapp/data/detail/cmte_totals.tsv.gz": {
+   "sha256": "82704b7abe3dfd2b7f8bb4de41d23ef6c6c5cc7c69828a3abd61f05c312f679a",
+   "size": 440839
+  },
+  "webapp/data/detail/committees.tsv.gz": {
+   "sha256": "110d263bf33d628345839ab0f2a6b132becf8fc8ee4966cab058547fb7c84f25",
+   "size": 788687
+  },
+  "webapp/data/detail/donors.tsv.gz": {
+   "sha256": "ffda36f461560625ba2ed631c56b032b2be641ad945e11f589db5127ed81e498",
+   "size": 24020330
+  },
+  "webapp/data/detail/insider_trades.tsv.gz": {
+   "sha256": "8da1ed082f89c355ad1f62098afaa3c70e34da4b95eb43e25fb7953f4a30e67c",
+   "size": 46749925
+  },
+  "webapp/data/detail/leadership.tsv.gz": {
+   "sha256": "ce4bd5488f028f32b528468e9d01a66d3ba36388efb39dee8343fe3549d025f8",
+   "size": 54080598
+  },
+  "webapp/data/detail/lobbying.tsv.gz": {
+   "sha256": "70ff4f1e4c5bd01a72ecf4f957030ac5eeef7ef584d5bc1afeaa3d5abb734a7e",
+   "size": 2869578
+  },
+  "webapp/data/detail/pac_flows.tsv.gz": {
+   "sha256": "59f25076a4b8d728e25274f0f6bcf215810d52b9c6ae45db9abf069c8aca2d9e",
+   "size": 12787287
+  },
+  "webapp/data/detail/vendors.tsv.gz": {
+   "sha256": "de24f4b3e313c03304260b1bbad083fb3cb80ad79eefc8417c7f628ecf6d6b70",
+   "size": 3444992
+  },
+  "webapp/data/graph_scored.json.gz": {
+   "sha256": "e4d654573c38aafceaf57d0d9351216ec4a9f44d8f099edb6ee9870aaf88a216",
+   "size": 89764500
+  },
+  "webapp/data/group_rankings.json.gz": {
+   "sha256": "516720b4e0390dc3a66093ba884512ac726ecba5b0df0605dbf7e05179ca0e2f",
+   "size": 1675
+  },
+  "webapp/data/search_index.json.gz": {
+   "sha256": "355b915f35e452f45cadac65a50e1ae01656a96659f7db2aa4ba08d541155703",
+   "size": 60360994
+  },
+  "webapp/data/verified_people.json.gz": {
+   "sha256": "2d962511e502d35d13cea4cb0b5f7d22c485695e4d8330f85a433134f9baadbb",
+   "size": 1529765
+  }
+ }
+}
