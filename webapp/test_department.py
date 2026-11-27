@@ -228,6 +228,13 @@ def init_test_department_db(db_path: str) -> None:
         )
         """
     )
+    # "Where have you been?" (contrib.py, 2026-11-27): organizations and
+    # schools a user belonged to, with optional years. Private to the owner;
+    # never read by the nightly build.
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS my_affiliations (
+            id {_PK}, owner_email TEXT NOT NULL, org TEXT NOT NULL, start_year INTEGER, end_year INTEGER,
+            created_at TEXT NOT NULL, deleted_at TEXT)""")
+    cur.execute("CREATE INDEX IF NOT EXISTS my_affiliations_owner ON my_affiliations (owner_email)")
     # Team workspaces (hooconnex Teams, webapp/workspaces.py, 2026-11-13): a
     # private overlay per organization. Never read by the nightly build.
     cur.execute(f"""CREATE TABLE IF NOT EXISTS workspaces (

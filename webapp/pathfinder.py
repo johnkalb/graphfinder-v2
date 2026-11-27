@@ -4266,6 +4266,10 @@ try:
     import my_links as _ml
 except ImportError:
     from webapp import my_links as _ml
+try:
+    import contrib as _contrib
+except ImportError:
+    from webapp import contrib as _contrib
 
 # A user's own links are strong ties in THEIR searches (they know these people,
 # decision 15); everyone else sees public self-reported links at the weak
@@ -4501,39 +4505,62 @@ def _drop_removed_link_paths(res):
     return res
 
 
-def _reach_via_contacts(owner_name, contacts, target_name, k=3):
+def _reach_entries(contacts, affiliations=None):
+    """{vertex id: entry} for where the user touches the graph: each matched
+    contact at owner strength (decision 15), and each "Where have you been?"
+    place at its period strength (contrib.entry_points). The strongest entry
+    wins when several land on the same node."""
+    entries = {}
+    for c in contacts:
+        if c.get("contact_type") == _ml.UNMATCHED:
+            continue   # no graph node -- resolving the bare name would pick a namesake
+        node = _resolve_name(c["contact"])
+        if node in _igraph_name_to_idx:
+            i = _igraph_name_to_idx[node]
+            entries[i] = {"node": node, "prob": _OWNER_LINK_PROB, "link": c, "aff": None}
+    for e in _contrib.entry_points(affiliations or [], lambda n: n in _igraph_name_to_idx):
+        i = _igraph_name_to_idx[e["node"]]
+        if i not in entries or entries[i]["prob"] < e["prob"]:
+            entries[i] = {"node": e["node"], "prob": e["prob"], "link": None, "aff": e["aff"],
+                          "kind": e["kind"]}
+    return entries
+
+
+def _reach_via_contacts(owner_name, contacts, target_name, k=3, affiliations=None):
     """'How do I reach X': the best routes from the user, through one of their
-    own links, to X. The user isn't a node in the shared graph (their private
-    links never enter it), so: one Dijkstra from X to all of the user's
-    contacts, then the k closest contacts' paths, each prefixed by the user's
-    own link at owner strength (decision 15)."""
+    own links or places, to X. The user isn't a node in the shared graph
+    (their private links never enter it), so: one Dijkstra from X to every
+    node the user touches, then the k best, each prefixed by the user's own
+    step at its strength."""
     _load_igraph()
     if _igraph_graph is None or _igraph_graph.vcount() == 0:
         return {"error": "Graph not loaded"}
     tgt = _resolve_name(target_name)
     if not tgt or tgt not in _igraph_name_to_idx:
         return {"error": f"'{target_name}' not found"}
-    by_idx = {}
-    for c in contacts:
-        if c.get("contact_type") == _ml.UNMATCHED:
-            continue   # no graph node -- resolving the bare name would pick a namesake
-        node = _resolve_name(c["contact"])
-        if node in _igraph_name_to_idx:
-            by_idx[_igraph_name_to_idx[node]] = (node, c)
+    by_idx = _reach_entries(contacts, affiliations)
     if not by_idx:
-        return {"paths": [], "note": "none of your links are in the graph"}
+        return {"paths": [], "note": "none of your links or places are in the graph"}
     tgt_idx = _igraph_name_to_idx[tgt]
     weights = _igraph_living_weight if _igraph_living_weight is not None else _igraph_weight
     if tgt_idx in (_igraph_deceased_idx or set()):
         weights = _igraph_weight
     idxs = list(by_idx)
     dist = _igraph_graph.distances(source=tgt_idx, target=idxs, weights=weights)[0]
-    ranked = sorted((d, i) for d, i in zip(dist, idxs) if d != float("inf"))
-    owner_step = {"node": owner_name, "label": owner_name, "relation": "MY_LINK", "prob": _OWNER_LINK_PROB,
-                  "cats": ["MY_LINK"], "deceased": None, "sci": None, "you": True}
+    # rank by the whole route, the user's own first step included
+    ranked = sorted((d - math.log(by_idx[i]["prob"]), i) for d, i in zip(dist, idxs) if d != float("inf"))
     paths = []
-    for d, i in ranked[:k]:
-        node, link = by_idx[i]
+    seen_aff = set()
+    for d, i in ranked:
+        if len(paths) >= k:
+            break
+        ent = by_idx[i]
+        node = ent["node"]
+        aff = ent["aff"]
+        if aff is not None:
+            if aff["id"] in seen_aff:
+                continue   # one route per place, not one per period of it
+            seen_aff.add(aff["id"])
         if i == tgt_idx:
             sub = {"paths": [{"path": [{"node": node, "label": _get_label(node), "relation": None, "prob": None,
                                         "cats": None, "deceased": None, "sci": _get_node_sci(node)}]}]}
@@ -4541,12 +4568,20 @@ def _reach_via_contacts(owner_name, contacts, target_name, k=3):
             sub = _find_path_igraph(node, tgt, k=1)
         if not sub.get("paths"):
             continue
-        steps = [dict(owner_step)] + sub["paths"][0]["path"]
-        steps[0]["private"] = link.get("visibility") != "public"
+        first = {"node": owner_name, "label": owner_name, "relation": "MY_LINK", "prob": ent["prob"],
+                 "cats": ["MY_LINK"], "deceased": None, "sci": None, "you": True, "private": True}
+        if aff is not None:
+            first["relation"] = "MY_AFFILIATION"
+            first["affiliation"] = {"org": aff["org"], "years": _contrib.years_text(aff),
+                                    "same_years": ent.get("kind") == "period" or ent["prob"] >= _contrib.AFF_STRONG}
+        else:
+            first["private"] = ent["link"].get("visibility") != "public"
+        steps = [first] + sub["paths"][0]["path"]
         probs = [s["prob"] for s in steps[:-1] if s.get("prob") is not None]
         pp, lc, fc = _path_probability(probs)
         paths.append({"length": len(steps) - 1, "probability": round(pp, 6), "prob_label": _one_in(pp),
-                      "band": _viability_band(pp), "via_contact": node, "path": steps})
+                      "band": _viability_band(pp), "via_contact": node,
+                      "via_affiliation": aff["org"] if aff is not None else None, "path": steps})
     return {"paths": paths, "contacts_considered": len(by_idx)}
 
 
@@ -4556,10 +4591,173 @@ async def my_reach(request: Request, target: str = Query(..., max_length=300)):
     if err:
         return err
     contacts = _ml.list_links(_ml_db(), email)
+    affs = _contrib.list_affiliations(_ml_db(), email) if _contrib_enabled(email) else []
     owner = _display_name_for_email(email) or email
     loop = asyncio.get_event_loop()
-    res = await loop.run_in_executor(None, _reach_via_contacts, owner, contacts, target, 3)
+    res = await loop.run_in_executor(None, _reach_via_contacts, owner, contacts, target, 3, affs)
     return _drop_removed_link_paths(res)
+
+
+# --- Getting users to help build the graph, Phase 1 (contrib.py, 2026-11-27) ---
+# "Where have you been?", "You are N steps from ...", "Who from your world is
+# in here". Beta flag CONTRIB_BETA: unset/"beta" -> admins + beta testers,
+# "all" -> everyone with My links.
+def _contrib_enabled(email):
+    if not email or not _private_links_enabled(email):
+        return False
+    mode = (os.environ.get("CONTRIB_BETA") or "beta").strip().lower()
+    return mode == "all" or email in _ADMIN_EMAILS or email in _BETA_EMAILS
+
+
+def _contrib_guard(request, need_agreement=True):
+    email, err = _ml_guard(request, need_agreement=need_agreement)
+    if err:
+        return None, err
+    if not _contrib_enabled(email):
+        return None, JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return email, None
+
+
+class AffiliationRequest(BaseModel):
+    org: str = Field(..., max_length=300)
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+
+
+def _aff_out(a):
+    return {"id": a["id"], "org": a["org"], "label": _get_label(a["org"]),
+            "start_year": a["start_year"], "end_year": a["end_year"], "years": _contrib.years_text(a)}
+
+
+@app.get("/api/my/affiliations")
+async def my_affiliations(request: Request):
+    email, err = _contrib_guard(request, need_agreement=False)
+    if err:
+        return err
+    return {"affiliations": [_aff_out(a) for a in _contrib.list_affiliations(_ml_db(), email)]}
+
+
+@app.post("/api/my/affiliations")
+async def my_affiliation_add(req: AffiliationRequest, request: Request):
+    email, err = _contrib_guard(request)
+    if err:
+        return err
+    _load_igraph()
+    node = req.org.strip()
+    if node not in (_igraph_name_to_idx or {}):
+        node = _resolve_name(node)
+    if not node or node not in (_igraph_name_to_idx or {}):
+        return JSONResponse(status_code=400, content={"success": False,
+                                                      "error": "Pick the organization or school from the list."})
+    if _looks_like_person(node) and not _label_is_org(node):
+        return JSONResponse(status_code=400, content={"success": False,
+                                                      "error": "That looks like a person -- add people under Your links."})
+    row, e = _contrib.add_affiliation(_ml_db(), email, node, req.start_year, req.end_year)
+    if e:
+        return JSONResponse(status_code=400, content={"success": False, "error": e})
+    _contrib_cache.pop(email, None)
+    return {"success": True, "affiliation": _aff_out(row)}
+
+
+@app.delete("/api/my/affiliations/{aff_id}")
+async def my_affiliation_delete(aff_id: int, request: Request):
+    email, err = _contrib_guard(request, need_agreement=False)
+    if err:
+        return err
+    ok = _contrib.delete_affiliation(_ml_db(), email, aff_id)
+    _contrib_cache.pop(email, None)
+    return {"success": ok}
+
+
+_contrib_cache = {}          # email -> (key, time, summary)
+_CONTRIB_CACHE_SECS = 3600
+_famous_nodes = None
+
+
+def _famous():
+    global _famous_nodes
+    if _famous_nodes is None:
+        out = []
+        for name in _contrib.FAMOUS:
+            node = name if name in _igraph_name_to_idx else _resolve_name(name)
+            if node and node in _igraph_name_to_idx:
+                out.append(node)
+        _famous_nodes = out
+    return _famous_nodes
+
+
+def _degrees_for(owner, contacts, affs, n=5):
+    """'You are N steps from ...': the best route to each famous person, weak
+    ones included -- the distance is the point; band says if it's usable."""
+    _load_igraph()
+    out = []
+    for fam in _famous()[:n]:
+        r = _drop_removed_link_paths(_reach_via_contacts(owner, contacts, fam, 1, affs))
+        if r.get("paths"):
+            p = r["paths"][0]
+            out.append({"target": fam, "label": _get_label(fam), "steps": p["length"], "band": p["band"],
+                        "prob_label": p["prob_label"], "path": p["path"]})
+        else:
+            out.append({"target": fam, "label": _get_label(fam), "steps": None})
+    return out
+
+
+def _world_for(affs, per=12):
+    """'Who from your world is in here': for each place, the graph people
+    there in the user's years (its period nodes), else everyone listed there."""
+    _load_igraph()
+    has = lambda name: name in _igraph_name_to_idx
+    out = []
+    for a in affs:
+        org = a["org"]
+        row = {"id": a["id"], "org": org, "label": _get_label(org) if has(org) else org,
+               "years": _contrib.years_text(a), "same_years": False, "count": 0, "people": []}
+        if not has(org):
+            out.append(row)
+            continue
+        periods = _contrib.period_nodes(org, has)
+        span = _contrib.user_span(a)
+        hubs = []
+        if periods and span:
+            hubs = [periods[s] for s in _contrib.era_buckets(*span) if s in periods]
+        row["same_years"] = bool(hubs)
+        if not hubs:
+            hubs = [org]
+        people = set()
+        for h in hubs:
+            for j in _igraph_graph.neighbors(_igraph_name_to_idx[h]):
+                nm = _igraph_nodes[j]
+                if _looks_like_person(nm) and not _label_is_org(nm):
+                    people.add(nm)
+        ranked = sorted(people, key=lambda nm: -(_get_node_sci(nm) or 0))
+        row["count"] = len(people)
+        row["people"] = [{"name": nm, "label": _get_label(nm), "sci": _get_node_sci(nm)} for nm in ranked[:per]]
+        out.append(row)
+    return out
+
+
+def _contrib_summary(email):
+    contacts = _ml.list_links(_ml_db(), email)
+    affs = _contrib.list_affiliations(_ml_db(), email)
+    key = (tuple(sorted((c["id"], c.get("visibility") or "") for c in contacts)), tuple(a["id"] for a in affs))
+    hit = _contrib_cache.get(email)
+    if hit and hit[0] == key and time.time() - hit[1] < _CONTRIB_CACHE_SECS:
+        return hit[2]
+    owner = _display_name_for_email(email) or email
+    res = {"degrees": _degrees_for(owner, contacts, affs), "world": _world_for(affs),
+           "n_links": sum(1 for c in contacts if c.get("contact_type") != _ml.UNMATCHED), "n_places": len(affs)}
+    _contrib_cache[email] = (key, time.time(), res)
+    return res
+
+
+@app.get("/api/my/start")
+async def my_start(request: Request):
+    """Phase 1 payoff: N steps from famous people + who from your world is here."""
+    email, err = _contrib_guard(request)
+    if err:
+        return err
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _contrib_summary, email)
 
 
 # --- Team workspaces (hooconnex Teams Phase 1, 2026-11-13) ----------------------
@@ -6821,6 +7019,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       <!-- each tool is a card with its own result and a Clear button (2026-10-20: results
            used to pile up below everything, with no way to finish a step) -->
+      <div class="ml-card" id="ml-card-places" style="display:none;">
+        <div class="ml-card-head"><strong>Where have you been?</strong> (new) Add places you've worked, studied, served on a
+          board or belonged to, with your years. Like your links, these are <strong>private</strong>: only you see them and
+          they're used only in your own searches. With years, you meet the people who were there at the same time.</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+          <input id="place-org" type="text" list="place-org-list" maxlength="300" placeholder="Organization or school" style="flex:2;min-width:200px;" oninput="placeSuggest()">
+          <datalist id="place-org-list"></datalist>
+          <input id="place-from" type="number" min="1930" max="2100" placeholder="From (year)" style="width:110px;">
+          <input id="place-to" type="number" min="1930" max="2100" placeholder="To (year)" style="width:110px;">
+          <button onclick="placeAdd()">Add</button>
+        </div>
+        <div id="place-msg" class="psi-note" style="margin:0;"></div>
+        <div id="place-list" style="margin:4px 0;"></div>
+        <div id="start-result" style="margin-top:8px;"></div>
+      </div>
       <div class="ml-card" id="ml-card-links">
         <div class="ml-card-head"><strong>Your links</strong> <span id="mylinks-summary" class="psi-note" style="margin:0;"></span>
           <button class="add-me-btn" id="mylinks-toggle" onclick="myLinksToggle()">Show</button></div>
@@ -8299,6 +8512,7 @@ async function myLinksLoad() {
   document.getElementById('mylinks-agree').style.display = d.agreement_accepted ? 'none' : 'block';
   document.getElementById('mylinks-main').style.display = d.agreement_accepted ? 'block' : 'none';
   if (!d.agreement_accepted) return;
+  contribLoad();
   const pub = d.public_count, max = d.max_public;
   document.getElementById('mylinks-summary').textContent =
     `${d.links.length} link${d.links.length === 1 ? '' : 's'} — ${pub} public (max ${max}), the rest private (only you see them).`
@@ -8424,8 +8638,89 @@ async function myReach() {
   if (!r.ok || d.error) { out.textContent = d.error || d.detail || 'Search failed.'; return; }
   if (!d.paths || !d.paths.length) { mlSet(out, escHtml(d.note || 'No route found from your links.')); return; }
   mlSet(out, d.paths.map((p, i) =>
-    `<div style="margin:4px 0;"><strong>${i === 0 ? 'Best route' : 'Alternative'}</strong> (${p.length} step${p.length === 1 ? '' : 's'}, via ${escHtml(p.via_contact)}): `
+    `<div style="margin:4px 0;"><strong>${i === 0 ? 'Best route' : 'Alternative'}</strong> (${p.length} step${p.length === 1 ? '' : 's'}, via ${p.via_affiliation ? 'your time at ' + escHtml(p.path[0].affiliation ? (p.path[0].affiliation.org + (p.path[0].affiliation.years ? ' (' + p.path[0].affiliation.years + ')' : '')) : p.via_affiliation) : escHtml(p.via_contact)}): `
     + p.path.map(s => s.you ? '<strong>You</strong>' : escHtml(s.label || s.node)).join(' → ') + '</div>').join(''));
+}
+
+// --- Where have you been? / N steps from / who from your world (contrib.py) ---
+let placeTimer = null, placeSeq = 0;
+function placeSuggest() {
+  clearTimeout(placeTimer);
+  const q = document.getElementById('place-org').value.trim();
+  if (q.length < 2) return;
+  placeTimer = setTimeout(async () => {
+    const mine = ++placeSeq;
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q)).catch(() => null);
+    if (!r || !r.ok || mine !== placeSeq) return;
+    const items = await r.json().catch(() => []);
+    document.getElementById('place-org-list').innerHTML = (items || []).slice(0, 15)
+      .map(it => `<option value="${escHtml(it.canonical || it.name)}">`).join('');
+  }, 250);
+}
+async function contribLoad() {
+  let r;
+  try { r = await fetch('/api/my/affiliations'); } catch (e) { return; }
+  if (!r.ok) return;   // not in this beta
+  const d = await r.json();
+  document.getElementById('ml-card-places').style.display = 'block';
+  document.getElementById('place-list').innerHTML = (d.affiliations || []).map(a =>
+    `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;"><span style="flex:1">${escHtml(a.label)}`
+    + (a.years ? ` <span style="color:#8b949e">(${escHtml(a.years)})</span>` : ' <span style="color:#8b949e">(no years)</span>')
+    + `</span><button class="add-me-btn" title="Delete" onclick="placeDelete(${a.id})">✕</button></div>`).join('');
+  contribStart();
+}
+async function placeAdd() {
+  const org = document.getElementById('place-org').value.trim();
+  const from = document.getElementById('place-from').value, to = document.getElementById('place-to').value;
+  const msg = document.getElementById('place-msg');
+  if (!org) { msg.textContent = 'Type an organization or school and pick it from the list.'; return; }
+  const body = {org: org, start_year: from ? parseInt(from, 10) : null, end_year: to ? parseInt(to, 10) : null};
+  const r = await fetch('/api/my/affiliations', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.success) { msg.textContent = d.error || 'Could not add that place.'; return; }
+  msg.textContent = 'Added. Working out your distances…';
+  ['place-org', 'place-from', 'place-to'].forEach(id => document.getElementById(id).value = '');
+  contribLoad();
+}
+async function placeDelete(id) {
+  await fetch('/api/my/affiliations/' + id, {method: 'DELETE'});
+  contribLoad();
+}
+async function contribStart() {
+  const out = document.getElementById('start-result');
+  out.innerHTML = '<div class="psi-note">Working out how far you are from some well-known people…</div>';
+  const r = await fetch('/api/my/start').catch(() => null);
+  const d = r && r.ok ? await r.json().catch(() => null) : null;
+  document.getElementById('place-msg').textContent = '';
+  if (!d) { out.innerHTML = ''; return; }
+  let h = '';
+  if (!d.n_links && !d.n_places) {
+    out.innerHTML = '<div class="psi-note">Add a place above (or a contact under Your links) to see how close you are to some well-known people.</div>';
+    return;
+  }
+  const deg = (d.degrees || []).filter(x => x.steps);
+  if (deg.length) {
+    h += '<div style="margin:6px 0 2px;"><strong>You are …</strong></div>';
+    h += deg.map(x => {
+      const usable = x.band === 'Strong' || x.band === 'Plausible';
+      const route = x.path.map(s => s.you ? 'You' : (s.label || s.node)).join(' → ');
+      return `<div style="padding:2px 0;" title="${escHtml(route)}"><strong>${x.steps} step${x.steps === 1 ? '' : 's'}</strong> from ${escHtml(x.label)}`
+        + (usable ? ' <span style="color:#3fb950;font-size:0.8rem;">(a route good enough to ask for an introduction)</span>'
+                  : ' <span style="color:#8b949e;font-size:0.8rem;">(a long-shot route — fun to know, hard to use)</span>')
+        + `<div class="psi-note" style="margin:0 0 0 12px;font-size:0.78rem;">${escHtml(route)}</div></div>`;
+    }).join('');
+  } else if ((d.degrees || []).length) {
+    h += '<div class="psi-note">No route yet from your links and places to the well-known people we checked. Add another place or contact.</div>';
+  }
+  const world = (d.world || []).filter(w => w.count);
+  if (world.length) {
+    h += '<div style="margin:10px 0 2px;"><strong>Who from your world is in here</strong></div>';
+    h += world.map(w => `<div style="padding:3px 0;">${w.count.toLocaleString()} ${w.count === 1 ? 'person' : 'people'} from `
+      + `${escHtml(w.label)}${w.same_years ? ' in your years (' + escHtml(w.years) + ')' : ''}: `
+      + w.people.map(p => escHtml(p.label || p.name)).join(', ') + (w.count > w.people.length ? ', …' : '')
+      + '</div>').join('');
+  }
+  out.innerHTML = h;
 }
 
 // --- Explore records (detail tables, Phase 2 preview) ----------------------
