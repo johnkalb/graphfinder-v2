@@ -369,21 +369,17 @@ for s, t, r, src, ev, types in _stream(c):
     if r == "TREASURER" and src == "FEC_STRUCTURE" and s in bulk_treasurers:
         n_drop += 1
         continue
-    # Self-reported user links ("Add Me", LinkedIn) may be public -- in the
-    # shared graph -- only when the other person is a verified public figure
-    # (private-service spec, decision 2, applied to existing links 2026-10-06).
-    # Links to private people stay in the database as the owner's private links
-    # (for the per-user overlay, once built) but never enter the shared graph.
+    # Self-reported user links ("Add Me", LinkedIn): since 2026-11-27 every link
+    # its owner made visible is in the shared graph, to anyone (John: more
+    # links make the service more useful). Either person can hide a link; the
+    # nightly user-links sync only exports visible, not-hidden ones, so the
+    # old verified-public-figure filter here is gone.
     if r == "DONATION" and src in ("FEC_INDIV", "LITTLESIS"):
         usd = _donation_usd(ev)
         if (usd is not None or src == "FEC_INDIV") and (usd or 0) < MIN_DONATION_LINK_USD:
             n_small_donations += 1
             n_drop += 1
             continue
-    if src == "USER_SUGGESTION" and canon_key(t) not in exempt:
-        n_private_user_links += 1
-        n_drop += 1
-        continue
     if src == "FEC" and t.startswith(FEC_PLACEHOLDER):
         t = fec_recipient(ev, committee_names)
         if t is None:
@@ -460,7 +456,6 @@ print(f"Raw relationship rows: {n_raw}, dropped by cleanup: {n_drop}, "
 print(f"Unique scorable pairs: {len(pair_rels)}")
 print(f"FEC donations: {n_fec_named:,} given committee names, {n_fec_dropped:,} dropped (conduit or no id)")
 print(f"Donations under ${MIN_DONATION_LINK_USD:,} left out of the graph: {n_small_donations:,}")
-print(f"Self-reported user links kept private (other person not a verified public figure): {n_private_user_links}")
 print(f"Common-name splits: {splitter.split} edge endpoints moved to {len(split_base)} per-employer/company nodes; "
       f"{splitter.dropped} unattributable edges dropped")
 print(f"Union-officer splits: {union_split.moved:,} edge endpoints moved to per-union nodes "

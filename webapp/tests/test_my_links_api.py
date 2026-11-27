@@ -33,23 +33,21 @@ def test_agreement_gate_then_full_lifecycle(client):
     assert r.status_code == 428 and r.json()["error"] == "agreement_required"
     assert client.post("/api/agreement/accept", headers=USER).json()["success"]
 
-    r = client.post("/api/my/links", json={"contact": "Jane Doe", "source": "linkedin"}, headers=USER)
+    r = client.post("/api/my/links", json={"contact": "Jane Doe", "source": "linkedin", "visibility": "private"},
+                    headers=USER)
     assert r.status_code == 200
     jane = r.json()["link"]
     assert jane["visibility"] == "private" and jane["relation"] == "LINKEDIN_CONNECTION"
 
-    r = client.post("/api/my/links", json={"contact": "Jane Doe Two", "visibility": "public"}, headers=USER)
-    assert r.status_code == 400 and "verified public figures" in r.json()["error"]
-
-    r = client.post("/api/my/links", json={"contact": "Barack Obama", "visibility": "public"}, headers=USER)
+    # visible by default since 2026-11-27, to anyone (not only verified figures)
+    r = client.post("/api/my/links", json={"contact": "Barack Obama"}, headers=USER)
     assert r.status_code == 200 and r.json()["link"]["visibility"] == "public"
     obama = r.json()["link"]
 
     listing = client.get("/api/my/links", headers=USER).json()
     assert {l["contact"] for l in listing["links"]} == {"Jane Doe", "Barack Obama"}
     assert listing["public_count"] == 1 and listing["agreement_accepted"] is True
-    # the panel offers "Make public" only for verified public figures
-    assert {l["contact"]: l["can_be_public"] for l in listing["links"]} == {"Jane Doe": False, "Barack Obama": True}
+    assert {l["contact"]: l["can_be_public"] for l in listing["links"]} == {"Jane Doe": True, "Barack Obama": True}
 
     export = client.get("/api/my/links/export", headers=USER)
     assert export.status_code == 200 and "Barack Obama" in export.text
@@ -70,7 +68,10 @@ def test_other_users_cannot_see_or_delete(client):
 def test_add_me_in_the_beta_makes_a_private_link_not_a_review_item(client):
     client.post("/api/agreement/accept", headers=USER)
     r = client.post("/api/contacts/add-me", json={"person_name": "Addme Person", "source": "linkedin"}, headers=USER)
-    assert r.status_code == 200 and r.json()["private_link"] is True
+    assert r.status_code == 200 and r.json()["visible_link"] is True                # visible by default
+    r = client.post("/api/contacts/add-me", json={"person_name": "Quiet Person", "source": "linkedin",
+                                                   "visible": False}, headers=USER)
+    assert r.status_code == 200 and r.json()["private_link"] is True                # box unticked
     assert "Addme Person" in {l["contact"] for l in client.get("/api/my/links", headers=USER).json()["links"]}
 
 
@@ -184,3 +185,17 @@ def test_none_of_these_and_wrong_person(client):
     assert ("Barack Obama", "PERSON") not in pairs
     other = {"Cf-Access-Authenticated-User-Email": "someone.else@example.com"}
     assert client.post(f"/api/my/links/{pub['id']}/wrong-person", headers=other).status_code == 404
+
+
+def test_other_person_hides_a_visible_link_from_a_path(client, monkeypatch):
+    client.post("/api/agreement/accept", headers=USER)
+    monkeypatch.setattr(pf, "_display_name_for_email", lambda e: "Beta User" if e == USER[
+        "Cf-Access-Authenticated-User-Email"] else "Someone")
+    link = client.post("/api/my/links", json={"contact": "Hidey Person"}, headers=USER).json()["link"]
+    assert link["visibility"] == "public"
+    other = {"Cf-Access-Authenticated-User-Email": "hidey@example.com"}
+    r = client.post("/api/links/hide-about-me", json={"a": "Beta User", "b": "Hidey Person"}, headers=other)
+    assert r.json()["hidden"] == 1
+    mine = {l["contact"]: l for l in client.get("/api/my/links", headers=USER).json()["links"]}
+    assert mine["Hidey Person"]["visibility"] == "private" and mine["Hidey Person"]["can_be_public"] is False
+    assert client.post("/api/links/hide-about-me", json={"a": "x", "b": "y"}).status_code == 401

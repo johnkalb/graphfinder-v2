@@ -228,6 +228,16 @@ def init_test_department_db(db_path: str) -> None:
         )
         """
     )
+    # Visible-by-default links (my_links.py, 2026-11-27): the other person on a
+    # link can hide it (owner_email = the link's owner) or every user-added
+    # link about them (owner_email = '*'). user_flags holds one-time answers
+    # such as "make my earlier links visible?".
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS link_optouts (
+            id {_PK}, owner_email TEXT NOT NULL, contact TEXT NOT NULL, by_email TEXT, created_at TEXT NOT NULL,
+            undone_at TEXT)""")
+    cur.execute("CREATE INDEX IF NOT EXISTS link_optouts_contact ON link_optouts (contact)")
+    cur.execute("""CREATE TABLE IF NOT EXISTS user_flags (
+            email TEXT NOT NULL, flag TEXT NOT NULL, value TEXT, set_at TEXT NOT NULL)""")
     # "Where have you been?" (contrib.py, 2026-11-27): organizations and
     # schools a user belonged to, with optional years. Private to the owner;
     # never read by the nightly build.

@@ -3138,6 +3138,9 @@ class AddMeRequest(BaseModel):
     # than rejecting the request, since this only selects which predicate/
     # copy to use, not a trust boundary (see add_me() below).
     source: str = "contacts"
+    # Visible by default since 2026-11-27; the import screen's "Make these
+    # links visible" box sends false when unticked.
+    visible: bool = True
 
 class QuestionRequest(BaseModel):
     question: str = Field(..., min_length=5, max_length=500)
@@ -3780,13 +3783,17 @@ async def add_me(req: AddMeRequest, request: Request):
             if not _ml.agreement_accepted(_ml_db(), email):
                 return JSONResponse(status_code=428, content={"success": False, "error": "agreement_required",
                                                                "agreement_url": "/terms"})
+            want = "public" if req.visible else "private"
+            if want == "public" and _ml.opted_out(_ml_db(), email, obj_canonical):
+                want = "private"     # the other person opted out of user-added links
             link, e = _ml.add_link(_ml_db(), email, obj_canonical, relation=predicate,
-                                   source="linkedin" if is_linkedin else "contacts", visibility="private",
-                                   is_verified=_is_verified_public)
+                                   source="linkedin" if is_linkedin else "contacts", visibility=want)
             if e:
                 return JSONResponse(status_code=400, content={"success": False, "error": e})
-            return {"success": True, "private_link": True,
-                    "message": "Added to your private links -- only you can see it."}
+            visible = link and link.get("visibility") == "public"
+            return {"success": True, "private_link": not visible, "visible_link": visible,
+                    "message": ("Added -- visible to other members as a self-reported link. You or they can hide it."
+                                if visible else "Added to your private links -- only you can see it.")}
         body_label = "LinkedIn connection" if is_linkedin else "Self-reported contact"
         snippet = ("Submitted via Check My Contacts → Check My LinkedIn Connections → Add Me."
                    if is_linkedin else "Submitted via Check My Contacts → Add Me.")
@@ -4323,7 +4330,7 @@ def _ml_guard(request, need_agreement=True):
 
 class MyLinkRequest(BaseModel):
     contact: str = Field(..., max_length=300)
-    visibility: str = Field("private", max_length=10)
+    visibility: str = Field("public", max_length=10)   # visible by default since 2026-11-27
     source: Optional[str] = Field(None, max_length=30)
 
 
@@ -4348,13 +4355,64 @@ async def my_links_list(request: Request):
         return err
     p = _ml_db()
     links = _ml.list_links(p, email)
-    # Only a link to a verified public figure may be public (decision 2), so
-    # the panel offers "Make public" only there -- not on every link.
+    # Any matched link can be visible (2026-11-27) unless the other person opted out.
     for l in links:
-        l["can_be_public"] = l.get("contact_type") != "UNMATCHED" and _is_verified_public(l.get("contact"))
+        l["can_be_public"] = (l.get("contact_type") != "UNMATCHED"
+                              and not _ml.opted_out(p, email, l.get("contact") or ""))
+    # one-time question for links added while links were private by default
+    legacy = 0
+    if _ml.flag(p, email, "existing_links_answer") is None:
+        legacy = _ml.legacy_private_count(p, email)
     return {"success": True, "links": links, "public_count": _ml.public_count(p, email),
             "max_public": _ml.MAX_PUBLIC_LINKS, "agreement_accepted": _ml.agreement_accepted(p, email),
-            "agreement_version": _ml.AGREEMENT_VERSION}
+            "agreement_version": _ml.AGREEMENT_VERSION, "existing_private_to_ask": legacy}
+
+
+class ExistingLinksAnswer(BaseModel):
+    make_visible: bool
+
+
+@app.post("/api/my/links/existing")
+async def my_links_existing(req: ExistingLinksAnswer, request: Request):
+    """Answer to "make the links you added earlier visible?" -- asked once."""
+    email, err = _ml_guard(request)
+    if err:
+        return err
+    p = _ml_db()
+    n = _ml.publish_existing(p, email) if req.make_visible else 0
+    _ml.set_flag(p, email, "existing_links_answer", "yes" if req.make_visible else "no")
+    if n:
+        _invalidate_removed_links()
+    return {"success": True, "made_visible": n}
+
+
+class HideAboutMeRequest(BaseModel):
+    a: str = Field(..., max_length=300)
+    b: str = Field(..., max_length=300)
+    everything: bool = False
+
+
+@app.post("/api/links/hide-about-me")
+async def link_hide_about_me(req: HideAboutMeRequest, request: Request):
+    """The other person on a self-reported link opts out: this link, or every
+    user-added link about them. Not identity-checked yet -- hiding can only
+    protect someone -- so it's honoured at once; who asked is logged."""
+    email = _request_user_email(request)
+    if not email:
+        return JSONResponse(status_code=401, content={"success": False, "error": "authentication required"})
+    p = _ml_db()
+    n = _ml.hide_about_me(p, _display_name_for_email, req.a, req.b, email, everything=req.everything)
+    _invalidate_removed_links()
+    conn = db.connect(_test_department_db_path())
+    conn.execute("INSERT INTO service_items (item_type, status, priority, subject, body, submitter_email, metadata) "
+                 "VALUES ('link_optout', 'resolved', 'low', ?, ?, ?, ?)",
+                 (f"Hidden by the other person: {req.a} ↔ {req.b}", "everything" if req.everything else "one link",
+                  email, json.dumps({"a": req.a, "b": req.b, "everything": req.everything, "hidden": n})))
+    conn.commit()
+    conn.close()
+    return {"success": True, "hidden": n,
+            "message": ("Hidden. It leaves other people's searches now and the shared map overnight."
+                        if n else "Nothing to hide: that link isn't a user-added visible link (it may come from public records).")}
 
 
 @app.post("/api/my/links")
@@ -4367,7 +4425,7 @@ async def my_links_add(req: MyLinkRequest, request: Request):
         return JSONResponse(status_code=400, content={"success": False, "error": "person not found in graph"})
     relation = "LINKEDIN_CONNECTION" if req.source == "linkedin" else "SELF_ATTESTED_CONTACT"
     link, e = _ml.add_link(_ml_db(), email, contact, relation=relation, source=req.source,
-                           visibility=req.visibility, is_verified=_is_verified_public)
+                           visibility=req.visibility)
     if e:
         return JSONResponse(status_code=400, content={"success": False, "error": e})
     return {"success": True, "link": link}
@@ -4378,7 +4436,7 @@ async def my_links_visibility(link_id: int, req: VisibilityRequest, request: Req
     email, err = _ml_guard(request)
     if err:
         return err
-    link, e = _ml.set_visibility(_ml_db(), email, link_id, req.visibility, _is_verified_public)
+    link, e = _ml.set_visibility(_ml_db(), email, link_id, req.visibility)
     if e:
         return JSONResponse(status_code=400, content={"success": False, "error": e})
     _invalidate_removed_links()
@@ -6991,6 +7049,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <span id="psi-loading" style="display:none;"></span>
     <span id="psi-result" style="display:none;"></span>
     <p class="psi-note" id="psi-note">Your contacts are hashed in your browser and never sent in plaintext.</p>
+    <label class="psi-note" style="display:block;"><input type="checkbox" id="import-visible" checked>
+      Make the links I add from this list visible to other members (labelled self-reported; you or they can hide any of them)</label>
     <div id="linkedin-instructions" style="display:none;" class="psi-note">
       LinkedIn doesn't let apps read your connections directly, so this needs one export step on their side first (your connections are still hashed in your browser and never sent in plaintext):
       <ol style="margin:6px 0 6px 1.2rem; padding:0;">
@@ -7008,16 +7068,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="psi-section" id="mylinks-section" style="display:none;">
     <h3 style="margin:0 0 4px;">My links <span style="font-size:0.75rem;color:#d29922;border:1px solid #d29922;border-radius:4px;padding:1px 6px;margin-left:6px;">Beta &mdash; free while we test; not a subscription</span></h3>
     <div id="mylinks-agree" style="display:none;" class="psi-note">
-      Your own links are <strong>private</strong> unless you make them public: only you see them, and they're used only in your searches.
-      Public links (allowed only to verified public figures) are visible to everyone, labelled &ldquo;self-reported&rdquo;.
+      Links you add are <strong>visible</strong> to other members by default, labelled &ldquo;self-reported&rdquo; with your
+      name, because more links make the service more useful for everyone. You can make any link private, and the other
+      person can hide a link about them.
       Before using this, please read and accept the <a href="/terms" target="_blank">user agreement</a>.
       <div style="margin-top:8px;"><button id="mylinks-accept-btn" onclick="myLinksAccept()">I have read and agree to the user agreement</button></div>
     </div>
     <div id="mylinks-main" style="display:none;text-align:left;">
       <div class="psi-note" style="margin:4px 0 6px;">
-        These are the people you know who matched someone in our database. They're <strong>private</strong>:
-        only you see them, and they're used only in your own searches. You aren't in the shared database
-        yourself (the one everyone else searches) unless you make a link public.
+        These are the people you know who matched someone in our database. Links you add are <strong>visible</strong>
+        to other members (labelled self-reported, with your name) unless you make them private; private links are used only
+        in your own searches. The other person can always hide a link about them.
+        <div id="ml-existing-ask" style="display:none;margin-top:6px;padding:6px 8px;border:1px solid #1f6feb;border-radius:6px;"></div>
       </div>
       <!-- each tool is a card with its own result and a Clear button (2026-10-20: results
            used to pile up below everything, with no way to finish a step) -->
@@ -7578,6 +7640,9 @@ async function findPath() {
               const lpct = lp != null ? Math.round(lp*100) + '%' : '';
               html += '<span class="step-rel" id="rel-' + ri + '" title="Click for sources">'
                     + escHtml(rel) + (lpct ? ' <small>' + lpct + '</small>' : '') + '</span>';
+              if (!step.you && !prev.you && (prev.cats || []).some(c => c === 'SELF_ATTESTED' || c === 'LINKEDIN')) {
+                html += selfLinkActions(prev, step);
+              }
               html += '<span class="step-arrow">→</span>';
               setTimeout(() => {
                 const el = document.getElementById('rel-' + ri);
@@ -8324,14 +8389,17 @@ async function doAddMeSubmit(btn) {
     const res = await fetch('/api/contacts/add-me', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ person_name: name, source: source }),
+      body: JSON.stringify({ person_name: name, source: source,
+                             visible: !(document.getElementById('import-visible') && !document.getElementById('import-visible').checked) }),
       signal: controller.signal,
     });
     const data = await res.json();
     if (data.success) {
       addMeSubmittedCount++;
       const row = btn.closest('.psi-row');
-      btn.outerHTML = data.private_link
+      btn.outerHTML = data.visible_link
+        ? ' <span style="color:#3fb950">✓ Added (visible, self-reported)</span>'
+        : data.private_link
         ? ' <span style="color:#3fb950">✓ Added to your private links</span>'
         : data.duplicate
           ? ' <span style="color:#8b949e">✓ Already submitted</span>'
@@ -8517,10 +8585,21 @@ async function myLinksLoad() {
   contribLoad();
   const pub = d.public_count, max = d.max_public;
   document.getElementById('mylinks-summary').textContent =
-    `${d.links.length} link${d.links.length === 1 ? '' : 's'} — ${pub} public (max ${max}), the rest private (only you see them).`
-    + (pub === 0 && !d.links.some(l => l.can_be_public)
-        ? ' None of your contacts is a verified public figure, so none can be made public.'
-        : ' Only links to verified public figures can be made public.');
+    `${d.links.length} link${d.links.length === 1 ? '' : 's'} — ${pub} visible to other members, the rest private (only you see them).`;
+  // one-time question: links added while links were private by default stay
+  // private unless their owner says yes (2026-11-27)
+  const ask = document.getElementById('ml-existing-ask');
+  if (ask) {
+    if (d.existing_private_to_ask > 0) {
+      ask.style.display = 'block';
+      ask.innerHTML = `Links are now visible to other members by default, because more links make the service more useful. `
+        + `You added <strong>${d.existing_private_to_ask}</strong> link${d.existing_private_to_ask === 1 ? '' : 's'} while links were private, `
+        + `and ${d.existing_private_to_ask === 1 ? 'it stays' : 'they stay'} private unless you say so. Make ${d.existing_private_to_ask === 1 ? 'it' : 'them'} visible? `
+        + `<button onclick="myLinksExisting(true)">Yes, make them visible</button> <button class="secondary-btn" onclick="myLinksExisting(false)">No, keep them private</button>`;
+    } else {
+      ask.style.display = 'none';
+    }
+  }
   const list = document.getElementById('mylinks-list');
   list.innerHTML = d.links.map(l => {
     if (l.contact_type === 'UNMATCHED') {
@@ -8529,14 +8608,13 @@ async function myLinksLoad() {
            + `<button class="add-me-btn" title="Delete" onclick="myLinkDelete(${l.id}, this)">✕</button></div>`;
     }
     const isPub = l.visibility === 'public';
-    const badge = isPub ? '<span style="color:#58a6ff">public</span>' : '<span style="color:#8b949e">private</span>';
-    // "Make public" only where it's allowed: the contact is a verified public
-    // figure. A public link is what puts you in the shared graph.
+    const badge = isPub ? '<span style="color:#58a6ff">visible</span>' : '<span style="color:#8b949e">private</span>';
+    // Any matched link can be visible (2026-11-27) unless the other person hid it.
     const toggle = isPub
       ? `<button class="add-me-btn" onclick="myLinkVisibility(${l.id}, 'private')">Make private</button>`
       : (l.can_be_public
-          ? `<button class="add-me-btn" title="Adds you, linked to this public figure, to the shared graph that everyone searches" onclick="myLinkVisibility(${l.id}, 'public')">Make public</button>`
-          : '');
+          ? `<button class="add-me-btn" title="Adds this link, labelled self-reported with your name, to the shared map other members search" onclick="myLinkVisibility(${l.id}, 'public')">Make visible</button>`
+          : (l.contact_type !== 'UNMATCHED' ? '<span style="color:#8b949e;font-size:0.78rem;" title="The other person asked for links about them to stay hidden">hidden by them</span>' : ''));
     const wrong = `<button class="add-me-btn" title="This is a namesake, not my contact" onclick="myLinkWrongPerson(${l.id}, this)">Wrong person</button>`;
     // Who the database matched, so a namesake is visible before it's used:
     // a one-line summary (filled in below) and the full identity card (ⓘ).
@@ -8642,6 +8720,44 @@ async function myReach() {
   mlSet(out, d.paths.map((p, i) =>
     `<div style="margin:4px 0;"><strong>${i === 0 ? 'Best route' : 'Alternative'}</strong> (${p.length} step${p.length === 1 ? '' : 's'}, via ${p.via_affiliation ? 'your time at ' + escHtml(p.path[0].affiliation ? (p.path[0].affiliation.org + (p.path[0].affiliation.years ? ' (' + p.path[0].affiliation.years + ')' : '')) : p.via_affiliation) : escHtml(p.via_contact)}): `
     + p.path.map(s => s.you ? '<strong>You</strong>' : escHtml(s.label || s.node)).join(' → ') + '</div>').join(''));
+}
+
+async function myLinksExisting(yes) {
+  const r = await fetch('/api/my/links/existing', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                   body: JSON.stringify({make_visible: !!yes})}).catch(() => null);
+  const d = r ? await r.json().catch(() => ({})) : {};
+  const ask = document.getElementById('ml-existing-ask');
+  if (ask) ask.innerHTML = yes ? `Done: ${d.made_visible || 0} link(s) are now visible.` : 'OK, they stay private. You can make any of them visible later.';
+  myLinksLoad();
+}
+
+// A self-reported link in a path: either person can hide it, anyone can report it.
+async function selfLinkHide(a, b, el) {
+  if (!confirm(`Hide the self-reported link between ${a} and ${b}?\n\nOK hides this link. To hide every user-added link about you, use "Hide all about me".`)) return;
+  const r = await fetch('/api/links/hide-about-me', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                     body: JSON.stringify({a: a, b: b, everything: false})}).catch(() => null);
+  const d = r ? await r.json().catch(() => ({})) : {};
+  el.outerHTML = `<span style="color:#8b949e;font-size:0.75rem;">${escHtml(d.message || 'Could not hide it.')}</span>`;
+}
+async function selfLinkHideAll(me, other, el) {
+  if (!confirm(`Hide every user-added link about ${me}? Links from public records are not affected.`)) return;
+  const r = await fetch('/api/links/hide-about-me', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                     body: JSON.stringify({a: me, b: other, everything: true})}).catch(() => null);
+  const d = r ? await r.json().catch(() => ({})) : {};
+  el.outerHTML = `<span style="color:#8b949e;font-size:0.75rem;">${escHtml(d.message || 'Could not hide them.')}</span>`;
+}
+async function selfLinkReport(a, b, el) {
+  const r = await fetch('/api/links/report', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                              body: JSON.stringify({subject: a, contact: b, reason: 'reported from a path'})}).catch(() => null);
+  el.outerHTML = `<span style="color:#8b949e;font-size:0.75rem;">${r && r.ok ? 'Reported for review.' : 'Could not report it.'}</span>`;
+}
+function selfLinkActions(prev, step) {
+  const a = prev.node || prev.label, b = step.node || step.label;
+  const q = x => escHtml(JSON.stringify(x));
+  return ' <span class="self-link-actions" style="font-size:0.72rem;color:#8b949e;">self-reported · '
+    + `<a href="#" onclick="selfLinkHide(${q(a)}, ${q(b)}, this);return false;" title="You are one of these two people">this is me — hide it</a> · `
+    + `<a href="#" onclick="selfLinkHideAll(${q(b)}, ${q(a)}, this);return false;" title="Hide every user-added link about ${escHtml(b)}">hide all about ${escHtml(b)}</a> · `
+    + `<a href="#" onclick="selfLinkReport(${q(a)}, ${q(b)}, this);return false;">report</a></span>`;
 }
 
 // --- Where have you been? / N steps from / who from your world (contrib.py) ---

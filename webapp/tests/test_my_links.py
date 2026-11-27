@@ -30,18 +30,59 @@ def test_links_are_private_by_default_and_only_the_owners(dbp):
     assert ml.public_links(dbp) == []
 
 
-def test_public_only_for_verified_public_figures(dbp):
-    _, err = ml.add_link(dbp, "a@x.org", "Jane Doe", visibility="public", is_verified=is_verified)
-    assert err and "verified public figures" in err
-    link, err = ml.add_link(dbp, "a@x.org", "Barack Obama", visibility="public", is_verified=is_verified)
+def test_any_matched_person_can_be_linked_visibly_since_2026_11_27(dbp):
+    link, err = ml.add_link(dbp, "a@x.org", "Jane Doe", visibility="public")
     assert err is None and link["visibility"] == "public"
-    assert [l["contact"] for l in ml.public_links(dbp)] == ["Barack Obama"]
+    _, err = ml.add_link(dbp, "a@x.org", "Somebody", contact_type=ml.UNMATCHED, visibility="public")
+    assert err and "only be private" in err
+    assert [l["contact"] for l in ml.public_links(dbp)] == ["Jane Doe"]
+
+
+def test_the_other_person_can_hide_one_link_and_it_stays_hidden(dbp):
+    owner_name = {"a@x.org": "Alex Owner", "b@x.org": "Bea Owner"}.get
+    ml.add_link(dbp, "a@x.org", "Jane Doe", visibility="public")
+    ml.add_link(dbp, "b@x.org", "Jane Doe", visibility="public")
+    assert ml.hide_about_me(dbp, owner_name, "Jane Doe", "Alex Owner", "jane@x.org") == 1
+    assert [l["owner_email"] for l in ml.public_links(dbp)] == ["b@x.org"]          # only that link
+    assert [l["contact"] for l in ml.removed_public_links(dbp)] == ["Jane Doe"]       # leaves the shared map
+    mine = ml.list_links(dbp, "a@x.org")[0]
+    assert mine["visibility"] == "private"                                            # owner keeps it privately
+    _, err = ml.set_visibility(dbp, "a@x.org", mine["id"], "public")
+    assert err and "stay hidden" in err                                               # and can't re-publish it
+    # either order of the two names works
+    assert ml.hide_about_me(dbp, owner_name, "Bea Owner", "Jane Doe", "jane@x.org") == 1
+    assert ml.public_links(dbp) == []
+
+
+def test_hide_everything_about_me_blocks_future_visible_links(dbp):
+    ml.add_link(dbp, "a@x.org", "Jane Doe", visibility="public")
+    ml.add_link(dbp, "b@x.org", "Jane Doe", visibility="public")
+    assert ml.hide_about_me(dbp, lambda e: e, "Jane Doe", "whoever", "jane@x.org", everything=True) == 2
+    assert ml.public_links(dbp) == []
+    _, err = ml.add_link(dbp, "c@x.org", "Jane Doe", visibility="public")
+    assert err and "stay hidden" in err
+    link, err = ml.add_link(dbp, "c@x.org", "Jane Doe")                              # private is still fine
+    assert err is None and link["visibility"] == "private"
+
+
+def test_links_added_while_private_by_default_are_asked_about_once(dbp, monkeypatch):
+    monkeypatch.setattr(ml, "VISIBLE_DEFAULT_SINCE", "2999-01-01")     # everything below counts as "before"
+    ml.add_link(dbp, "a@x.org", "Jane Doe")
+    ml.add_link(dbp, "a@x.org", "Old Contact")
+    ml.add_link(dbp, "a@x.org", "No Match", contact_type=ml.UNMATCHED)
+    ml.hide_about_me(dbp, lambda e: e, "Old Contact", "x", "oc@x.org", everything=True)
+    assert ml.legacy_private_count(dbp, "a@x.org") == 1                 # not the unmatched or opted-out one
+    assert ml.flag(dbp, "a@x.org", "existing_links_answer") is None
+    assert ml.publish_existing(dbp, "a@x.org") == 1
+    assert [l["contact"] for l in ml.public_links(dbp)] == ["Jane Doe"]
+    ml.set_flag(dbp, "a@x.org", "existing_links_answer", "yes")
+    assert ml.flag(dbp, "a@x.org", "existing_links_answer") == "yes"
 
 
 def test_public_cap(dbp, monkeypatch):
     monkeypatch.setattr(ml, "MAX_PUBLIC_LINKS", 1)
-    ml.add_link(dbp, "a@x.org", "Barack Obama", visibility="public", is_verified=is_verified)
-    _, err = ml.add_link(dbp, "a@x.org", "Meryl Streep", visibility="public", is_verified=is_verified)
+    ml.add_link(dbp, "a@x.org", "Barack Obama", visibility="public")
+    _, err = ml.add_link(dbp, "a@x.org", "Meryl Streep", visibility="public")
     assert err and "maximum" in err
 
 

@@ -2,8 +2,12 @@
 
 Spec decisions this implements (plan: ~/.claude/plans/resilient-doodling-graham.md):
   1  every link is private or public; public ones join the shared graph
-  2  a link may be public only if the other person is a verified public figure
-  3  public links are weak and labelled self-reported, capped per user, reportable
+  2  (changed 2026-11-27, John: "more links make the service more useful")
+     new links are VISIBLE by default, to anyone in the graph, with an opt-out
+     for either person: the owner can make a link private, and the other
+     person can hide it (one link, or every user-added link about them).
+     Links added before the change stay private until their owner says yes.
+  3  public links are weak and labelled self-reported, reportable
   10 deleting is honoured at once, everywhere
   11 existing approved self-reported links became private links
   12 the user agreement must be accepted first
@@ -23,8 +27,10 @@ try:
 except ImportError:  # imported as webapp.my_links
     from webapp import db
 
-MAX_PUBLIC_LINKS = 50
-AGREEMENT_VERSION = "beta-1"
+MAX_PUBLIC_LINKS = 20000      # abuse guard only (bulk LinkedIn imports run to thousands)
+AGREEMENT_VERSION = "beta-2"  # beta-2 (2026-11-27): links visible by default, either person can hide
+VISIBLE_DEFAULT_SINCE = "2026-11-27"   # links created before this were promised private
+ALL_OWNERS = "*"              # link_optouts.owner_email for "hide every link about me"
 SELF_REPORTED = ("SELF_ATTESTED_CONTACT", "LINKEDIN_CONNECTION")
 UNMATCHED = "UNMATCHED"   # contact_type of a contact with no graph node (yet)
 
@@ -76,13 +82,23 @@ def public_count(db_path, owner):
     return int(r["n"])
 
 
-def _check_public(db_path, owner, contact, is_verified, exclude_id=None, contact_type="PERSON"):
-    """None if the link may be public, else the reason it may not."""
+def opted_out(db_path, owner, contact):
+    """True if the other person hid this link, or every user-added link about them."""
+    conn = db.connect(db_path)
+    r = conn.execute("SELECT 1 FROM link_optouts WHERE lower(contact) = lower(?) AND owner_email IN (?, ?) "
+                     "AND undone_at IS NULL", (contact, owner, ALL_OWNERS)).fetchone()
+    conn.close()
+    return r is not None
+
+
+def _check_public(db_path, owner, contact, is_verified=None, exclude_id=None, contact_type="PERSON"):
+    """None if the link may be public, else the reason it may not.
+    (is_verified is no longer used: since 2026-11-27 any matched person may be
+    linked publicly unless they opted out.)"""
     if contact_type == UNMATCHED:
         return "This contact isn't matched to anyone in the database, so it can only be private."
-    if not is_verified(contact):
-        return ("Only links to verified public figures can be public; links to private people "
-                "stay private to protect them.")
+    if opted_out(db_path, owner, contact):
+        return "The other person asked for this link to stay hidden, so it can only be private."
     n = public_count(db_path, owner)
     if exclude_id is None and n >= MAX_PUBLIC_LINKS:
         return f"You already have the maximum of {MAX_PUBLIC_LINKS} public links."
@@ -208,6 +224,84 @@ def delete_account_links(db_path, owner):
     conn.execute("UPDATE ask_log SET email = NULL WHERE email = ?", (owner,))   # questions stay, anonymised
     conn.commit()
     conn.close()
+
+
+def hide_about_me(db_path, owner_display_resolver, a, b, by_email, everything=False):
+    """The other person on a public link opts out. The link joins a and b; the
+    requester says they are one of them (not verified yet -- hiding can only
+    protect someone, so it's honoured at once and logged). With everything=True
+    every user-added link naming that person stays private from now on.
+    -> number of links hidden."""
+    conn = db.connect(db_path)
+    hits = []
+    for me, other in ((a, b), (b, a)):           # me = the contact side, other = the owner
+        rows = conn.execute("SELECT id, owner_email, contact FROM my_links WHERE lower(contact) = lower(?) "
+                            "AND visibility = 'public' AND deleted_at IS NULL", (me,)).fetchall()
+        for r in rows:
+            if everything or (owner_display_resolver(r["owner_email"]) or "").lower() == (other or "").lower():
+                hits.append((r["id"], r["owner_email"], r["contact"]))
+    conn.close()
+    me_name = None
+    for link_id, owner, contact in hits:
+        set_visibility(db_path, owner, link_id, "private")
+        me_name = contact
+        if not everything:
+            _record_optout(db_path, owner, contact, by_email)
+    if everything:
+        _record_optout(db_path, ALL_OWNERS, me_name or a, by_email)
+    return len(hits)
+
+
+def _record_optout(db_path, owner, contact, by_email):
+    conn = db.connect(db_path)
+    conn.execute("INSERT INTO link_optouts (owner_email, contact, by_email, created_at) VALUES (?, ?, ?, ?)",
+                 (owner, contact, by_email, _now()))
+    conn.commit()
+    conn.close()
+
+
+# --- the one-time question for links added while links were private by default ---
+
+def legacy_private_count(db_path, owner):
+    """Matched private links added before visible-by-default, not opted out."""
+    conn = db.connect(db_path)
+    rows = conn.execute("SELECT contact FROM my_links WHERE owner_email = ? AND visibility = 'private' "
+                        "AND contact_type != ? AND deleted_at IS NULL AND created_at < ?",
+                        (owner, UNMATCHED, VISIBLE_DEFAULT_SINCE)).fetchall()
+    conn.close()
+    return sum(1 for r in rows if not opted_out(db_path, owner, r["contact"]))
+
+
+def flag(db_path, email, name):
+    conn = db.connect(db_path)
+    r = conn.execute("SELECT value FROM user_flags WHERE email = ? AND flag = ?", (email, name)).fetchone()
+    conn.close()
+    return r["value"] if r else None
+
+
+def set_flag(db_path, email, name, value):
+    conn = db.connect(db_path)
+    conn.execute("DELETE FROM user_flags WHERE email = ? AND flag = ?", (email, name))
+    conn.execute("INSERT INTO user_flags (email, flag, value, set_at) VALUES (?, ?, ?, ?)",
+                 (email, name, value, _now()))
+    conn.commit()
+    conn.close()
+
+
+def publish_existing(db_path, owner):
+    """Owner said yes: their earlier private links become visible (except
+    ones the other person opted out of). -> number made visible."""
+    conn = db.connect(db_path)
+    rows = conn.execute("SELECT id, contact FROM my_links WHERE owner_email = ? AND visibility = 'private' "
+                        "AND contact_type != ? AND deleted_at IS NULL AND created_at < ?",
+                        (owner, UNMATCHED, VISIBLE_DEFAULT_SINCE)).fetchall()
+    conn.close()
+    n = 0
+    for r in rows:
+        if not opted_out(db_path, owner, r["contact"]):
+            _, err = set_visibility(db_path, owner, r["id"], "public")
+            n += err is None
+    return n
 
 
 def report_link(db_path, owner_display_resolver, subject, contact):
