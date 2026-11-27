@@ -4649,9 +4649,11 @@ async def my_affiliation_add(req: AffiliationRequest, request: Request):
     if not node or node not in (_igraph_name_to_idx or {}):
         return JSONResponse(status_code=400, content={"success": False,
                                                       "error": "Pick the organization or school from the list."})
-    if _looks_like_person(node) and not _label_is_org(node):
+    # Only refuse known people: the word heuristic (_looks_like_person) calls
+    # "General Motors" a person, so it can't gate this (live check 2026-11-27).
+    if _is_verified_public(node):
         return JSONResponse(status_code=400, content={"success": False,
-                                                      "error": "That looks like a person -- add people under Your links."})
+                                                      "error": "That's a person -- add people under Your links."})
     row, e = _contrib.add_affiliation(_ml_db(), email, node, req.start_year, req.end_year)
     if e:
         return JSONResponse(status_code=400, content={"success": False, "error": e})

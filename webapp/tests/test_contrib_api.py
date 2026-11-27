@@ -40,6 +40,7 @@ def tiny_graph(monkeypatch):
     monkeypatch.setattr(pf, "_get_node_sci", lambda n: 50)
     monkeypatch.setattr(pf, "_resolve_name", lambda x: x if x in NAMES else None)
     monkeypatch.setattr(pf, "_famous_nodes", ["Famous Person"])
+    monkeypatch.setattr(pf, "_load_demo_verified", lambda: {"pat jones", "famous person"})
     pf._contrib_cache.clear()
     pf._invalidate_removed_links()
     yield
