@@ -36,7 +36,9 @@ def _credentials():
                 if line.startswith("HISTORY_SPACE="):
                     v = line.split("=", 1)[1].strip().strip('"')
     if not v or ":" not in v:
-        sys.exit("HISTORY_SPACE is missing or not '<access key id>:<secret key>'")
+        # length and shape only -- never the value
+        sys.exit(f"HISTORY_SPACE is missing or not '<access key id>:<secret key>' "
+                 f"(got {len(v or '')} characters, {'no ' if ':' not in (v or '') else ''}colon)")
     key_id, secret = v.split(":", 1)
     return key_id.strip(), secret.strip()
 

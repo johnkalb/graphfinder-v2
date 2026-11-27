@@ -55,3 +55,21 @@ data/fec_spend_rows.jsonl.gz
 data/raw/congress/
 data/congress_model.pkl.gz
 data/congress_ties_candidate.pkl.gz
+
+# Nightly data files live in the graph-history Space (data_store.py, manifest.json)
+/webapp/data/centrality_extras.json.gz
+/webapp/data/compact_names.json.gz
+/webapp/data/congress_ties.json.gz
+/webapp/data/crawlie_facts.json.gz
+/webapp/data/detail/cmte_totals.tsv.gz
+/webapp/data/detail/committees.tsv.gz
+/webapp/data/detail/donors.tsv.gz
+/webapp/data/detail/insider_trades.tsv.gz
+/webapp/data/detail/leadership.tsv.gz
+/webapp/data/detail/lobbying.tsv.gz
+/webapp/data/detail/pac_flows.tsv.gz
+/webapp/data/detail/vendors.tsv.gz
+/webapp/data/graph_scored.json.gz
+/webapp/data/group_rankings.json.gz
+/webapp/data/search_index.json.gz
+/webapp/data/verified_people.json.gz
